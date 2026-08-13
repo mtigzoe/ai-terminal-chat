@@ -15,46 +15,27 @@
  * limitations under the License.
  */
 
-/** Import necessary modules. */
 import React, { useState, useRef } from 'react';
 import axios from 'axios';
 import { flushSync } from 'react-dom';
 import './App.css';
 
-/** Import necessary components. */
 import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
 
 function App() {
-  /** Reference variable for message input button. */
   const inputRef = useRef();
-  /** Host URL */
-  const host = "http://localhost:9000"
-  /** URL for non-streaming chat. */
+  const host = import.meta.env.VITE_API_URL || "http://localhost:9000";
   const url = host + "/chat";
-  /** URL for streaming chat. */
   const streamUrl = host + "/stream";
-  /** State variable for message history. */
   const [data, setData] = useState([]);
-  /** State variable for Temporary streaming block. */
-  const [answer, setAnswer] = useState("")
-  /** State variable to show/hide temporary streaming block. */
+  const [answer, setAnswer] = useState("");
   const [streamdiv, showStreamdiv] = useState(false);
-  /** State variable to toggle between streaming and non-streaming response. */
   const [toggled, setToggled] = useState(false);
-  /** 
-   * State variable used to block the user from inputting the next message until
-   * the previous conversation is completed.
-   */
   const [waiting, setWaiting] = useState(false);
-  /** 
-   * `is_stream` checks whether streaming is on or off based on the state of 
-   * toggle button.
-   */
   const is_stream = toggled;
 
-  /** Function to scroll smoothly to the top of the mentioned checkpoint. */
   function executeScroll() {
     const element = document.getElementById('checkpoint');
     if (element) {
@@ -62,83 +43,73 @@ function App() {
     }
   }
 
-  /** Function to validate user input. */
   function validationCheck(str) {
     return str === null || str.match(/^\s*$/) !== null;
   }
 
-  /** Handle form submission. */
+  function getErrorMessage(error, fallback = "Request failed.") {
+    const serverMessage = error?.response?.data?.error;
+    if (serverMessage) return serverMessage;
+    if (error?.message) return error.message;
+    return fallback;
+  }
+
   const handleClick = () => {
     if (validationCheck(inputRef.current.value)) {
       console.log("Empty or invalid entry");
+    } else if (!is_stream) {
+      handleNonStreamingChat();
     } else {
-      if (!is_stream) {
-        /** Handle non-streaming chat. */
-        handleNonStreamingChat();
-      } else {
-        /** Handle streaming chat. */
-        handleStreamingChat();
-      }
+      handleStreamingChat();
     }
   };
 
-  /** Handle non-streaming chat. */
   const handleNonStreamingChat = async () => {
-    /** Prepare POST request data. */
     const chatData = {
       chat: inputRef.current.value,
       history: data
     };
 
-    /** Add current user message to history. */
     const ndata = [...data,
-      {"role": "user", "parts":[{"text": inputRef.current.value}]}]
+      { role: "user", parts: [{ text: inputRef.current.value }] }];
 
-    /**
-     * Re-render DOM with updated history.
-     * Clear the input box and temporarily disable input.
-     */
     flushSync(() => {
-        setData(ndata);
-        inputRef.current.value = ""
-        inputRef.current.placeholder = "Waiting for model's response"
-        setWaiting(true)
+      setData(ndata);
+      inputRef.current.value = "";
+      inputRef.current.placeholder = "Waiting for model's response";
+      setWaiting(true);
     });
 
-    /** Scroll to the new user message. */
     executeScroll();
 
-    /** Headers for the POST request. */
-    let headerConfig = {
+    const headerConfig = {
       headers: {
-          'Content-Type': 'application/json;charset=UTF-8',
-          "Access-Control-Allow-Origin": "*",
+        'Content-Type': 'application/json;charset=UTF-8',
       }
     };
 
-    /** Function to perform POST request. */
-    const fetchData = async() => {
-      var modelResponse = ""
+    const fetchData = async () => {
+      let modelResponse = "";
+      let toolActivity = [];
+
       try {
         const response = await axios.post(url, chatData, headerConfig);
-        modelResponse = response.data.text
+        modelResponse = response.data.text || "";
+        toolActivity = response.data.tool_activity || [];
       } catch (error) {
-        modelResponse = "Error occurred";
-      }finally {
-        /** Add model response to the history. */
-        const updatedData = [...ndata,
-          {"role": "model", "parts":[{"text": modelResponse}]}]
+        modelResponse = `Error: ${getErrorMessage(error)}`;
+      } finally {
+        const updatedData = [...ndata, {
+          role: "model",
+          parts: [{ text: modelResponse }],
+          toolActivity
+        }];
 
-        /**
-         * Re-render DOM with updated history.
-         * Enable input.
-         */
         flushSync(() => {
           setData(updatedData);
-          inputRef.current.placeholder = "Enter a message."
-          setWaiting(false)
+          inputRef.current.placeholder = "Enter a message.";
+          setWaiting(false);
         });
-        /** Scroll to the new model response. */
         executeScroll();
       }
     };
@@ -146,102 +117,83 @@ function App() {
     fetchData();
   };
 
-  /** Handle streaming chat. */
   const handleStreamingChat = async () => {
-    /** Prepare POST request data. */
     const chatData = {
       chat: inputRef.current.value,
       history: data
     };
 
-    /** Add current user message to history. */
     const ndata = [...data,
-      {"role": "user", "parts":[{"text": inputRef.current.value}]}]
+      { role: "user", parts: [{ text: inputRef.current.value }] }];
 
-    /**
-     * Re-render DOM with updated history.
-     * Clear the input box and temporarily disable input.
-     */
     flushSync(() => {
       setData(ndata);
-      inputRef.current.value = ""
-      inputRef.current.placeholder = "Waiting for model's response"
-      setWaiting(true)
+      inputRef.current.value = "";
+      inputRef.current.placeholder = "Waiting for model's response";
+      setWaiting(true);
     });
 
-    /** Scroll to the new user message. */
     executeScroll();
 
-    /** Headers for the POST request. */
-    let headerConfig = {
-        Accept: "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-    }
+    const headerConfig = {
+      Accept: "text/plain",
+      "Content-Type": "application/json",
+    };
 
-    /** Function to perform POST request. */
-    const fetchStreamData = async() => {
+    const fetchStreamData = async () => {
+      let modelResponse = "";
+
       try {
         setAnswer("");
         const response = await fetch(streamUrl, {
-          method: "post",
+          method: "POST",
           headers: headerConfig,
           body: JSON.stringify(chatData),
         });
 
         if (!response.ok || !response.body) {
-          throw response.statusText;
+          let message = response.statusText || `HTTP ${response.status}`;
+          try {
+            const errorData = await response.json();
+            message = errorData.error || message;
+          } catch {
+            // The server may have returned plain text instead of JSON.
+          }
+          throw new Error(message);
         }
 
-        /** 
-         * Creates a reader using ReadableStream interface and locks the
-         * stream to it.
-         */
         const reader = response.body.getReader();
-        /** Create a decoder to read the stream as JavaScript string. */
         const txtdecoder = new TextDecoder();
-        const loop = true;
-        var modelResponse = "";
-        /** Activate the temporary div to show the streaming response. */
         showStreamdiv(true);
 
-        /** Loop until the streaming response ends. */
-        while (loop) {
+        while (true) {
           const { value, done } = await reader.read();
-          if (done) {
-            break;
-          }
-          /**
-           * Decode the partial response received and update the temporary
-           * div with it.
-           */
+          if (done) break;
           const decodedTxt = txtdecoder.decode(value, { stream: true });
-          setAnswer((answer) => answer + decodedTxt);
-          modelResponse = modelResponse + decodedTxt;
+          setAnswer((currentAnswer) => currentAnswer + decodedTxt);
+          modelResponse += decodedTxt;
           executeScroll();
         }
       } catch (err) {
-        modelResponse = "Error occurred";
+        modelResponse = `Error: ${err?.message || "Streaming request failed."}`;
       } finally {
-        /** Clear temporary div content. */
-        setAnswer("")
-        /** Add the complete model response to the history. */
-        const updatedData = [...ndata,
-          {"role": "model", "parts":[{"text": modelResponse}]}]
-        /** 
-         * Re-render DOM with updated history.
-         * Enable input.
-         */
+        setAnswer("");
+        const updatedData = [...ndata, {
+          role: "model",
+          parts: [{ text: modelResponse }],
+          toolActivity: []
+        }];
+
         flushSync(() => {
           setData(updatedData);
-          inputRef.current.placeholder = "Enter a message."
-          setWaiting(false)
+          inputRef.current.placeholder = "Enter a message.";
+          setWaiting(false);
         });
-        /** Hide temporary div used for streaming content. */
         showStreamdiv(false);
-        /** Scroll to the new model response. */
         executeScroll();
       }
     };
+
     fetchStreamData();
   };
 
