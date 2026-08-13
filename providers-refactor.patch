@@ -1,0 +1,4257 @@
+diff --git a/server-python/.env.example b/server-python/.env.example
+index d2ed4e8..f619cc8 100644
+--- a/server-python/.env.example
++++ b/server-python/.env.example
+@@ -1,3 +1,18 @@
++# Which backend answers /chat and /stream: gemini (default), ollama, or kilo.
++PROVIDER=gemini
++PORT=9000
++
++# --- gemini ---
+ # Get your Gemini API key from: https://aistudio.google.com/app/apikey
+ GOOGLE_API_KEY=
+-PORT=9000
++GEMINI_MODEL=gemini-3.6-flash
++
++# --- ollama (local, no key needed) ---
++OLLAMA_BASE_URL=http://localhost:11434/v1
++OLLAMA_MODEL=llama3.1
++
++# --- kilo ---
++# Get your Kilo gateway API key from: https://app.kilo.ai
++KILO_API_KEY=
++KILO_BASE_URL=https://api.kilo.ai/api/gateway
++KILO_MODEL=kilocode/kilo-auto/balanced
+diff --git a/server-python/README.md b/server-python/README.md
+index 7d1d993..a4db1c2 100644
+--- a/server-python/README.md
++++ b/server-python/README.md
+@@ -46,6 +46,16 @@ cp .env.example .env
+ 
+ Add your [API key](https://ai.google.dev/gemini-api/docs/api-key) to the newly created `.env` file or as an environment variable.
+ 
++### Switching providers
++
++`PROVIDER` in `.env` selects the backend for `/chat` and `/stream`:
++
++- `gemini` (default) — Google's Gemini API, via `GOOGLE_API_KEY`.
++- `ollama` — a local Ollama server, via its OpenAI-compatible endpoint. No key needed.
++- `kilo` — the Kilo gateway, via `KILO_API_KEY`.
++
++All three share the same tools (`tools.py`) and system prompt (`prompts.py`); only `providers/` differs per backend. See `providers/base.py` for the interface if you want to add another one.
++
+ ### Running the Application
+ 
+ Run the application with the following command:
+diff --git a/server-python/agent.py b/server-python/agent.py
+new file mode 100644
+index 0000000..90cd8e3
+--- /dev/null
++++ b/server-python/agent.py
+@@ -0,0 +1,209 @@
++"""Provider-agnostic tool-calling loop.
++
++This is the same loop that used to be run_agent_loop() in app.py,
++with every Gemini-specific line replaced by a call through the
++Provider interface (providers/base.py) — the control flow, the
++stuck-loop detection, and the per-tool timeout handling are all
++unchanged.
++"""
++
++from concurrent.futures import TimeoutError as FutureTimeoutError
++
++from providers.base import Provider
++from tools import DEFAULT_TOOL_TIMEOUT, TOOL_EXECUTOR, TOOL_FUNCTIONS, TOOL_TIMEOUTS
++
++MAX_TOOL_ROUNDS = 10
++
++# A model that's stuck tends to call the exact same tool with the
++# exact same arguments over and over with nothing else happening in
++# between. We only flag *consecutive* identical calls (interleaving a
++# different call, e.g. checking git_status between several edits,
++# resets the counter) so legitimate repeated inspection isn't blocked.
++MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
++HARD_ABORT_CONSECUTIVE_CALLS = 6
++
++
++def run_agent_loop(provider: Provider, contents: list):
++    """Run `provider` and explicitly execute any tools it requests.
++
++    This is a generator so both /chat and /stream can share one
++    implementation of the loop:
++
++        provider.generate(contents)
++          |
++          v
++        tool call(s)?  --no--> yield final text, done
++          | yes
++          v
++        Python executes each tool, bounded by a per-tool timeout
++        (yielding tool_call/tool_result events as it goes)
++          |
++          v
++        tool results sent back via provider.append_tool_results()
++          |
++          v
++        repeat, up to MAX_TOOL_ROUNDS
++
++    The same (name, arguments) call repeated several times *in a row*
++    is treated as a stuck loop: after MAX_CONSECUTIVE_IDENTICAL_CALLS
++    it's refused with an explanation instead of being executed again,
++    and after HARD_ABORT_CONSECUTIVE_CALLS the whole loop is aborted.
++
++    Yields dicts of one of these shapes:
++        {"type": "tool_call", "name": str, "args": dict}
++        {"type": "tool_result", "name": str, "result": dict}
++        {"type": "final", "text": str}
++        {"type": "error", "message": str}
++    A generator stops after yielding "final" or "error".
++    """
++
++    last_call_signature = None
++    consecutive_repeat_count = 0
++
++    for _ in range(MAX_TOOL_ROUNDS):
++
++        try:
++            response = provider.generate(contents)
++        except Exception as exc:
++            yield {
++                "type": "error",
++                "message": f"{type(provider).__name__} error: {exc}",
++            }
++            return
++
++        # Provider has produced its final answer: no more tool calls.
++        if not response.tool_calls:
++            if not response.text:
++                yield {
++                    "type": "error",
++                    "message": (
++                        "Model returned no text and requested no "
++                        "further tools."
++                    ),
++                }
++                return
++
++            yield {"type": "final", "text": response.text}
++            return
++
++        # Preserve the model's function-call message.
++        contents = provider.append_model_turn(contents, response)
++
++        tool_results = []
++
++        for call in response.tool_calls:
++
++            function_name = call.name
++            function_args = dict(call.args or {})
++
++            print(f"[tool call] {function_name}({function_args})")
++
++            yield {
++                "type": "tool_call",
++                "name": function_name,
++                "args": function_args,
++            }
++
++            # Track consecutive identical (name, args) calls to catch
++            # a stuck loop. Any different call in between resets this.
++            call_signature = (
++                function_name,
++                tuple(
++                    sorted(
++                        (key, repr(value))
++                        for key, value in function_args.items()
++                    )
++                ),
++            )
++
++            if call_signature == last_call_signature:
++                consecutive_repeat_count += 1
++            else:
++                last_call_signature = call_signature
++                consecutive_repeat_count = 1
++
++            function = TOOL_FUNCTIONS.get(function_name)
++
++            if function is None:
++                result = {
++                    "error": f"Unknown tool requested: {function_name}"
++                }
++
++            elif consecutive_repeat_count > HARD_ABORT_CONSECUTIVE_CALLS:
++                yield {
++                    "type": "error",
++                    "message": (
++                        f"Stopping: {function_name} was called with "
++                        f"the exact same arguments "
++                        f"{consecutive_repeat_count} times in a row "
++                        f"with nothing else happening in between. "
++                        f"This looks like a stuck loop rather than "
++                        f"progress."
++                    ),
++                }
++                return
++
++            elif consecutive_repeat_count > MAX_CONSECUTIVE_IDENTICAL_CALLS:
++                result = {
++                    "error": (
++                        f"{function_name} has already been called "
++                        f"with these exact arguments "
++                        f"{consecutive_repeat_count - 1} time(s) in "
++                        f"a row with no other action in between, so "
++                        f"repeating it again won't provide new "
++                        f"information. Try a different tool, "
++                        f"different arguments, or give your final "
++                        f"answer based on what you already know."
++                    )
++                }
++
++            else:
++                timeout_seconds = TOOL_TIMEOUTS.get(
++                    function_name, DEFAULT_TOOL_TIMEOUT
++                )
++                future = TOOL_EXECUTOR.submit(function, **function_args)
++
++                try:
++                    result = future.result(timeout=timeout_seconds)
++
++                except FutureTimeoutError:
++                    result = {
++                        "error": (
++                            f"Tool {function_name} exceeded its "
++                            f"{timeout_seconds}s execution limit and "
++                            f"was abandoned."
++                        )
++                    }
++
++                except TypeError as exc:
++                    # Wrong/missing/extra arguments for the tool.
++                    result = {
++                        "error": (
++                            f"Malformed arguments for "
++                            f"{function_name}: {exc}"
++                        )
++                    }
++
++                except Exception as exc:
++                    result = {"error": f"Tool {function_name} failed: {exc}"}
++
++            print(f"[tool result] {function_name}: {result}")
++
++            yield {
++                "type": "tool_result",
++                "name": function_name,
++                "result": result,
++            }
++
++            tool_results.append({"name": function_name, "result": result})
++
++        # Send the actual local tool results back to the provider.
++        contents = provider.append_tool_results(contents, tool_results)
++
++    yield {
++        "type": "error",
++        "message": (
++            "Model exceeded the maximum number of tool-calling "
++            "rounds without producing a final response."
++        ),
++    }
+diff --git a/server-python/app.py b/server-python/app.py
+index a611046..b9eed6e 100644
+--- a/server-python/app.py
++++ b/server-python/app.py
+@@ -12,22 +12,31 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-import difflib
+-import json
+-import os
+-import re
+-import shlex
+-import subprocess
+-from concurrent.futures import ThreadPoolExecutor
+-from concurrent.futures import TimeoutError as FutureTimeoutError
+-from pathlib import Path, PurePosixPath, PureWindowsPath
++"""Flask HTTP layer only.
++
++Everything that used to live in one 2000-line app.py now lives in:
++  security.py  - path containment / secrets-file detection
++  tools.py     - filesystem/git/shell tools + their schemas
++  prompts.py   - the system instruction, shared by every provider
++  providers/   - one adapter per backend (Gemini, OpenAI-compatible)
++  agent.py     - the provider-agnostic tool-calling loop
++
++app.py just wires an HTTP request to agent.run_agent_loop() and
++streams the result back out. It re-exports a few names (safe_path,
++PROJECT_ROOT, is_sensitive_filename, is_command_allowed, run_command)
++purely so tests/test_tools.py keeps working unchanged against
++`app.<name>` — new code should import those directly from security.py
++/ tools.py instead.
++"""
+ 
+ from dotenv import load_dotenv
+ from flask import Flask, Response, request, stream_with_context
+ from flask_cors import CORS
+-from google import genai
+-from google.genai import types
+ 
++from agent import run_agent_loop
++from providers import get_provider
++from security import PROJECT_ROOT, is_sensitive_filename, safe_path  # noqa: F401
++from tools import is_command_allowed, run_command  # noqa: F401
+ 
+ # ---------------------------------------------------------
+ # Configuration
+@@ -35,24 +44,10 @@ from google.genai import types
+ 
+ load_dotenv()
+ 
+-api_key = os.getenv("GOOGLE_API_KEY")
+-
+-if not api_key:
+-    raise RuntimeError(
+-        "GOOGLE_API_KEY is not set. "
+-        "Add it to your .env file."
+-    )
+-
+-client = genai.Client(
+-    api_key=api_key
+-)
+-
+-
+-# Gemini 3.6 Flash is Google's current GA Flash model tuned for coding,
+-# tool-use, and multi-step agentic workloads, so it's the default here.
+-# Override with GEMINI_MODEL if you want a different currently supported
+-# Gemini model (e.g. a Pro model for harder tasks).
+-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
++# Which backend answers /chat and /stream. Set PROVIDER=gemini
++# (default), ollama, or kilo in .env — see providers/__init__.py for
++# what each one reads.
++provider = get_provider()
+ 
+ app = Flask(__name__)
+ CORS(app)
+@@ -70,1837 +65,6 @@ def handle_unexpected_error(exc):
+     }, 500
+ 
+ 
+-# ---------------------------------------------------------
+-# Security: restrict filesystem access
+-# ---------------------------------------------------------
+-
+-PROJECT_ROOT = Path.cwd().resolve()
+-
+-
+-def safe_path(path: str) -> Path:
+-    """Resolve a path while keeping it inside the application directory.
+-
+-    Rejects absolute paths (POSIX or Windows-style, e.g. "/etc/passwd" or
+-    "C:\\Users\\...") and any traversal (e.g. "../../") that would escape
+-    PROJECT_ROOT. Joining an absolute path onto PROJECT_ROOT would normally
+-    just replace it outright in pathlib, so we check for that explicitly
+-    before ever resolving the path, in addition to the containment check
+-    below which catches "../" traversal.
+-    """
+-
+-    if not path or not str(path).strip():
+-        raise ValueError("A path is required.")
+-
+-    if PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute():
+-        raise ValueError(
+-            "Absolute paths are not allowed. Use a path relative to the "
+-            "project root."
+-        )
+-
+-    requested = (PROJECT_ROOT / path).resolve()
+-
+-    try:
+-        requested.relative_to(PROJECT_ROOT)
+-    except ValueError:
+-        raise ValueError(
+-            "Access outside the project directory is not allowed."
+-        )
+-
+-    return requested
+-
+-
+-# Filenames/extensions that must never be read, searched, created,
+-# overwritten, or deleted by the model, even though they live inside
+-# PROJECT_ROOT. This is what keeps GOOGLE_API_KEY and other secrets out
+-# of the model's context.
+-SENSITIVE_EXACT_NAMES = {
+-    ".git-credentials",
+-    "credentials.json",
+-    "secrets.json",
+-    "id_rsa",
+-    "id_ed25519",
+-    "id_ecdsa",
+-}
+-SENSITIVE_SUFFIXES = (".pem", ".key")
+-
+-
+-def is_sensitive_filename(name: str) -> bool:
+-    """True if a filename looks like it holds secrets/credentials."""
+-
+-    lower = name.lower()
+-
+-    if lower.startswith(".env"):
+-        return True
+-    if lower in SENSITIVE_EXACT_NAMES:
+-        return True
+-    if lower.endswith(SENSITIVE_SUFFIXES):
+-        return True
+-    if "secret" in lower or "credential" in lower:
+-        return True
+-
+-    return False
+-
+-
+-def is_sensitive_path(file_path: Path) -> bool:
+-    """True if a resolved path is a secret file or lives inside .git."""
+-
+-    try:
+-        rel_parts = file_path.relative_to(PROJECT_ROOT).parts
+-    except ValueError:
+-        return True
+-
+-    if ".git" in rel_parts:
+-        return True
+-
+-    return is_sensitive_filename(file_path.name)
+-
+-
+-# ---------------------------------------------------------
+-# Gemini filesystem tools
+-# ---------------------------------------------------------
+-
+-def list_files(path: str = ".") -> dict:
+-    """List files and directories inside the application project.
+-
+-    Args:
+-        path: Relative directory path inside the project.
+-              Use "." for the project root.
+-
+-    Returns:
+-        A dictionary containing the directory entries.
+-    """
+-
+-    try:
+-        directory = safe_path(path)
+-    except ValueError as exc:
+-        return {"error": str(exc)}
+-
+-    if not directory.exists():
+-        return {"error": f"Path does not exist: {path}"}
+-
+-    if not directory.is_dir():
+-        return {"error": f"Not a directory: {path}"}
+-
+-    entries = []
+-
+-    for item in sorted(
+-        directory.iterdir(),
+-        key=lambda p: p.name.lower()
+-    ):
+-        entries.append(
+-            {
+-                "name": item.name,
+-                "type": "directory" if item.is_dir() else "file",
+-            }
+-        )
+-
+-    return {
+-        "path": str(directory.relative_to(PROJECT_ROOT)),
+-        "entries": entries,
+-    }
+-
+-
+-def read_file(path: str) -> dict:
+-    """Read a UTF-8 text file inside the application project.
+-
+-    Args:
+-        path: Relative path to the text file.
+-
+-    Returns:
+-        A dictionary containing the file contents.
+-    """
+-
+-    try:
+-        file_path = safe_path(path)
+-    except ValueError as exc:
+-        return {"error": str(exc)}
+-
+-    if is_sensitive_path(file_path):
+-        return {
+-            "error": (
+-                f"Refusing to read '{path}': it looks like a secrets/"
+-                f"credentials file (e.g. .env). Its contents are never "
+-                f"exposed to the model."
+-            )
+-        }
+-
+-    if not file_path.exists():
+-        return {"error": f"File does not exist: {path}"}
+-
+-    if not file_path.is_file():
+-        return {"error": f"Not a file: {path}"}
+-
+-    # Prevent accidentally sending extremely large files to Gemini.
+-    max_size = 200_000
+-
+-    if file_path.stat().st_size > max_size:
+-        return {
+-            "error": (
+-                f"File is too large to read. "
+-                f"Maximum size is {max_size} bytes."
+-            )
+-        }
+-
+-    try:
+-        contents = file_path.read_text(
+-            encoding="utf-8"
+-        )
+-    except UnicodeDecodeError:
+-        return {
+-            "error": "The file is not a UTF-8 text file."
+-        }
+-
+-    return {
+-        "path": str(file_path.relative_to(PROJECT_ROOT)),
+-        "contents": contents,
+-    }
+-
+-
+-# Directories that are never worth searching (build output, deps, VCS
+-# internals) — skipping them keeps search_files fast and avoids surfacing
+-# noise from generated code.
+-SEARCH_EXCLUDED_DIR_NAMES = {
+-    ".git",
+-    "node_modules",
+-    "__pycache__",
+-    ".venv",
+-    "venv",
+-    "env",
+-    "dist",
+-    "build",
+-    ".next",
+-    ".pytest_cache",
+-    ".mypy_cache",
+-}
+-
+-
+-def search_files(query: str, path: str = ".") -> dict:
+-    """Search text files inside the project for a query string.
+-
+-    Args:
+-        query: Text to search for (case-insensitive substring match).
+-        path: Relative directory to search under. Use "." for the whole
+-              project.
+-
+-    Returns:
+-        A dictionary with matching file paths, line numbers, and lines.
+-    """
+-
+-    if not query or not query.strip():
+-        return {"error": "A non-empty search query is required."}
+-
+-    try:
+-        directory = safe_path(path)
+-    except ValueError as exc:
+-        return {"error": str(exc)}
+-
+-    if not directory.exists():
+-        return {"error": f"Path does not exist: {path}"}
+-
+-    if not directory.is_dir():
+-        return {"error": f"Not a directory: {path}"}
+-
+-    max_matches = 200
+-    max_file_size = 500_000
+-    query_lower = query.lower()
+-
+-    matches = []
+-    truncated = False
+-
+-    for root, dirnames, filenames in os.walk(directory):
+-        dirnames[:] = sorted(
+-            d for d in dirnames if d not in SEARCH_EXCLUDED_DIR_NAMES
+-        )
+-
+-        for filename in sorted(filenames):
+-            if is_sensitive_filename(filename):
+-                continue
+-
+-            file_path = Path(root) / filename
+-
+-            try:
+-                if file_path.stat().st_size > max_file_size:
+-                    continue
+-                text = file_path.read_text(encoding="utf-8")
+-            except (UnicodeDecodeError, OSError):
+-                # Skip binary files and unreadable files.
+-                continue
+-
+-            for line_number, line in enumerate(text.splitlines(), start=1):
+-                if query_lower in line.lower():
+-                    matches.append(
+-                        {
+-                            "path": str(
+-                                file_path.relative_to(PROJECT_ROOT)
+-                            ),
+-                            "line": line_number,
+-                            "text": line.strip()[:300],
+-                        }
+-                    )
+-
+-                    if len(matches) >= max_matches:
+-                        truncated = True
+-                        break
+-
+-            if truncated:
+-                break
+-
+-        if truncated:
+-            break
+-
+-    return {
+-        "query": query,
+-        "path": str(directory.relative_to(PROJECT_ROOT)),
+-        "matches": matches,
+-        "truncated": truncated,
+-    }
+-
+-
+-# ---------------------------------------------------------
+-# Gemini terminal tool
+-# ---------------------------------------------------------
+-
+-# Commands are allowlisted by prefix so arguments (a specific file, a
+-# test name, etc.) are still permitted, e.g. "pytest -k test_login" is
+-# allowed because it starts with the "pytest" prefix. Read-only
+-# inspection, dependency install, and test/build commands are included;
+-# nothing here can commit, push, rewrite history, or delete anything —
+-# writes to files go through create_file/write_file, and deletion goes
+-# through delete_file, both of which have their own guardrails.
+-ALLOWED_COMMAND_PREFIXES = (
+-    "git status",
+-    "git branch",
+-    "git log",
+-    "git diff",
+-    "git show",
+-    "git remote -v",
+-    "pwd",
+-    "dir",
+-    "ls",
+-    "python --version",
+-    "python3 --version",
+-    "node --version",
+-    "npm --version",
+-    "pip --version",
+-    "pip3 --version",
+-    "pytest",
+-    "python -m pytest",
+-    "python3 -m pytest",
+-    "npm test",
+-    "npm run test",
+-    "npm run build",
+-    "npm run lint",
+-    "npm install",
+-    "npm ci",
+-    "pip install -r requirements.txt",
+-    "pip list",
+-    "pip show",
+-    "flake8",
+-    "black --check",
+-    "ruff check",
+-)
+-
+-# Characters/sequences that enable chaining, piping, redirection, or
+-# substitution. Blocking these stops an allowed command from being used
+-# to smuggle in a second, disallowed command (e.g.
+-# "git status && rm -rf /").
+-DANGEROUS_COMMAND_CHARACTERS = (";", "&", "|", "`", "$(", ">", "<", "\n")
+-
+-# Extra, explicit denylist as defense in depth on top of the allowlist
+-# above. Anything matching these is refused even if a future edit
+-# accidentally widens ALLOWED_COMMAND_PREFIXES.
+-BLOCKED_COMMAND_PATTERNS = [
+-    re.compile(pattern, re.IGNORECASE)
+-    for pattern in (
+-        r"\brm\s+-rf\b",
+-        r"\bsudo\b",
+-        r"\bshutdown\b",
+-        r"\breboot\b",
+-        r"\bpoweroff\b",
+-        r"\bhalt\b",
+-        r"\bmkfs\b",
+-        r"\bformat\b",
+-        r"\bdd\s+if=",
+-        r"\bchmod\s+777\b",
+-        r"\bchown\b",
+-        r"\.env\b",
+-        r"\bgoogle_api_key\b",
+-        r"\bprintenv\b",
+-        r"\bcredential",
+-        r"\bid_rsa\b",
+-    )
+-]
+-
+-
+-def is_command_allowed(command: str) -> bool:
+-    """True if the command matches one of the allowed dev-command prefixes."""
+-
+-    return any(
+-        command == prefix or command.startswith(prefix + " ")
+-        for prefix in ALLOWED_COMMAND_PREFIXES
+-    )
+-
+-
+-def run_command(command: str) -> dict:
+-    """Run an allowlisted development command in the project directory.
+-
+-    Covers read-only inspection (git status/log/diff/branch, directory
+-    listings, tool versions), installing dependencies, and running
+-    tests/builds/linters. Destructive, system-level, or credential-
+-    exposing commands are always refused.
+-
+-    Args:
+-        command: A single command starting with one of the allowed
+-                 prefixes (e.g. "pytest", "npm test", "git log -n 5").
+-
+-    Returns:
+-        The command, exit code, stdout, and stderr.
+-    """
+-
+-    if not command or not command.strip():
+-        return {"error": "No command was provided."}
+-
+-    command = command.strip()
+-
+-    for pattern in BLOCKED_COMMAND_PATTERNS:
+-        if pattern.search(command):
+-            return {
+-                "error": (
+-                    f"This command is blocked for safety: {command}"
+-                )
+-            }
+-
+-    for char in DANGEROUS_COMMAND_CHARACTERS:
+-        if char in command:
+-            return {
+-                "error": (
+-                    "Command chaining, piping, redirection, and "
+-                    "substitution are not allowed. Run one plain "
+-                    "command at a time."
+-                )
+-            }
+-
+-    if not is_command_allowed(command):
+-        return {
+-            "error": (
+-                f"Command not allowed: '{command}'. Allowed command "
+-                f"prefixes: {sorted(ALLOWED_COMMAND_PREFIXES)}"
+-            )
+-        }
+-
+-    try:
+-        args = shlex.split(command, posix=False)
+-
+-        result = subprocess.run(
+-        args,
+-        cwd=PROJECT_ROOT,
+-        shell=False,
+-        capture_output=True,
+-        text=True,
+-        timeout=60,
+-        )
+-
+-        # Cap output so a noisy command can't blow up the context window.
+-        max_output = 20_000
+-
+-        return {
+-            "command": command,
+-            "returncode": result.returncode,
+-            "stdout": result.stdout[:max_output],
+-            "stderr": result.stderr[:max_output],
+-        }
+-
+-    except subprocess.TimeoutExpired:
+-        return {
+-            "error": "Command timed out after 60 seconds."
+-        }
+-
+-    except Exception as exc:
+-        return {
+-            "error": f"Could not execute command: {exc}"
+-        }
+-
+-
+-# ---------------------------------------------------------
+-# Gemini git tools
+-# ---------------------------------------------------------
+-
+-def git_status() -> dict:
+-    """Show the current git status of the project.
+-
+-    Equivalent to `git status --short --branch`. Always use this instead
+-    of guessing what has changed in the repository.
+-
+-    Returns:
+-        A dictionary with the short-form status output.
+-    """
+-
+-    try:
+-        result = subprocess.run(
+-            ["git", "status", "--short", "--branch"],
+-            cwd=PROJECT_ROOT,
+-            capture_output=True,
+-            text=True,
+-            timeout=30,
+-        )
+-    except FileNotFoundError:
+-        return {"error": "git is not installed or not on PATH."}
+-    except subprocess.TimeoutExpired:
+-        return {"error": "git status timed out."}
+-    except Exception as exc:
+-        return {"error": f"Could not run git status: {exc}"}
+-
+-    if result.returncode != 0:
+-        return {"error": result.stderr.strip() or "git status failed."}
+-
+-    return {"status": result.stdout}
+-
+-
+-def git_diff(path: str = "", staged: bool = False) -> dict:
+-    """Show the current git diff for the project or a single file.
+-
+-    Args:
+-        path: Optional relative path to scope the diff to one file.
+-              Leave empty to diff the whole project.
+-        staged: If true, show staged changes (git diff --staged)
+-                instead of unstaged changes.
+-
+-    Returns:
+-        A dictionary with the diff text.
+-    """
+-
+-    args = ["git", "diff"]
+-
+-    if staged:
+-        args.append("--staged")
+-
+-    if path:
+-        try:
+-            file_path = safe_path(path)
+-        except ValueError as exc:
+-            return {"error": str(exc)}
+-
+-        args.append(str(file_path.relative_to(PROJECT_ROOT)))
+-
+-    try:
+-        result = subprocess.run(
+-            args,
+-            cwd=PROJECT_ROOT,
+-            capture_output=True,
+-            text=True,
+-            timeout=30,
+-        )
+-    except FileNotFoundError:
+-        return {"error": "git is not installed or not on PATH."}
+-    except subprocess.TimeoutExpired:
+-        return {"error": "git diff timed out."}
+-    except Exception as exc:
+-        return {"error": f"Could not run git diff: {exc}"}
+-
+-    if result.returncode != 0:
+-        return {"error": result.stderr.strip() or "git diff failed."}
+-
+-    diff_text = result.stdout
+-    max_diff = 50_000
+-    truncated = False
+-
+-    if len(diff_text) > max_diff:
+-        diff_text = diff_text[:max_diff]
+-        truncated = True
+-
+-    return {"diff": diff_text, "truncated": truncated}
+-
+-
+-def git_log(max_count: int = 10) -> dict:
+-    """Show recent commit history for the project.
+-
+-    Args:
+-        max_count: Number of commits to show (1-100). Defaults to 10.
+-
+-    Returns:
+-        A dictionary with the one-line-per-commit log output.
+-    """
+-
+-    try:
+-        count = int(max_count)
+-    except (TypeError, ValueError):
+-        return {"error": "max_count must be a whole number."}
+-
+-    count = max(1, min(count, 100))
+-
+-    try:
+-        result = subprocess.run(
+-            ["git", "log", f"-{count}", "--oneline", "--decorate"],
+-            cwd=PROJECT_ROOT,
+-            capture_output=True,
+-            text=True,
+-            timeout=15,
+-        )
+-    except FileNotFoundError:
+-        return {"error": "git is not installed or not on PATH."}
+-    except subprocess.TimeoutExpired:
+-        return {"error": "git log timed out."}
+-    except Exception as exc:
+-        return {"error": f"Could not run git log: {exc}"}
+-
+-    if result.returncode != 0:
+-        return {"error": result.stderr.strip() or "git log failed."}
+-
+-    return {"log": result.stdout}
+-
+-
+-def git_branch() -> dict:
+-    """List local branches and show which one is currently checked out.
+-
+-    Returns:
+-        A dictionary with the branch list output (current branch marked
+-        with '*').
+-    """
+-
+-    try:
+-        result = subprocess.run(
+-            ["git", "branch", "--list"],
+-            cwd=PROJECT_ROOT,
+-            capture_output=True,
+-            text=True,
+-            timeout=15,
+-        )
+-    except FileNotFoundError:
+-        return {"error": "git is not installed or not on PATH."}
+-    except subprocess.TimeoutExpired:
+-        return {"error": "git branch timed out."}
+-    except Exception as exc:
+-        return {"error": f"Could not run git branch: {exc}"}
+-
+-    if result.returncode != 0:
+-        return {"error": result.stderr.strip() or "git branch failed."}
+-
+-    return {"branches": result.stdout}
+-
+-
+-# ---------------------------------------------------------
+-# Gemini file-modification tools
+-# ---------------------------------------------------------
+-
+-# Character cap for contents/diffs shown back to the model in a
+-# confirmation preview, so a huge file doesn't blow up the context
+-# window before anything has even been written.
+-PREVIEW_CHAR_LIMIT = 2000
+-
+-
+-def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
+-    """Create a new file with the given contents. Requires confirmation.
+-
+-    Fails if the file already exists, to avoid accidentally clobbering
+-    something — use write_file to modify an existing file.
+-
+-    The first call (confirm=False, the default) does NOT create
+-    anything — it returns a preview of what would be created. Only
+-    pass confirm=True after the user has explicitly agreed to it.
+-
+-    Args:
+-        path: Relative path for the new file.
+-        contents: Text contents to write.
+-        confirm: Must be True to actually create the file.
+-
+-    Returns:
+-        A dictionary confirming the creation, or asking for confirmation.
+-    """
+-
+-    try:
+-        file_path = safe_path(path)
+-    except ValueError as exc:
+-        return {"error": str(exc)}
+-
+-    if is_sensitive_path(file_path):
+-        return {"error": f"Refusing to create sensitive file: {path}"}
+-
+-    if file_path.exists():
+-        return {
+-            "error": (
+-                f"File already exists: {path}. Use write_file to "
+-                f"modify it."
+-            )
+-        }
+-
+-    if not confirm:
+-        preview = contents[:PREVIEW_CHAR_LIMIT]
+-        truncated = len(contents) > PREVIEW_CHAR_LIMIT
+-
+-        return {
+-            "requires_confirmation": True,
+-            "path": str(file_path.relative_to(PROJECT_ROOT)),
+-            "preview": preview,
+-            "preview_truncated": truncated,
+-            "message": (
+-                f"'{path}' was NOT created. Show the user the preview "
+-                f"and ask them to explicitly confirm creating this "
+-                f"file, then call create_file again with confirm=true."
+-            ),
+-        }
+-
+-    try:
+-        file_path.parent.mkdir(parents=True, exist_ok=True)
+-        file_path.write_text(contents, encoding="utf-8")
+-    except Exception as exc:
+-        return {"error": f"Could not create file: {exc}"}
+-
+-    return {
+-        "path": str(file_path.relative_to(PROJECT_ROOT)),
+-        "created": True,
+-        "bytes_written": len(contents.encode("utf-8")),
+-    }
+-
+-
+-def write_file(path: str, contents: str, confirm: bool = False) -> dict:
+-    """Overwrite a file with new contents. Requires confirmation.
+-
+-    Creates the file if it doesn't exist. Read the file first (with
+-    read_file) so unrelated user changes elsewhere in the file aren't
+-    silently discarded, and change only what's necessary — prefer
+-    apply_patch for a small, targeted change to an existing file.
+-
+-    The first call (confirm=False, the default) does NOT write
+-    anything — it returns a diff preview of the change. Only pass
+-    confirm=True after the user has explicitly agreed to it.
+-
+-    Args:
+-        path: Relative path to the file.
+-        contents: The complete new contents of the file.
+-        confirm: Must be True to actually write the file.
+-
+-    Returns:
+-        A dictionary confirming the write, or asking for confirmation.
+-    """
+-
+-    try:
+-        file_path = safe_path(path)
+-    except ValueError as exc:
+-        return {"error": str(exc)}
+-
+-    if is_sensitive_path(file_path):
+-        return {"error": f"Refusing to write to sensitive file: {path}"}
+-
+-    if file_path.exists() and file_path.is_dir():
+-        return {"error": f"Cannot write to a directory: {path}"}
+-
+-    existed = file_path.exists()
+-
+-    if not confirm:
+-        old_text = ""
+-
+-        if existed:
+-            try:
+-                old_text = file_path.read_text(encoding="utf-8")
+-            except (UnicodeDecodeError, OSError):
+-                old_text = None
+-
+-        diff_preview = None
+-
+-        if old_text is not None:
+-            diff_lines = difflib.unified_diff(
+-                old_text.splitlines(keepends=True),
+-                contents.splitlines(keepends=True),
+-                fromfile=f"a/{path}",
+-                tofile=f"b/{path}",
+-            )
+-            diff_preview = "".join(diff_lines)[:PREVIEW_CHAR_LIMIT]
+-
+-        return {
+-            "requires_confirmation": True,
+-            "path": str(file_path.relative_to(PROJECT_ROOT)),
+-            "action": "overwrite" if existed else "create",
+-            "diff": diff_preview,
+-            "message": (
+-                f"'{path}' was NOT written. Show the user the diff "
+-                f"and ask them to explicitly confirm this change, "
+-                f"then call write_file again with confirm=true."
+-            ),
+-        }
+-
+-    try:
+-        file_path.parent.mkdir(parents=True, exist_ok=True)
+-        file_path.write_text(contents, encoding="utf-8")
+-    except Exception as exc:
+-        return {"error": f"Could not write file: {exc}"}
+-
+-    return {
+-        "path": str(file_path.relative_to(PROJECT_ROOT)),
+-        "overwritten": existed,
+-        "bytes_written": len(contents.encode("utf-8")),
+-    }
+-
+-
+-def delete_file(path: str, confirm: bool = False) -> dict:
+-    """Delete a single file inside the project. Requires confirmation.
+-
+-    The first call (confirm=False, the default) never deletes anything —
+-    it only reports what would be deleted. Only pass confirm=True after
+-    the user has explicitly agreed to the deletion in the conversation.
+-
+-    Args:
+-        path: Relative path to the file to delete.
+-        confirm: Must be True to actually perform the deletion.
+-
+-    Returns:
+-        A dictionary confirming the deletion, or asking for confirmation.
+-    """
+-
+-    try:
+-        file_path = safe_path(path)
+-    except ValueError as exc:
+-        return {"error": str(exc)}
+-
+-    if is_sensitive_path(file_path):
+-        return {"error": f"Refusing to delete sensitive file: {path}"}
+-
+-    if file_path == PROJECT_ROOT:
+-        return {"error": "Refusing to delete the project root."}
+-
+-    if not file_path.exists():
+-        return {"error": f"File does not exist: {path}"}
+-
+-    if file_path.is_dir():
+-        return {
+-            "error": (
+-                "delete_file can only delete a single file, not a "
+-                "directory."
+-            )
+-        }
+-
+-    if not confirm:
+-        return {
+-            "requires_confirmation": True,
+-            "path": str(file_path.relative_to(PROJECT_ROOT)),
+-            "message": (
+-                f"'{path}' was NOT deleted. Ask the user to explicitly "
+-                f"confirm this deletion in the chat, then call "
+-                f"delete_file again with confirm=true."
+-            ),
+-        }
+-
+-    try:
+-        file_path.unlink()
+-    except Exception as exc:
+-        return {"error": f"Could not delete file: {exc}"}
+-
+-    return {
+-        "path": str(file_path.relative_to(PROJECT_ROOT)),
+-        "deleted": True,
+-    }
+-
+-
+-def _extract_patch_target_paths(patch_text: str) -> set:
+-    """Pull the file path(s) a unified diff would touch out of its headers.
+-
+-    Reads '--- a/<path>' and '+++ b/<path>' style header lines (also
+-    tolerating headers without the 'a/'/'b/' prefix). '/dev/null'
+-    (used for pure adds/deletes) is ignored.
+-    """
+-
+-    paths = set()
+-
+-    for line in patch_text.splitlines():
+-        for prefix in ("+++ b/", "--- a/", "+++ ", "--- "):
+-            if line.startswith(prefix):
+-                candidate = line[len(prefix):].split("\t")[0].strip()
+-                if candidate and candidate != "/dev/null":
+-                    paths.add(candidate)
+-                break
+-
+-    return paths
+-
+-
+-def apply_patch(patch: str, confirm: bool = False) -> dict:
+-    """Apply a small, targeted unified diff to one or more project files.
+-
+-    Prefer this over write_file when only part of a file needs to
+-    change — it avoids resending/rewriting the whole file and makes
+-    the change easy to review. The patch must be in standard unified
+-    diff format, e.g. what `git diff` produces:
+-
+-        --- a/server-python/app.py
+-        +++ b/server-python/app.py
+-        @@ -10,3 +10,3 @@
+-         unchanged line
+-        -old line
+-        +new line
+-         unchanged line
+-
+-    Requires confirmation. The first call (confirm=False, the
+-    default) only validates that the patch applies cleanly (via
+-    `git apply --check`) and reports which files would change — it
+-    does not modify anything. Call again with confirm=true, after the
+-    user has agreed to the change, to actually apply it.
+-
+-    Args:
+-        patch: The unified diff text.
+-        confirm: Must be True to actually apply the patch.
+-
+-    Returns:
+-        A dictionary describing whether the patch applied, or asking
+-        for confirmation.
+-    """
+-
+-    if not patch or not patch.strip():
+-        return {"error": "No patch text was provided."}
+-
+-    max_patch_size = 200_000
+-
+-    if len(patch) > max_patch_size:
+-        return {
+-            "error": (
+-                f"Patch is too large ({len(patch)} chars). Maximum "
+-                f"is {max_patch_size} chars — split it into smaller, "
+-                f"more targeted patches."
+-            )
+-        }
+-
+-    if not (PROJECT_ROOT / ".git").exists():
+-        # PROJECT_ROOT can be a subdirectory of the actual repo root
+-        # (git discovers .git by walking upward from cwd, same as
+-        # git_status/git_diff/git_log/git_branch above), so this is
+-        # only a quick heuristic to fail fast for a *fully* untracked
+-        # project — the real check is `git apply --check` below.
+-        try:
+-            top_level = subprocess.run(
+-                ["git", "rev-parse", "--show-toplevel"],
+-                cwd=PROJECT_ROOT,
+-                capture_output=True,
+-                text=True,
+-                timeout=10,
+-            )
+-        except FileNotFoundError:
+-            return {"error": "git is not installed or not on PATH."}
+-        except subprocess.TimeoutExpired:
+-            return {"error": "Checking for a git repository timed out."}
+-        except Exception as exc:
+-            return {"error": f"Could not check for a git repository: {exc}"}
+-
+-        if top_level.returncode != 0:
+-            return {
+-                "error": (
+-                    "apply_patch requires the project to be inside "
+-                    "a git repository (no .git found in "
+-                    "PROJECT_ROOT or any parent directory)."
+-                )
+-            }
+-
+-    target_paths = _extract_patch_target_paths(patch)
+-
+-    if not target_paths:
+-        return {
+-            "error": (
+-                "Could not find any '--- a/<path>' / '+++ b/<path>' "
+-                "headers in the patch. Provide a standard unified diff."
+-            )
+-        }
+-
+-    resolved_paths = []
+-
+-    for relative_path in target_paths:
+-        try:
+-            file_path = safe_path(relative_path)
+-        except ValueError as exc:
+-            return {
+-                "error": (
+-                    f"Patch touches an invalid path "
+-                    f"'{relative_path}': {exc}"
+-                )
+-            }
+-
+-        if is_sensitive_path(file_path):
+-            return {
+-                "error": (
+-                    f"Refusing to patch sensitive file: {relative_path}"
+-                )
+-            }
+-
+-        resolved_paths.append(str(file_path.relative_to(PROJECT_ROOT)))
+-
+-    try:
+-        check = subprocess.run(
+-            ["git", "apply", "--check", "-"],
+-            input=patch,
+-            cwd=PROJECT_ROOT,
+-            capture_output=True,
+-            text=True,
+-            timeout=30,
+-        )
+-    except FileNotFoundError:
+-        return {"error": "git is not installed or not on PATH."}
+-    except subprocess.TimeoutExpired:
+-        return {"error": "Validating the patch timed out."}
+-    except Exception as exc:
+-        return {"error": f"Could not validate patch: {exc}"}
+-
+-    if check.returncode != 0:
+-        return {
+-            "error": (
+-                f"Patch does not apply cleanly: "
+-                f"{check.stderr.strip() or check.stdout.strip()}"
+-            )
+-        }
+-
+-    if not confirm:
+-        return {
+-            "requires_confirmation": True,
+-            "files": resolved_paths,
+-            "message": (
+-                f"This patch was NOT applied. It would modify: "
+-                f"{', '.join(resolved_paths)}. Show the user the "
+-                f"patch and ask them to explicitly confirm it, then "
+-                f"call apply_patch again with confirm=true."
+-            ),
+-        }
+-
+-    try:
+-        applied = subprocess.run(
+-            ["git", "apply", "-"],
+-            input=patch,
+-            cwd=PROJECT_ROOT,
+-            capture_output=True,
+-            text=True,
+-            timeout=30,
+-        )
+-    except subprocess.TimeoutExpired:
+-        return {"error": "Applying the patch timed out."}
+-    except Exception as exc:
+-        return {"error": f"Could not apply patch: {exc}"}
+-
+-    if applied.returncode != 0:
+-        return {
+-            "error": (
+-                f"Failed to apply patch: "
+-                f"{applied.stderr.strip() or applied.stdout.strip()}"
+-            )
+-        }
+-
+-    return {"files": resolved_paths, "applied": True}
+-
+-
+-# ---------------------------------------------------------
+-# Tool registry
+-# ---------------------------------------------------------
+-
+-TOOL_FUNCTIONS = {
+-    "list_files": list_files,
+-    "read_file": read_file,
+-    "search_files": search_files,
+-    "run_command": run_command,
+-    "git_status": git_status,
+-    "git_diff": git_diff,
+-    "git_log": git_log,
+-    "git_branch": git_branch,
+-    "create_file": create_file,
+-    "write_file": write_file,
+-    "apply_patch": apply_patch,
+-    "delete_file": delete_file,
+-}
+-
+-# Tools that only read or inspect the project. Kept separate from the
+-# write/destructive tools below purely for clarity when reasoning about
+-# the system's blast radius.
+-READ_ONLY_TOOL_NAMES = {
+-    "list_files",
+-    "read_file",
+-    "search_files",
+-    "run_command",
+-    "git_status",
+-    "git_diff",
+-    "git_log",
+-    "git_branch",
+-}
+-
+-# Tools that create, modify, or delete files. All of these require
+-# confirm=True on a second call before they take effect (see each
+-# tool's docstring) — the first call only previews the change.
+-WRITE_TOOL_NAMES = {
+-    "create_file",
+-    "write_file",
+-    "apply_patch",
+-    "delete_file",
+-}
+-
+-# Per-tool execution timeouts (seconds), enforced generically in
+-# run_agent_loop so a single slow tool can't stall the whole agent.
+-# Read-only inspection tools get short budgets; run_command and
+-# apply_patch get more room since they may shell out to real
+-# subprocesses (run_command already enforces its own internal timeout
+-# too, set slightly below this ceiling so its own clean timeout
+-# message fires first).
+-TOOL_TIMEOUTS = {
+-    "list_files": 5,
+-    "read_file": 5,
+-    "search_files": 15,
+-    "run_command": 65,
+-    "git_status": 10,
+-    "git_diff": 10,
+-    "git_log": 10,
+-    "git_branch": 10,
+-    "create_file": 5,
+-    "write_file": 5,
+-    "apply_patch": 35,
+-    "delete_file": 5,
+-}
+-DEFAULT_TOOL_TIMEOUT = 15
+-
+-# Shared executor used to run each tool call so it can be bounded by
+-# TOOL_TIMEOUTS without blocking the whole process. Python threads
+-# can't be forcibly killed, so a timed-out tool's thread may keep
+-# running in the background even after the agent moves on and reports
+-# the timeout — this bounds how long the *agent* waits, not how long
+-# the underlying work actually takes.
+-TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8)
+-
+-
+-# ---------------------------------------------------------
+-# Gemini function declarations
+-# ---------------------------------------------------------
+-
+-list_files_declaration = types.FunctionDeclaration(
+-    name="list_files",
+-    description=(
+-        "Lists files and directories inside the local project. "
+-        "Use this when the user asks what files exist or asks "
+-        "you to inspect a local directory."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "path": {
+-                "type": "STRING",
+-                "description": (
+-                    "Relative directory path. "
+-                    "Use '.' for the project root."
+-                ),
+-            }
+-        },
+-        "required": [],
+-    },
+-)
+-
+-
+-read_file_declaration = types.FunctionDeclaration(
+-    name="read_file",
+-    description=(
+-        "Reads the contents of a UTF-8 text file inside the local "
+-        "project. Use this when the user asks you to inspect a "
+-        "specific local file."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "path": {
+-                "type": "STRING",
+-                "description": (
+-                    "Relative path to the file inside the project."
+-                ),
+-            }
+-        },
+-        "required": ["path"],
+-    },
+-)
+-
+-
+-search_files_declaration = types.FunctionDeclaration(
+-    name="search_files",
+-    description=(
+-        "Searches text files inside the local project for a query "
+-        "string (case-insensitive) and returns the matching file "
+-        "paths and line numbers. Use this to find where something "
+-        "is defined or used before deciding which file to read."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "query": {
+-                "type": "STRING",
+-                "description": "The text to search for.",
+-            },
+-            "path": {
+-                "type": "STRING",
+-                "description": (
+-                    "Relative directory to search under. "
+-                    "Use '.' for the whole project."
+-                ),
+-            },
+-        },
+-        "required": ["query"],
+-    },
+-)
+-
+-
+-run_command_declaration = types.FunctionDeclaration(
+-    name="run_command",
+-    description=(
+-        "Runs one of the explicitly allowed development commands "
+-        "inside the local project directory: read-only git "
+-        "inspection (status, log, diff, branch), directory listings, "
+-        "tool versions, installing dependencies, and running "
+-        "tests/builds/linters. Use this when the user asks you to "
+-        "run the tests, install dependencies, build the project, or "
+-        "check something the dedicated tools don't cover. It cannot "
+-        "run destructive, system-level, or credential-exposing "
+-        "commands."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "command": {
+-                "type": "STRING",
+-                "description": (
+-                    "An allowed command such as 'pytest', "
+-                    "'npm test', 'npm install', 'git log -n 5', "
+-                    "or 'npm run build'."
+-                ),
+-            }
+-        },
+-        "required": ["command"],
+-    },
+-)
+-
+-
+-git_status_declaration = types.FunctionDeclaration(
+-    name="git_status",
+-    description=(
+-        "Shows the current git status (branch and changed files) "
+-        "of the project. Always call this instead of guessing or "
+-        "assuming the repository state."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {},
+-        "required": [],
+-    },
+-)
+-
+-
+-git_diff_declaration = types.FunctionDeclaration(
+-    name="git_diff",
+-    description=(
+-        "Shows the current git diff for the project, or for a "
+-        "single file. Use this to see exactly what has changed "
+-        "before or after making edits."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "path": {
+-                "type": "STRING",
+-                "description": (
+-                    "Optional relative path to scope the diff to "
+-                    "a single file. Leave empty for the whole "
+-                    "project."
+-                ),
+-            },
+-            "staged": {
+-                "type": "BOOLEAN",
+-                "description": (
+-                    "If true, show staged changes instead of "
+-                    "unstaged changes."
+-                ),
+-            },
+-        },
+-        "required": [],
+-    },
+-)
+-
+-
+-git_log_declaration = types.FunctionDeclaration(
+-    name="git_log",
+-    description=(
+-        "Shows recent commit history for the project (one line per "
+-        "commit). Use this to understand recent changes instead of "
+-        "guessing."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "max_count": {
+-                "type": "INTEGER",
+-                "description": (
+-                    "Number of commits to show (1-100). Defaults to 10."
+-                ),
+-            },
+-        },
+-        "required": [],
+-    },
+-)
+-
+-
+-git_branch_declaration = types.FunctionDeclaration(
+-    name="git_branch",
+-    description=(
+-        "Lists local git branches and shows which one is currently "
+-        "checked out."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {},
+-        "required": [],
+-    },
+-)
+-
+-
+-create_file_declaration = types.FunctionDeclaration(
+-    name="create_file",
+-    description=(
+-        "Creates a new file with the given contents inside the "
+-        "local project. Fails if the file already exists — use "
+-        "write_file to modify an existing file instead. Requires "
+-        "confirmation: calling without confirm=true will NOT create "
+-        "anything, it only returns a preview. Only call it again "
+-        "with confirm=true after the user has explicitly agreed."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "path": {
+-                "type": "STRING",
+-                "description": "Relative path for the new file.",
+-            },
+-            "contents": {
+-                "type": "STRING",
+-                "description": "Text contents to write to the file.",
+-            },
+-            "confirm": {
+-                "type": "BOOLEAN",
+-                "description": (
+-                    "Must be true to actually create the file. "
+-                    "Defaults to false."
+-                ),
+-            },
+-        },
+-        "required": ["path", "contents"],
+-    },
+-)
+-
+-
+-write_file_declaration = types.FunctionDeclaration(
+-    name="write_file",
+-    description=(
+-        "Overwrites an existing file (or creates it if missing) "
+-        "with new contents inside the local project. Read the file "
+-        "first with read_file so you don't discard unrelated user "
+-        "changes, and prefer apply_patch for a small, targeted "
+-        "change instead of rewriting the whole file. Requires "
+-        "confirmation: calling without confirm=true will NOT write "
+-        "anything, it only returns a diff preview. Only call it "
+-        "again with confirm=true after the user has explicitly "
+-        "agreed."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "path": {
+-                "type": "STRING",
+-                "description": "Relative path to the file.",
+-            },
+-            "contents": {
+-                "type": "STRING",
+-                "description": "The complete new contents of the file.",
+-            },
+-            "confirm": {
+-                "type": "BOOLEAN",
+-                "description": (
+-                    "Must be true to actually write the file. "
+-                    "Defaults to false."
+-                ),
+-            },
+-        },
+-        "required": ["path", "contents"],
+-    },
+-)
+-
+-
+-apply_patch_declaration = types.FunctionDeclaration(
+-    name="apply_patch",
+-    description=(
+-        "Applies a small, targeted unified diff (like `git diff` "
+-        "output) to one or more project files. This is the "
+-        "preferred way to make a focused change to an existing "
+-        "file instead of rewriting it entirely with write_file. "
+-        "Requires confirmation: calling without confirm=true will "
+-        "NOT apply anything, it only validates the patch and "
+-        "reports which files would change. Only call it again with "
+-        "confirm=true after the user has explicitly agreed."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "patch": {
+-                "type": "STRING",
+-                "description": (
+-                    "The unified diff text, including "
+-                    "'--- a/<path>' / '+++ b/<path>' headers and "
+-                    "'@@ ... @@' hunks."
+-                ),
+-            },
+-            "confirm": {
+-                "type": "BOOLEAN",
+-                "description": (
+-                    "Must be true to actually apply the patch. "
+-                    "Defaults to false."
+-                ),
+-            },
+-        },
+-        "required": ["patch"],
+-    },
+-)
+-
+-
+-delete_file_declaration = types.FunctionDeclaration(
+-    name="delete_file",
+-    description=(
+-        "Deletes a single file inside the local project. This is "
+-        "destructive. Calling it without confirm=true will NOT "
+-        "delete anything — it only returns what would be deleted. "
+-        "Only call it again with confirm=true after the user has "
+-        "explicitly agreed to the deletion in the conversation."
+-    ),
+-    parameters={
+-        "type": "OBJECT",
+-        "properties": {
+-            "path": {
+-                "type": "STRING",
+-                "description": "Relative path to the file to delete.",
+-            },
+-            "confirm": {
+-                "type": "BOOLEAN",
+-                "description": (
+-                    "Must be true to actually perform the deletion. "
+-                    "Defaults to false."
+-                ),
+-            },
+-        },
+-        "required": ["path"],
+-    },
+-)
+-
+-
+-TOOLS = [
+-    types.Tool(
+-        function_declarations=[
+-            list_files_declaration,
+-            read_file_declaration,
+-            search_files_declaration,
+-            run_command_declaration,
+-            git_status_declaration,
+-            git_diff_declaration,
+-            git_log_declaration,
+-            git_branch_declaration,
+-            create_file_declaration,
+-            write_file_declaration,
+-            apply_patch_declaration,
+-            delete_file_declaration,
+-        ]
+-    )
+-]
+-
+-
+-# ---------------------------------------------------------
+-# Gemini configuration
+-# ---------------------------------------------------------
+-
+-GENERATE_CONFIG = types.GenerateContentConfig(
+-    tools=TOOLS,
+-    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+-        disable=True
+-    ),
+-    system_instruction=(
+-        "You are a local coding/project agent operating on a single "
+-        "project directory (PROJECT_ROOT), similar in behavior to "
+-        "Gemini CLI. You act through explicit tools; you do not have "
+-        "any other way to see or change this project.\n"
+-        "\n"
+-        "Inspecting the project:\n"
+-        "- Inspect the project with your tools before making "
+-        "assumptions about its contents or structure.\n"
+-        "- Prefer reading relevant files yourself over asking the "
+-        "user to paste code.\n"
+-        "- Use search_files to locate where something is defined or "
+-        "used before reading whole files.\n"
+-        "- Use git_status, git_diff, git_log, and git_branch whenever "
+-        "the user asks about, or your work depends on, the state of "
+-        "the repository. Never guess or hallucinate repository "
+-        "state, commit history, or the current branch.\n"
+-        "\n"
+-        "Making changes:\n"
+-        "- Before modifying an important file: read it and decide "
+-        "the minimal necessary change.\n"
+-        "- Prefer apply_patch for a small, targeted change to an "
+-        "existing file. Only use write_file for a genuinely new "
+-        "file's full contents or a near-total rewrite, and only "
+-        "after reading the current contents first so you don't "
+-        "silently discard unrelated parts of the file.\n"
+-        "- create_file, write_file, apply_patch, and delete_file all "
+-        "require confirmation: your first call (confirm not set, or "
+-        "false) never changes anything — it only returns a preview "
+-        "(contents, diff, or affected files). Show that preview to "
+-        "the user in your reply, wait for them to explicitly agree "
+-        "in the conversation, and only then call the same tool "
+-        "again with confirm=true. Never set confirm=true on the "
+-        "first attempt, and never claim a file was created, "
+-        "written, patched, or deleted unless the tool result "
+-        "actually confirms it happened.\n"
+-        "- Never run 'git commit' or 'git push', and do not commit "
+-        "or push changes, unless the user explicitly asks you to in "
+-        "this conversation.\n"
+-        "\n"
+-        "Verifying changes — this is not optional:\n"
+-        "- After a create_file/write_file/apply_patch call actually "
+-        "succeeds (not just the preview step), verify the result: "
+-        "read the file back, or use git_diff, to confirm the change "
+-        "looks right.\n"
+-        "- When practical, run an appropriate test, build, or lint/"
+-        "syntax check with run_command after the change and inspect "
+-        "the real output.\n"
+-        "- If verification fails (the test fails, the build breaks, "
+-        "the file doesn't look right), say so, investigate why, and "
+-        "attempt a correction if it's reasonable to do so — don't "
+-        "stop at the first failed attempt without at least "
+-        "explaining what went wrong.\n"
+-        "- Never claim a change was successfully made unless the "
+-        "corresponding tool call actually succeeded. Never claim a "
+-        "test or command passed unless you actually ran it with a "
+-        "tool and it returned a passing result. Never claim you ran "
+-        "a command, read a file, or checked git state unless the "
+-        "corresponding tool actually did so.\n"
+-        "\n"
+-        "Explaining yourself:\n"
+-        "- Explain what you are about to change before changing it, "
+-        "and summarize what you actually changed (and verified) "
+-        "afterward.\n"
+-        "- Report command output and tool results accurately, "
+-        "including failures.\n"
+-        "- Some files (like .env) are blocked from every tool and "
+-        "will never be shown to you; if a tool refuses for that "
+-        "reason, tell the user instead of retrying.\n"
+-        "- If a tool call fails or is rejected (including a blocked "
+-        "repeated call), report the actual error to the user rather "
+-        "than guessing what might have happened or silently retrying "
+-        "the same thing."
+-    ),
+-)
+-
+-
+-# ---------------------------------------------------------
+-# Build conversation contents
+-# ---------------------------------------------------------
+-
+-def build_contents(msg, history):
+-    """Convert frontend conversation history into Gemini contents."""
+-
+-    contents = []
+-
+-    for item in history:
+-        role = item.get("role")
+-        parts = item.get("parts", [])
+-
+-        if role and parts:
+-            converted_parts = []
+-
+-            for part in parts:
+-                if isinstance(part, dict) and "text" in part:
+-                    converted_parts.append(
+-                        types.Part.from_text(
+-                            text=part["text"]
+-                        )
+-                    )
+-                else:
+-                    converted_parts.append(part)
+-
+-            contents.append(
+-                types.Content(
+-                    role=role,
+-                    parts=converted_parts,
+-                )
+-            )
+-
+-    contents.append(
+-        types.Content(
+-            role="user",
+-            parts=[
+-                types.Part.from_text(
+-                    text=msg
+-                )
+-            ],
+-        )
+-    )
+-
+-    return contents
+-
+-
+-# ---------------------------------------------------------
+-# Explicit Gemini tool-calling loop
+-# ---------------------------------------------------------
+-
+-MAX_TOOL_ROUNDS = 10
+-
+-# A model that's stuck tends to call the exact same tool with the
+-# exact same arguments over and over with nothing else happening in
+-# between. We only flag *consecutive* identical calls (interleaving a
+-# different call, e.g. checking git_status between several edits,
+-# resets the counter) so legitimate repeated inspection isn't blocked.
+-MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
+-HARD_ABORT_CONSECUTIVE_CALLS = 6
+-
+-
+-def run_agent_loop(contents):
+-    """Run Gemini and explicitly execute requested tools.
+-
+-    This is a generator so both /chat and /stream can share one
+-    implementation of the loop:
+-
+-        Gemini
+-          |
+-          v
+-        function call?  --no--> yield final text, done
+-          | yes
+-          v
+-        Python executes the tool, bounded by a per-tool timeout
+-        (yielding tool_call/tool_result events as it goes)
+-          |
+-          v
+-        tool result sent back to Gemini
+-          |
+-          v
+-        repeat, up to MAX_TOOL_ROUNDS
+-
+-    The same (name, arguments) call repeated several times *in a row*
+-    is treated as a stuck loop: after MAX_CONSECUTIVE_IDENTICAL_CALLS
+-    it's refused with an explanation instead of being executed again,
+-    and after HARD_ABORT_CONSECUTIVE_CALLS the whole loop is aborted.
+-
+-    Yields dicts of one of these shapes:
+-        {"type": "tool_call", "name": str, "args": dict}
+-        {"type": "tool_result", "name": str, "result": dict}
+-        {"type": "final", "text": str}
+-        {"type": "error", "message": str}
+-    A generator stops after yielding "final" or "error".
+-    """
+-
+-    last_call_signature = None
+-    consecutive_repeat_count = 0
+-
+-    for _ in range(MAX_TOOL_ROUNDS):
+-
+-        try:
+-            response = client.models.generate_content(
+-                model=MODEL_NAME,
+-                contents=contents,
+-                config=GENERATE_CONFIG,
+-            )
+-        except Exception as exc:
+-            yield {
+-                "type": "error",
+-                "message": f"Gemini API error: {exc}",
+-            }
+-            return
+-
+-        if not response.candidates:
+-            yield {
+-                "type": "error",
+-                "message": "Gemini returned no response candidates.",
+-            }
+-            return
+-
+-        model_content = response.candidates[0].content
+-
+-        if model_content is None or not model_content.parts:
+-            yield {
+-                "type": "error",
+-                "message": "Gemini returned an empty response.",
+-            }
+-            return
+-
+-        function_calls = [
+-            part.function_call
+-            for part in model_content.parts
+-            if part.function_call
+-        ]
+-
+-        # Gemini has produced its final answer: no more tool calls.
+-        if not function_calls:
+-
+-            text = None
+-
+-            try:
+-                text = response.text
+-            except Exception:
+-                text = None
+-
+-            if not text:
+-                # Fall back to manually concatenating any text parts.
+-                text = "".join(
+-                    part.text
+-                    for part in model_content.parts
+-                    if getattr(part, "text", None)
+-                ) or None
+-
+-            if not text:
+-                yield {
+-                    "type": "error",
+-                    "message": (
+-                        "Gemini returned no text and requested no "
+-                        "further tools."
+-                    ),
+-                }
+-                return
+-
+-            yield {"type": "final", "text": text}
+-            return
+-
+-        # Preserve Gemini's function-call message.
+-        contents.append(model_content)
+-
+-        function_response_parts = []
+-
+-        for function_call in function_calls:
+-
+-            function_name = function_call.name
+-            function_args = dict(function_call.args or {})
+-
+-            print(
+-                f"[Gemini tool call] "
+-                f"{function_name}({function_args})"
+-            )
+-
+-            yield {
+-                "type": "tool_call",
+-                "name": function_name,
+-                "args": function_args,
+-            }
+-
+-            # Track consecutive identical (name, args) calls to catch
+-            # a stuck loop. Any different call in between resets this.
+-            call_signature = (
+-                function_name,
+-                tuple(
+-                    sorted(
+-                        (key, repr(value))
+-                        for key, value in function_args.items()
+-                    )
+-                ),
+-            )
+-
+-            if call_signature == last_call_signature:
+-                consecutive_repeat_count += 1
+-            else:
+-                last_call_signature = call_signature
+-                consecutive_repeat_count = 1
+-
+-            function = TOOL_FUNCTIONS.get(function_name)
+-
+-            if function is None:
+-                result = {
+-                    "error": (
+-                        f"Unknown tool requested: {function_name}"
+-                    )
+-                }
+-
+-            elif consecutive_repeat_count > HARD_ABORT_CONSECUTIVE_CALLS:
+-                yield {
+-                    "type": "error",
+-                    "message": (
+-                        f"Stopping: {function_name} was called with "
+-                        f"the exact same arguments "
+-                        f"{consecutive_repeat_count} times in a row "
+-                        f"with nothing else happening in between. "
+-                        f"This looks like a stuck loop rather than "
+-                        f"progress."
+-                    ),
+-                }
+-                return
+-
+-            elif consecutive_repeat_count > MAX_CONSECUTIVE_IDENTICAL_CALLS:
+-                result = {
+-                    "error": (
+-                        f"{function_name} has already been called "
+-                        f"with these exact arguments "
+-                        f"{consecutive_repeat_count - 1} time(s) in "
+-                        f"a row with no other action in between, so "
+-                        f"repeating it again won't provide new "
+-                        f"information. Try a different tool, "
+-                        f"different arguments, or give your final "
+-                        f"answer based on what you already know."
+-                    )
+-                }
+-
+-            else:
+-                timeout_seconds = TOOL_TIMEOUTS.get(
+-                    function_name, DEFAULT_TOOL_TIMEOUT
+-                )
+-                future = TOOL_EXECUTOR.submit(function, **function_args)
+-
+-                try:
+-                    result = future.result(timeout=timeout_seconds)
+-
+-                except FutureTimeoutError:
+-                    result = {
+-                        "error": (
+-                            f"Tool {function_name} exceeded its "
+-                            f"{timeout_seconds}s execution limit and "
+-                            f"was abandoned."
+-                        )
+-                    }
+-
+-                except TypeError as exc:
+-                    # Wrong/missing/extra arguments for the tool.
+-                    result = {
+-                        "error": (
+-                            f"Malformed arguments for "
+-                            f"{function_name}: {exc}"
+-                        )
+-                    }
+-
+-                except Exception as exc:
+-                    result = {
+-                        "error": (
+-                            f"Tool {function_name} failed: {exc}"
+-                        )
+-                    }
+-
+-            print(
+-                f"[Gemini tool result] "
+-                f"{function_name}: {result}"
+-            )
+-
+-            yield {
+-                "type": "tool_result",
+-                "name": function_name,
+-                "result": result,
+-            }
+-
+-            # IMPORTANT:
+-            # google-genai 2.17.0 does not accept id= here.
+-            function_response_parts.append(
+-                types.Part.from_function_response(
+-                    name=function_name,
+-                    response={
+-                        "result": result
+-                    },
+-                )
+-            )
+-
+-        # Send the actual local tool results back to Gemini.
+-        contents.append(
+-            types.Content(
+-                role="user",
+-                parts=function_response_parts,
+-            )
+-        )
+-
+-    yield {
+-        "type": "error",
+-        "message": (
+-            "Gemini exceeded the maximum number of tool-calling "
+-            "rounds without producing a final response."
+-        ),
+-    }
+-
+-
+ # ---------------------------------------------------------
+ # Chat endpoint
+ # ---------------------------------------------------------
+@@ -1918,7 +82,7 @@ def chat():
+         return {"text": "", "error": "Message must not be empty."}, 400
+ 
+     try:
+-        contents = build_contents(msg, history)
++        contents = provider.build_contents(msg, history)
+     except Exception as exc:
+         return {
+             "text": "",
+@@ -1930,7 +94,7 @@ def chat():
+     error_message = None
+ 
+     try:
+-        for event in run_agent_loop(contents):
++        for event in run_agent_loop(provider, contents):
+             if event["type"] == "tool_call":
+                 tool_activity.append(
+                     {
+@@ -1979,8 +143,8 @@ def stream():
+     appends every chunk directly to the message it is displaying, so
+     this keeps emitting plain text (no JSON envelope) to stay
+     compatible with it. Tool-call and tool-error activity is streamed
+-    first as short, human-readable status lines, followed by Gemini's
+-    final answer text.
++    first as short, human-readable status lines, followed by the
++    model's final answer text.
+     """
+ 
+     def format_args(args):
+@@ -1998,13 +162,13 @@ def stream():
+             return
+ 
+         try:
+-            contents = build_contents(msg, history)
++            contents = provider.build_contents(msg, history)
+         except Exception as exc:
+             yield f"[Error building request: {exc}]"
+             return
+ 
+         try:
+-            for event in run_agent_loop(contents):
++            for event in run_agent_loop(provider, contents):
+ 
+                 if event["type"] == "tool_call":
+                     yield (
+@@ -2040,6 +204,8 @@ def stream():
+ 
+ if __name__ == "__main__":
+ 
++    import os
++
+     port = int(
+         os.getenv("PORT", "9000")
+     )
+@@ -2047,4 +213,4 @@ if __name__ == "__main__":
+     app.run(
+         host="127.0.0.1",
+         port=port,
+-    )
+\ No newline at end of file
++    )
+diff --git a/server-python/prompts.py b/server-python/prompts.py
+new file mode 100644
+index 0000000..c5c3b78
+--- /dev/null
++++ b/server-python/prompts.py
+@@ -0,0 +1,83 @@
++"""Provider-agnostic prompt text.
++
++This used to live inline inside Gemini's GENERATE_CONFIG. It doesn't
++mention Gemini anywhere, so it's shared as-is by every provider:
++GeminiProvider passes it as `system_instruction`, and
++OpenAICompatibleProvider (Ollama, Kilo, OpenAI) sends it as the first
++`{"role": "system", ...}` message.
++"""
++
++SYSTEM_INSTRUCTION = (
++    "You are a local coding/project agent operating on a single "
++    "project directory (PROJECT_ROOT), similar in behavior to "
++    "Gemini CLI. You act through explicit tools; you do not have "
++    "any other way to see or change this project.\n"
++    "\n"
++    "Inspecting the project:\n"
++    "- Inspect the project with your tools before making "
++    "assumptions about its contents or structure.\n"
++    "- Prefer reading relevant files yourself over asking the "
++    "user to paste code.\n"
++    "- Use search_files to locate where something is defined or "
++    "used before reading whole files.\n"
++    "- Use git_status, git_diff, git_log, and git_branch whenever "
++    "the user asks about, or your work depends on, the state of "
++    "the repository. Never guess or hallucinate repository "
++    "state, commit history, or the current branch.\n"
++    "\n"
++    "Making changes:\n"
++    "- Before modifying an important file: read it and decide "
++    "the minimal necessary change.\n"
++    "- Prefer apply_patch for a small, targeted change to an "
++    "existing file. Only use write_file for a genuinely new "
++    "file's full contents or a near-total rewrite, and only "
++    "after reading the current contents first so you don't "
++    "silently discard unrelated parts of the file.\n"
++    "- create_file, write_file, apply_patch, and delete_file all "
++    "require confirmation: your first call (confirm not set, or "
++    "false) never changes anything — it only returns a preview "
++    "(contents, diff, or affected files). Show that preview to "
++    "the user in your reply, wait for them to explicitly agree "
++    "in the conversation, and only then call the same tool "
++    "again with confirm=true. Never set confirm=true on the "
++    "first attempt, and never claim a file was created, "
++    "written, patched, or deleted unless the tool result "
++    "actually confirms it happened.\n"
++    "- Never run 'git commit' or 'git push', and do not commit "
++    "or push changes, unless the user explicitly asks you to in "
++    "this conversation.\n"
++    "\n"
++    "Verifying changes — this is not optional:\n"
++    "- After a create_file/write_file/apply_patch call actually "
++    "succeeds (not just the preview step), verify the result: "
++    "read the file back, or use git_diff, to confirm the change "
++    "looks right.\n"
++    "- When practical, run an appropriate test, build, or lint/"
++    "syntax check with run_command after the change and inspect "
++    "the real output.\n"
++    "- If verification fails (the test fails, the build breaks, "
++    "the file doesn't look right), say so, investigate why, and "
++    "attempt a correction if it's reasonable to do so — don't "
++    "stop at the first failed attempt without at least "
++    "explaining what went wrong.\n"
++    "- Never claim a change was successfully made unless the "
++    "corresponding tool call actually succeeded. Never claim a "
++    "test or command passed unless you actually ran it with a "
++    "tool and it returned a passing result. Never claim you ran "
++    "a command, read a file, or checked git state unless the "
++    "corresponding tool actually did so.\n"
++    "\n"
++    "Explaining yourself:\n"
++    "- Explain what you are about to change before changing it, "
++    "and summarize what you actually changed (and verified) "
++    "afterward.\n"
++    "- Report command output and tool results accurately, "
++    "including failures.\n"
++    "- Some files (like .env) are blocked from every tool and "
++    "will never be shown to you; if a tool refuses for that "
++    "reason, tell the user instead of retrying.\n"
++    "- If a tool call fails or is rejected (including a blocked "
++    "repeated call), report the actual error to the user rather "
++    "than guessing what might have happened or silently retrying "
++    "the same thing."
++)
+diff --git a/server-python/providers/__init__.py b/server-python/providers/__init__.py
+new file mode 100644
+index 0000000..3c0ddc4
+--- /dev/null
++++ b/server-python/providers/__init__.py
+@@ -0,0 +1,55 @@
++"""Provider factory.
++
++Set PROVIDER=gemini (default), ollama, or kilo in .env to pick a
++backend. Each branch below only reads the env vars it needs, and the
++corresponding provider module is only imported once selected — so,
++for example, google-genai never has to be installed/importable if
++you're only ever running with PROVIDER=ollama.
++"""
++
++import os
++
++from providers.base import Provider, ProviderResponse, ToolCall
++
++__all__ = ["Provider", "ProviderResponse", "ToolCall", "get_provider"]
++
++
++def get_provider(name: str = None) -> Provider:
++    name = (name or os.getenv("PROVIDER", "gemini")).lower()
++
++    if name == "gemini":
++        from providers.gemini import GeminiProvider
++
++        return GeminiProvider()
++
++    if name == "ollama":
++        from providers.openai_compatible import OpenAICompatibleProvider
++
++        return OpenAICompatibleProvider(
++            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
++            model=os.getenv("OLLAMA_MODEL", "llama3.1"),
++        )
++
++    if name == "kilo":
++        from providers.openai_compatible import OpenAICompatibleProvider
++
++        api_key = os.getenv("KILO_API_KEY")
++
++        if not api_key:
++            raise RuntimeError(
++                "KILO_API_KEY is not set. Add it to your .env file. "
++                "Generate one at https://app.kilo.ai."
++            )
++
++        return OpenAICompatibleProvider(
++            # Kilo's gateway (see https://kilo.ai/docs/gateway/api-reference)
++            # base URL as of this writing — double-check it against
++            # current docs if requests start failing.
++            base_url=os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway"),
++            model=os.getenv("KILO_MODEL", "kilocode/kilo-auto/balanced"),
++            api_key=api_key,
++        )
++
++    raise RuntimeError(
++        f"Unknown PROVIDER '{name}'. Expected one of: gemini, ollama, kilo."
++    )
+diff --git a/server-python/providers/base.py b/server-python/providers/base.py
+new file mode 100644
+index 0000000..22c0483
+--- /dev/null
++++ b/server-python/providers/base.py
+@@ -0,0 +1,66 @@
++"""Provider abstraction for the tool-calling agent loop.
++
++A Provider hides everything specific to one backend's chat/tool-
++calling API — Gemini's google-genai SDK vs. an OpenAI-compatible
++`/chat/completions` endpoint (Ollama, the Kilo gateway, OpenAI) —
++behind four methods. agent.run_agent_loop() only ever talks to this
++interface, so it doesn't need to know or care which backend is live.
++"""
++
++from abc import ABC, abstractmethod
++from dataclasses import dataclass, field
++from typing import Any, Optional
++
++
++@dataclass
++class ToolCall:
++    """One tool invocation the model asked for, already normalized."""
++
++    name: str
++    args: dict
++
++
++@dataclass
++class ProviderResponse:
++    """One model turn, normalized across providers.
++
++    Exactly one of `text` or a non-empty `tool_calls` is meaningful at
++    a time: a provider turn either asks for more tool calls, or gives
++    a final text answer. `raw` carries whatever provider-specific
++    object append_model_turn() needs to preserve this turn in the
++    conversation — nothing outside a Provider implementation should
++    need to touch it.
++    """
++
++    text: Optional[str]
++    tool_calls: list = field(default_factory=list)
++    raw: Any = None
++
++
++class Provider(ABC):
++    """One backend's chat + tool-calling API, normalized to 4 methods."""
++
++    @abstractmethod
++    def build_contents(self, msg: str, history: list) -> list:
++        """Turn the frontend's (msg, history) into this provider's
++        native conversation representation."""
++
++    @abstractmethod
++    def generate(self, contents: list) -> ProviderResponse:
++        """Ask the model for its next turn given the conversation so far."""
++
++    @abstractmethod
++    def append_model_turn(self, contents: list, response: ProviderResponse) -> list:
++        """Return a new contents list with the model's turn (the
++        ProviderResponse just returned by generate()) appended, so
++        it's preserved for the next round."""
++
++    @abstractmethod
++    def append_tool_results(self, contents: list, results: list) -> list:
++        """Return a new contents list with tool results appended in
++        this provider's expected format.
++
++        `results` is a list of {"name": str, "result": dict}, in the
++        same order as the ToolCalls on the ProviderResponse that was
++        just handled.
++        """
+diff --git a/server-python/providers/gemini.py b/server-python/providers/gemini.py
+new file mode 100644
+index 0000000..5764999
+--- /dev/null
++++ b/server-python/providers/gemini.py
+@@ -0,0 +1,185 @@
++"""Gemini provider: wraps google-genai's explicit function/tool calling.
++
++This is a behavior-preserving move of what used to be inline in
++app.py (client construction, GENERATE_CONFIG, build_contents, and the
++Gemini-specific parts of run_agent_loop) — nothing about how Gemini is
++called has changed, it's just reachable through the Provider interface
++now so agent.py doesn't need to import google.genai at all.
++"""
++
++import os
++
++from google import genai
++from google.genai import types
++
++from prompts import SYSTEM_INSTRUCTION
++from providers.base import Provider, ProviderResponse, ToolCall
++from tools import TOOL_SCHEMAS
++
++# tools.TOOL_SCHEMAS is written in standard (lowercase) JSON Schema so
++# it can be shared as-is with OpenAICompatibleProvider. Gemini's
++# FunctionDeclaration.parameters expects the same shape but with
++# uppercase type names (OBJECT, STRING, ...), so this is the one
++# Gemini-specific translation step.
++_GEMINI_TYPE_MAP = {
++    "object": "OBJECT",
++    "string": "STRING",
++    "boolean": "BOOLEAN",
++    "integer": "INTEGER",
++    "number": "NUMBER",
++    "array": "ARRAY",
++}
++
++
++def _to_gemini_schema(schema: dict) -> dict:
++    """Recursively uppercase JSON Schema `type` values for Gemini."""
++
++    converted = dict(schema)
++
++    if "type" in converted:
++        converted["type"] = _GEMINI_TYPE_MAP.get(
++            converted["type"], converted["type"]
++        )
++
++    if "properties" in converted:
++        converted["properties"] = {
++            key: _to_gemini_schema(value)
++            for key, value in converted["properties"].items()
++        }
++
++    if "items" in converted:
++        converted["items"] = _to_gemini_schema(converted["items"])
++
++    return converted
++
++
++def _build_tools() -> list:
++    return [
++        types.Tool(
++            function_declarations=[
++                types.FunctionDeclaration(
++                    name=name,
++                    description=schema["description"],
++                    parameters=_to_gemini_schema(schema["parameters"]),
++                )
++                for name, schema in TOOL_SCHEMAS.items()
++            ]
++        )
++    ]
++
++
++class GeminiProvider(Provider):
++
++    def __init__(self, api_key: str = None, model: str = None):
++        api_key = api_key or os.getenv("GOOGLE_API_KEY")
++
++        if not api_key:
++            raise RuntimeError(
++                "GOOGLE_API_KEY is not set. Add it to your .env file."
++            )
++
++        self.client = genai.Client(api_key=api_key)
++
++        # Gemini 3.6 Flash is Google's current GA Flash model tuned for
++        # coding, tool-use, and multi-step agentic workloads, so it's
++        # the default here. Override with GEMINI_MODEL if you want a
++        # different currently supported Gemini model (e.g. a Pro
++        # model for harder tasks).
++        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
++
++        self.config = types.GenerateContentConfig(
++            tools=_build_tools(),
++            automatic_function_calling=types.AutomaticFunctionCallingConfig(
++                disable=True
++            ),
++            system_instruction=SYSTEM_INSTRUCTION,
++        )
++
++    def build_contents(self, msg, history):
++        contents = []
++
++        for item in history:
++            role = item.get("role")
++            parts = item.get("parts", [])
++
++            if role and parts:
++                converted_parts = []
++
++                for part in parts:
++                    if isinstance(part, dict) and "text" in part:
++                        converted_parts.append(
++                            types.Part.from_text(text=part["text"])
++                        )
++                    else:
++                        converted_parts.append(part)
++
++                contents.append(
++                    types.Content(role=role, parts=converted_parts)
++                )
++
++        contents.append(
++            types.Content(
++                role="user",
++                parts=[types.Part.from_text(text=msg)],
++            )
++        )
++
++        return contents
++
++    def generate(self, contents) -> ProviderResponse:
++        response = self.client.models.generate_content(
++            model=self.model_name,
++            contents=contents,
++            config=self.config,
++        )
++
++        if not response.candidates:
++            raise RuntimeError("Gemini returned no response candidates.")
++
++        model_content = response.candidates[0].content
++
++        if model_content is None or not model_content.parts:
++            raise RuntimeError("Gemini returned an empty response.")
++
++        tool_calls = [
++            ToolCall(
++                name=part.function_call.name,
++                args=dict(part.function_call.args or {}),
++            )
++            for part in model_content.parts
++            if part.function_call
++        ]
++
++        text = None
++
++        if not tool_calls:
++            try:
++                text = response.text
++            except Exception:
++                text = None
++
++            if not text:
++                # Fall back to manually concatenating any text parts.
++                text = "".join(
++                    part.text
++                    for part in model_content.parts
++                    if getattr(part, "text", None)
++                ) or None
++
++        return ProviderResponse(text=text, tool_calls=tool_calls, raw=model_content)
++
++    def append_model_turn(self, contents, response):
++        # Preserve Gemini's function-call (or text) message.
++        return contents + [response.raw]
++
++    def append_tool_results(self, contents, results):
++        # IMPORTANT: google-genai 2.17.0 does not accept id= here.
++        parts = [
++            types.Part.from_function_response(
++                name=item["name"],
++                response={"result": item["result"]},
++            )
++            for item in results
++        ]
++
++        return contents + [types.Content(role="user", parts=parts)]
+diff --git a/server-python/providers/openai_compatible.py b/server-python/providers/openai_compatible.py
+new file mode 100644
+index 0000000..db4bacf
+--- /dev/null
++++ b/server-python/providers/openai_compatible.py
+@@ -0,0 +1,152 @@
++"""OpenAI-compatible provider.
++
++Ollama's local server, the Kilo gateway, and OpenAI itself all expose
++the same `/chat/completions` endpoint with `tools` in the request and
++`tool_calls` in the response, so one adapter covers all three — only
++base_url, model, and whether an API key is required differ. See
++providers/__init__.get_provider() for how each is constructed.
++"""
++
++import json
++from typing import Optional
++
++import requests
++
++from prompts import SYSTEM_INSTRUCTION
++from providers.base import Provider, ProviderResponse, ToolCall
++from tools import TOOL_SCHEMAS
++
++
++def _build_tools() -> list:
++    # tools.TOOL_SCHEMAS is already standard (lowercase) JSON Schema,
++    # which is exactly what an OpenAI-style `tools` array expects —
++    # unlike Gemini, no case translation is needed here.
++    return [
++        {
++            "type": "function",
++            "function": {
++                "name": name,
++                "description": schema["description"],
++                "parameters": schema["parameters"],
++            },
++        }
++        for name, schema in TOOL_SCHEMAS.items()
++    ]
++
++
++class OpenAICompatibleProvider(Provider):
++
++    def __init__(
++        self,
++        base_url: str,
++        model: str,
++        api_key: Optional[str] = None,
++        timeout: int = 120,
++    ):
++        self.base_url = base_url.rstrip("/")
++        self.model = model
++        self.api_key = api_key
++        self.timeout = timeout
++        self.tools = _build_tools()
++
++    def _headers(self) -> dict:
++        headers = {"Content-Type": "application/json"}
++
++        if self.api_key:
++            headers["Authorization"] = f"Bearer {self.api_key}"
++
++        return headers
++
++    def build_contents(self, msg, history):
++        contents = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
++
++        for item in history:
++            role = item.get("role")
++            parts = item.get("parts", [])
++            text = "".join(
++                part.get("text", "")
++                for part in parts
++                if isinstance(part, dict)
++            )
++
++            if role and text:
++                # The frontend's history format uses Gemini's "model"
++                # role; OpenAI-compatible APIs call that "assistant".
++                contents.append(
++                    {
++                        "role": "assistant" if role == "model" else role,
++                        "content": text,
++                    }
++                )
++
++        contents.append({"role": "user", "content": msg})
++        return contents
++
++    def generate(self, contents) -> ProviderResponse:
++        response = requests.post(
++            f"{self.base_url}/chat/completions",
++            headers=self._headers(),
++            json={
++                "model": self.model,
++                "messages": contents,
++                "tools": self.tools,
++            },
++            timeout=self.timeout,
++        )
++        response.raise_for_status()
++        data = response.json()
++
++        try:
++            choice = data["choices"][0]
++        except (KeyError, IndexError) as exc:
++            raise RuntimeError(f"Unexpected response shape: {data}") from exc
++
++        message = choice.get("message", {})
++        raw_tool_calls = message.get("tool_calls") or []
++
++        tool_calls = []
++
++        for call in raw_tool_calls:
++            function = call.get("function", {})
++
++            try:
++                args = json.loads(function.get("arguments") or "{}")
++            except json.JSONDecodeError:
++                args = {}
++
++            tool_calls.append(
++                ToolCall(name=function.get("name", ""), args=args)
++            )
++
++        return ProviderResponse(
++            text=message.get("content"),
++            tool_calls=tool_calls,
++            raw=message,
++        )
++
++    def append_model_turn(self, contents, response):
++        message = dict(response.raw)
++        message.setdefault("role", "assistant")
++        return contents + [message]
++
++    def append_tool_results(self, contents, results):
++        # OpenAI-compatible APIs expect one "tool" message per call,
++        # each referencing the matching tool_call id from the
++        # assistant turn appended in append_model_turn() just before
++        # this — call order is preserved end to end, so zip() lines
++        # them back up correctly.
++        assistant_turn = contents[-1]
++        call_ids = [
++            call.get("id") for call in assistant_turn.get("tool_calls", [])
++        ]
++
++        new_messages = [
++            {
++                "role": "tool",
++                "tool_call_id": call_id,
++                "content": json.dumps(item["result"]),
++            }
++            for call_id, item in zip(call_ids, results)
++        ]
++
++        return contents + new_messages
+diff --git a/server-python/requirements.txt b/server-python/requirements.txt
+index 0c479c9..cb8cb36 100644
+--- a/server-python/requirements.txt
++++ b/server-python/requirements.txt
+@@ -2,3 +2,4 @@ Flask
+ flask-cors
+ python-dotenv
+ google-genai
++requests
+diff --git a/server-python/security.py b/server-python/security.py
+new file mode 100644
+index 0000000..e9b5ec5
+--- /dev/null
++++ b/server-python/security.py
+@@ -0,0 +1,102 @@
++# Copyright 2024 Google LLC
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Filesystem access control, shared by every tool regardless of which
++AI provider requested it.
++
++Nothing here talks to any AI provider — it's pure path/filename logic,
++so it doesn't move when providers change.
++"""
++
++from pathlib import Path, PurePosixPath, PureWindowsPath
++
++PROJECT_ROOT = Path.cwd().resolve()
++
++
++def safe_path(path: str) -> Path:
++    """Resolve a path while keeping it inside the application directory.
++
++    Rejects absolute paths (POSIX or Windows-style, e.g. "/etc/passwd" or
++    "C:\\Users\\...") and any traversal (e.g. "../../") that would escape
++    PROJECT_ROOT. Joining an absolute path onto PROJECT_ROOT would normally
++    just replace it outright in pathlib, so we check for that explicitly
++    before ever resolving the path, in addition to the containment check
++    below which catches "../" traversal.
++    """
++
++    if not path or not str(path).strip():
++        raise ValueError("A path is required.")
++
++    if PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute():
++        raise ValueError(
++            "Absolute paths are not allowed. Use a path relative to the "
++            "project root."
++        )
++
++    requested = (PROJECT_ROOT / path).resolve()
++
++    try:
++        requested.relative_to(PROJECT_ROOT)
++    except ValueError:
++        raise ValueError(
++            "Access outside the project directory is not allowed."
++        )
++
++    return requested
++
++
++# Filenames/extensions that must never be read, searched, created,
++# overwritten, or deleted by the model, even though they live inside
++# PROJECT_ROOT. This is what keeps GOOGLE_API_KEY and other secrets out
++# of the model's context.
++SENSITIVE_EXACT_NAMES = {
++    ".git-credentials",
++    "credentials.json",
++    "secrets.json",
++    "id_rsa",
++    "id_ed25519",
++    "id_ecdsa",
++}
++SENSITIVE_SUFFIXES = (".pem", ".key")
++
++
++def is_sensitive_filename(name: str) -> bool:
++    """True if a filename looks like it holds secrets/credentials."""
++
++    lower = name.lower()
++
++    if lower.startswith(".env"):
++        return True
++    if lower in SENSITIVE_EXACT_NAMES:
++        return True
++    if lower.endswith(SENSITIVE_SUFFIXES):
++        return True
++    if "secret" in lower or "credential" in lower:
++        return True
++
++    return False
++
++
++def is_sensitive_path(file_path: Path) -> bool:
++    """True if a resolved path is a secret file or lives inside .git."""
++
++    try:
++        rel_parts = file_path.relative_to(PROJECT_ROOT).parts
++    except ValueError:
++        return True
++
++    if ".git" in rel_parts:
++        return True
++
++    return is_sensitive_filename(file_path.name)
+diff --git a/server-python/tools.py b/server-python/tools.py
+new file mode 100644
+index 0000000..bf0bf1e
+--- /dev/null
++++ b/server-python/tools.py
+@@ -0,0 +1,1328 @@
++"""Filesystem, git, and shell tools available to any provider.
++
++Every function below is plain Python with no AI-provider dependency —
++this is what app.py meant when TOOLS/TOOL_FUNCTIONS lived next to a
++single Gemini client. TOOL_SCHEMAS at the bottom describes each tool's
++name/description/parameters as standard (lowercase) JSON Schema, which
++providers/gemini.py and providers/openai_compatible.py each adapt to
++their own wire format — the schema itself doesn't change per provider,
++only its casing/wrapping does.
++"""
++
++import difflib
++import os
++import re
++import shlex
++import subprocess
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++
++from security import (
++    PROJECT_ROOT,
++    is_sensitive_filename,
++    is_sensitive_path,
++    safe_path,
++)
++
++# ---------------------------------------------------------
++# Filesystem tools
++# ---------------------------------------------------------
++
++def list_files(path: str = ".") -> dict:
++    """List files and directories inside the application project.
++
++    Args:
++        path: Relative directory path inside the project.
++              Use "." for the project root.
++
++    Returns:
++        A dictionary containing the directory entries.
++    """
++
++    try:
++        directory = safe_path(path)
++    except ValueError as exc:
++        return {"error": str(exc)}
++
++    if not directory.exists():
++        return {"error": f"Path does not exist: {path}"}
++
++    if not directory.is_dir():
++        return {"error": f"Not a directory: {path}"}
++
++    entries = []
++
++    for item in sorted(
++        directory.iterdir(),
++        key=lambda p: p.name.lower()
++    ):
++        entries.append(
++            {
++                "name": item.name,
++                "type": "directory" if item.is_dir() else "file",
++            }
++        )
++
++    return {
++        "path": str(directory.relative_to(PROJECT_ROOT)),
++        "entries": entries,
++    }
++
++
++def read_file(path: str) -> dict:
++    """Read a UTF-8 text file inside the application project.
++
++    Args:
++        path: Relative path to the text file.
++
++    Returns:
++        A dictionary containing the file contents.
++    """
++
++    try:
++        file_path = safe_path(path)
++    except ValueError as exc:
++        return {"error": str(exc)}
++
++    if is_sensitive_path(file_path):
++        return {
++            "error": (
++                f"Refusing to read '{path}': it looks like a secrets/"
++                f"credentials file (e.g. .env). Its contents are never "
++                f"exposed to the model."
++            )
++        }
++
++    if not file_path.exists():
++        return {"error": f"File does not exist: {path}"}
++
++    if not file_path.is_file():
++        return {"error": f"Not a file: {path}"}
++
++    # Prevent accidentally sending extremely large files to the model.
++    max_size = 200_000
++
++    if file_path.stat().st_size > max_size:
++        return {
++            "error": (
++                f"File is too large to read. "
++                f"Maximum size is {max_size} bytes."
++            )
++        }
++
++    try:
++        contents = file_path.read_text(
++            encoding="utf-8"
++        )
++    except UnicodeDecodeError:
++        return {
++            "error": "The file is not a UTF-8 text file."
++        }
++
++    return {
++        "path": str(file_path.relative_to(PROJECT_ROOT)),
++        "contents": contents,
++    }
++
++
++# Directories that are never worth searching (build output, deps, VCS
++# internals) — skipping them keeps search_files fast and avoids surfacing
++# noise from generated code.
++SEARCH_EXCLUDED_DIR_NAMES = {
++    ".git",
++    "node_modules",
++    "__pycache__",
++    ".venv",
++    "venv",
++    "env",
++    "dist",
++    "build",
++    ".next",
++    ".pytest_cache",
++    ".mypy_cache",
++}
++
++
++def search_files(query: str, path: str = ".") -> dict:
++    """Search text files inside the project for a query string.
++
++    Args:
++        query: Text to search for (case-insensitive substring match).
++        path: Relative directory to search under. Use "." for the whole
++              project.
++
++    Returns:
++        A dictionary with matching file paths, line numbers, and lines.
++    """
++
++    if not query or not query.strip():
++        return {"error": "A non-empty search query is required."}
++
++    try:
++        directory = safe_path(path)
++    except ValueError as exc:
++        return {"error": str(exc)}
++
++    if not directory.exists():
++        return {"error": f"Path does not exist: {path}"}
++
++    if not directory.is_dir():
++        return {"error": f"Not a directory: {path}"}
++
++    max_matches = 200
++    max_file_size = 500_000
++    query_lower = query.lower()
++
++    matches = []
++    truncated = False
++
++    for root, dirnames, filenames in os.walk(directory):
++        dirnames[:] = sorted(
++            d for d in dirnames if d not in SEARCH_EXCLUDED_DIR_NAMES
++        )
++
++        for filename in sorted(filenames):
++            if is_sensitive_filename(filename):
++                continue
++
++            file_path = Path(root) / filename
++
++            try:
++                if file_path.stat().st_size > max_file_size:
++                    continue
++                text = file_path.read_text(encoding="utf-8")
++            except (UnicodeDecodeError, OSError):
++                # Skip binary files and unreadable files.
++                continue
++
++            for line_number, line in enumerate(text.splitlines(), start=1):
++                if query_lower in line.lower():
++                    matches.append(
++                        {
++                            "path": str(
++                                file_path.relative_to(PROJECT_ROOT)
++                            ),
++                            "line": line_number,
++                            "text": line.strip()[:300],
++                        }
++                    )
++
++                    if len(matches) >= max_matches:
++                        truncated = True
++                        break
++
++            if truncated:
++                break
++
++        if truncated:
++            break
++
++    return {
++        "query": query,
++        "path": str(directory.relative_to(PROJECT_ROOT)),
++        "matches": matches,
++        "truncated": truncated,
++    }
++
++
++# ---------------------------------------------------------
++# Terminal tool
++# ---------------------------------------------------------
++
++# Commands are allowlisted by prefix so arguments (a specific file, a
++# test name, etc.) are still permitted, e.g. "pytest -k test_login" is
++# allowed because it starts with the "pytest" prefix. Read-only
++# inspection, dependency install, and test/build commands are included;
++# nothing here can commit, push, rewrite history, or delete anything —
++# writes to files go through create_file/write_file, and deletion goes
++# through delete_file, both of which have their own guardrails.
++ALLOWED_COMMAND_PREFIXES = (
++    "git status",
++    "git branch",
++    "git log",
++    "git diff",
++    "git show",
++    "git remote -v",
++    "pwd",
++    "dir",
++    "ls",
++    "python --version",
++    "python3 --version",
++    "node --version",
++    "npm --version",
++    "pip --version",
++    "pip3 --version",
++    "pytest",
++    "python -m pytest",
++    "python3 -m pytest",
++    "npm test",
++    "npm run test",
++    "npm run build",
++    "npm run lint",
++    "npm install",
++    "npm ci",
++    "pip install -r requirements.txt",
++    "pip list",
++    "pip show",
++    "flake8",
++    "black --check",
++    "ruff check",
++)
++
++# Characters/sequences that enable chaining, piping, redirection, or
++# substitution. Blocking these stops an allowed command from being used
++# to smuggle in a second, disallowed command (e.g.
++# "git status && rm -rf /").
++DANGEROUS_COMMAND_CHARACTERS = (";", "&", "|", "`", "$(", ">", "<", "\n")
++
++# Extra, explicit denylist as defense in depth on top of the allowlist
++# above. Anything matching these is refused even if a future edit
++# accidentally widens ALLOWED_COMMAND_PREFIXES.
++BLOCKED_COMMAND_PATTERNS = [
++    re.compile(pattern, re.IGNORECASE)
++    for pattern in (
++        r"\brm\s+-rf\b",
++        r"\bsudo\b",
++        r"\bshutdown\b",
++        r"\breboot\b",
++        r"\bpoweroff\b",
++        r"\bhalt\b",
++        r"\bmkfs\b",
++        r"\bformat\b",
++        r"\bdd\s+if=",
++        r"\bchmod\s+777\b",
++        r"\bchown\b",
++        r"\.env\b",
++        r"\bgoogle_api_key\b",
++        r"\bprintenv\b",
++        r"\bcredential",
++        r"\bid_rsa\b",
++    )
++]
++
++
++def is_command_allowed(command: str) -> bool:
++    """True if the command matches one of the allowed dev-command prefixes."""
++
++    return any(
++        command == prefix or command.startswith(prefix + " ")
++        for prefix in ALLOWED_COMMAND_PREFIXES
++    )
++
++
++def run_command(command: str) -> dict:
++    """Run an allowlisted development command in the project directory.
++
++    Covers read-only inspection (git status/log/diff/branch, directory
++    listings, tool versions), installing dependencies, and running
++    tests/builds/linters. Destructive, system-level, or credential-
++    exposing commands are always refused.
++
++    Args:
++        command: A single command starting with one of the allowed
++                 prefixes (e.g. "pytest", "npm test", "git log -n 5").
++
++    Returns:
++        The command, exit code, stdout, and stderr.
++    """
++
++    if not command or not command.strip():
++        return {"error": "No command was provided."}
++
++    command = command.strip()
++
++    for pattern in BLOCKED_COMMAND_PATTERNS:
++        if pattern.search(command):
++            return {
++                "error": (
++                    f"This command is blocked for safety: {command}"
++                )
++            }
++
++    for char in DANGEROUS_COMMAND_CHARACTERS:
++        if char in command:
++            return {
++                "error": (
++                    "Command chaining, piping, redirection, and "
++                    "substitution are not allowed. Run one plain "
++                    "command at a time."
++                )
++            }
++
++    if not is_command_allowed(command):
++        return {
++            "error": (
++                f"Command not allowed: '{command}'. Allowed command "
++                f"prefixes: {sorted(ALLOWED_COMMAND_PREFIXES)}"
++            )
++        }
++
++    try:
++        args = shlex.split(command, posix=False)
++
++        result = subprocess.run(
++        args,
++        cwd=PROJECT_ROOT,
++        shell=False,
++        capture_output=True,
++        text=True,
++        timeout=60,
++        )
++
++        # Cap output so a noisy command can't blow up the context window.
++        max_output = 20_000
++
++        return {
++            "command": command,
++            "returncode": result.returncode,
++            "stdout": result.stdout[:max_output],
++            "stderr": result.stderr[:max_output],
++        }
++
++    except subprocess.TimeoutExpired:
++        return {
++            "error": "Command timed out after 60 seconds."
++        }
++
++    except Exception as exc:
++        return {
++            "error": f"Could not execute command: {exc}"
++        }
++
++
++# ---------------------------------------------------------
++# Git tools
++# ---------------------------------------------------------
++
++def git_status() -> dict:
++    """Show the current git status of the project.
++
++    Equivalent to `git status --short --branch`. Always use this instead
++    of guessing what has changed in the repository.
++
++    Returns:
++        A dictionary with the short-form status output.
++    """
++
++    try:
++        result = subprocess.run(
++            ["git", "status", "--short", "--branch"],
++            cwd=PROJECT_ROOT,
++            capture_output=True,
++            text=True,
++            timeout=30,
++        )
++    except FileNotFoundError:
++        return {"error": "git is not installed or not on PATH."}
++    except subprocess.TimeoutExpired:
++        return {"error": "git status timed out."}
++    except Exception as exc:
++        return {"error": f"Could not run git status: {exc}"}
++
++    if result.returncode != 0:
++        return {"error": result.stderr.strip() or "git status failed."}
++
++    return {"status": result.stdout}
++
++
++def git_diff(path: str = "", staged: bool = False) -> dict:
++    """Show the current git diff for the project or a single file.
++
++    Args:
++        path: Optional relative path to scope the diff to one file.
++              Leave empty to diff the whole project.
++        staged: If true, show staged changes (git diff --staged)
++                instead of unstaged changes.
++
++    Returns:
++        A dictionary with the diff text.
++    """
++
++    args = ["git", "diff"]
++
++    if staged:
++        args.append("--staged")
++
++    if path:
++        try:
++            file_path = safe_path(path)
++        except ValueError as exc:
++            return {"error": str(exc)}
++
++        args.append(str(file_path.relative_to(PROJECT_ROOT)))
++
++    try:
++        result = subprocess.run(
++            args,
++            cwd=PROJECT_ROOT,
++            capture_output=True,
++            text=True,
++            timeout=30,
++        )
++    except FileNotFoundError:
++        return {"error": "git is not installed or not on PATH."}
++    except subprocess.TimeoutExpired:
++        return {"error": "git diff timed out."}
++    except Exception as exc:
++        return {"error": f"Could not run git diff: {exc}"}
++
++    if result.returncode != 0:
++        return {"error": result.stderr.strip() or "git diff failed."}
++
++    diff_text = result.stdout
++    max_diff = 50_000
++    truncated = False
++
++    if len(diff_text) > max_diff:
++        diff_text = diff_text[:max_diff]
++        truncated = True
++
++    return {"diff": diff_text, "truncated": truncated}
++
++
++def git_log(max_count: int = 10) -> dict:
++    """Show recent commit history for the project.
++
++    Args:
++        max_count: Number of commits to show (1-100). Defaults to 10.
++
++    Returns:
++        A dictionary with the one-line-per-commit log output.
++    """
++
++    try:
++        count = int(max_count)
++    except (TypeError, ValueError):
++        return {"error": "max_count must be a whole number."}
++
++    count = max(1, min(count, 100))
++
++    try:
++        result = subprocess.run(
++            ["git", "log", f"-{count}", "--oneline", "--decorate"],
++            cwd=PROJECT_ROOT,
++            capture_output=True,
++            text=True,
++            timeout=15,
++        )
++    except FileNotFoundError:
++        return {"error": "git is not installed or not on PATH."}
++    except subprocess.TimeoutExpired:
++        return {"error": "git log timed out."}
++    except Exception as exc:
++        return {"error": f"Could not run git log: {exc}"}
++
++    if result.returncode != 0:
++        return {"error": result.stderr.strip() or "git log failed."}
++
++    return {"log": result.stdout}
++
++
++def git_branch() -> dict:
++    """List local branches and show which one is currently checked out.
++
++    Returns:
++        A dictionary with the branch list output (current branch marked
++        with '*').
++    """
++
++    try:
++        result = subprocess.run(
++            ["git", "branch", "--list"],
++            cwd=PROJECT_ROOT,
++            capture_output=True,
++            text=True,
++            timeout=15,
++        )
++    except FileNotFoundError:
++        return {"error": "git is not installed or not on PATH."}
++    except subprocess.TimeoutExpired:
++        return {"error": "git branch timed out."}
++    except Exception as exc:
++        return {"error": f"Could not run git branch: {exc}"}
++
++    if result.returncode != 0:
++        return {"error": result.stderr.strip() or "git branch failed."}
++
++    return {"branches": result.stdout}
++
++
++# ---------------------------------------------------------
++# File-modification tools
++# ---------------------------------------------------------
++
++# Character cap for contents/diffs shown back to the model in a
++# confirmation preview, so a huge file doesn't blow up the context
++# window before anything has even been written.
++PREVIEW_CHAR_LIMIT = 2000
++
++
++def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
++    """Create a new file with the given contents. Requires confirmation.
++
++    Fails if the file already exists, to avoid accidentally clobbering
++    something — use write_file to modify an existing file.
++
++    The first call (confirm=False, the default) does NOT create
++    anything — it returns a preview of what would be created. Only
++    pass confirm=True after the user has explicitly agreed to it.
++
++    Args:
++        path: Relative path for the new file.
++        contents: Text contents to write.
++        confirm: Must be True to actually create the file.
++
++    Returns:
++        A dictionary confirming the creation, or asking for confirmation.
++    """
++
++    try:
++        file_path = safe_path(path)
++    except ValueError as exc:
++        return {"error": str(exc)}
++
++    if is_sensitive_path(file_path):
++        return {"error": f"Refusing to create sensitive file: {path}"}
++
++    if file_path.exists():
++        return {
++            "error": (
++                f"File already exists: {path}. Use write_file to "
++                f"modify it."
++            )
++        }
++
++    if not confirm:
++        preview = contents[:PREVIEW_CHAR_LIMIT]
++        truncated = len(contents) > PREVIEW_CHAR_LIMIT
++
++        return {
++            "requires_confirmation": True,
++            "path": str(file_path.relative_to(PROJECT_ROOT)),
++            "preview": preview,
++            "preview_truncated": truncated,
++            "message": (
++                f"'{path}' was NOT created. Show the user the preview "
++                f"and ask them to explicitly confirm creating this "
++                f"file, then call create_file again with confirm=true."
++            ),
++        }
++
++    try:
++        file_path.parent.mkdir(parents=True, exist_ok=True)
++        file_path.write_text(contents, encoding="utf-8")
++    except Exception as exc:
++        return {"error": f"Could not create file: {exc}"}
++
++    return {
++        "path": str(file_path.relative_to(PROJECT_ROOT)),
++        "created": True,
++        "bytes_written": len(contents.encode("utf-8")),
++    }
++
++
++def write_file(path: str, contents: str, confirm: bool = False) -> dict:
++    """Overwrite a file with new contents. Requires confirmation.
++
++    Creates the file if it doesn't exist. Read the file first (with
++    read_file) so unrelated user changes elsewhere in the file aren't
++    silently discarded, and change only what's necessary — prefer
++    apply_patch for a small, targeted change to an existing file.
++
++    The first call (confirm=False, the default) does NOT write
++    anything — it returns a diff preview of the change. Only pass
++    confirm=True after the user has explicitly agreed to it.
++
++    Args:
++        path: Relative path to the file.
++        contents: The complete new contents of the file.
++        confirm: Must be True to actually write the file.
++
++    Returns:
++        A dictionary confirming the write, or asking for confirmation.
++    """
++
++    try:
++        file_path = safe_path(path)
++    except ValueError as exc:
++        return {"error": str(exc)}
++
++    if is_sensitive_path(file_path):
++        return {"error": f"Refusing to write to sensitive file: {path}"}
++
++    if file_path.exists() and file_path.is_dir():
++        return {"error": f"Cannot write to a directory: {path}"}
++
++    existed = file_path.exists()
++
++    if not confirm:
++        old_text = ""
++
++        if existed:
++            try:
++                old_text = file_path.read_text(encoding="utf-8")
++            except (UnicodeDecodeError, OSError):
++                old_text = None
++
++        diff_preview = None
++
++        if old_text is not None:
++            diff_lines = difflib.unified_diff(
++                old_text.splitlines(keepends=True),
++                contents.splitlines(keepends=True),
++                fromfile=f"a/{path}",
++                tofile=f"b/{path}",
++            )
++            diff_preview = "".join(diff_lines)[:PREVIEW_CHAR_LIMIT]
++
++        return {
++            "requires_confirmation": True,
++            "path": str(file_path.relative_to(PROJECT_ROOT)),
++            "action": "overwrite" if existed else "create",
++            "diff": diff_preview,
++            "message": (
++                f"'{path}' was NOT written. Show the user the diff "
++                f"and ask them to explicitly confirm this change, "
++                f"then call write_file again with confirm=true."
++            ),
++        }
++
++    try:
++        file_path.parent.mkdir(parents=True, exist_ok=True)
++        file_path.write_text(contents, encoding="utf-8")
++    except Exception as exc:
++        return {"error": f"Could not write file: {exc}"}
++
++    return {
++        "path": str(file_path.relative_to(PROJECT_ROOT)),
++        "overwritten": existed,
++        "bytes_written": len(contents.encode("utf-8")),
++    }
++
++
++def delete_file(path: str, confirm: bool = False) -> dict:
++    """Delete a single file inside the project. Requires confirmation.
++
++    The first call (confirm=False, the default) never deletes anything —
++    it only reports what would be deleted. Only pass confirm=True after
++    the user has explicitly agreed to the deletion in the conversation.
++
++    Args:
++        path: Relative path to the file to delete.
++        confirm: Must be True to actually perform the deletion.
++
++    Returns:
++        A dictionary confirming the deletion, or asking for confirmation.
++    """
++
++    try:
++        file_path = safe_path(path)
++    except ValueError as exc:
++        return {"error": str(exc)}
++
++    if is_sensitive_path(file_path):
++        return {"error": f"Refusing to delete sensitive file: {path}"}
++
++    if file_path == PROJECT_ROOT:
++        return {"error": "Refusing to delete the project root."}
++
++    if not file_path.exists():
++        return {"error": f"File does not exist: {path}"}
++
++    if file_path.is_dir():
++        return {
++            "error": (
++                "delete_file can only delete a single file, not a "
++                "directory."
++            )
++        }
++
++    if not confirm:
++        return {
++            "requires_confirmation": True,
++            "path": str(file_path.relative_to(PROJECT_ROOT)),
++            "message": (
++                f"'{path}' was NOT deleted. Ask the user to explicitly "
++                f"confirm this deletion in the chat, then call "
++                f"delete_file again with confirm=true."
++            ),
++        }
++
++    try:
++        file_path.unlink()
++    except Exception as exc:
++        return {"error": f"Could not delete file: {exc}"}
++
++    return {
++        "path": str(file_path.relative_to(PROJECT_ROOT)),
++        "deleted": True,
++    }
++
++
++def _extract_patch_target_paths(patch_text: str) -> set:
++    """Pull the file path(s) a unified diff would touch out of its headers.
++
++    Reads '--- a/<path>' and '+++ b/<path>' style header lines (also
++    tolerating headers without the 'a/'/'b/' prefix). '/dev/null'
++    (used for pure adds/deletes) is ignored.
++    """
++
++    paths = set()
++
++    for line in patch_text.splitlines():
++        for prefix in ("+++ b/", "--- a/", "+++ ", "--- "):
++            if line.startswith(prefix):
++                candidate = line[len(prefix):].split("\t")[0].strip()
++                if candidate and candidate != "/dev/null":
++                    paths.add(candidate)
++                break
++
++    return paths
++
++
++def apply_patch(patch: str, confirm: bool = False) -> dict:
++    """Apply a small, targeted unified diff to one or more project files.
++
++    Prefer this over write_file when only part of a file needs to
++    change — it avoids resending/rewriting the whole file and makes
++    the change easy to review. The patch must be in standard unified
++    diff format, e.g. what `git diff` produces:
++
++        --- a/server-python/app.py
++        +++ b/server-python/app.py
++        @@ -10,3 +10,3 @@
++         unchanged line
++        -old line
++        +new line
++         unchanged line
++
++    Requires confirmation. The first call (confirm=False, the
++    default) only validates that the patch applies cleanly (via
++    `git apply --check`) and reports which files would change — it
++    does not modify anything. Call again with confirm=true, after the
++    user has agreed to the change, to actually apply it.
++
++    Args:
++        patch: The unified diff text.
++        confirm: Must be True to actually apply the patch.
++
++    Returns:
++        A dictionary describing whether the patch applied, or asking
++        for confirmation.
++    """
++
++    if not patch or not patch.strip():
++        return {"error": "No patch text was provided."}
++
++    max_patch_size = 200_000
++
++    if len(patch) > max_patch_size:
++        return {
++            "error": (
++                f"Patch is too large ({len(patch)} chars). Maximum "
++                f"is {max_patch_size} chars — split it into smaller, "
++                f"more targeted patches."
++            )
++        }
++
++    if not (PROJECT_ROOT / ".git").exists():
++        # PROJECT_ROOT can be a subdirectory of the actual repo root
++        # (git discovers .git by walking upward from cwd, same as
++        # git_status/git_diff/git_log/git_branch above), so this is
++        # only a quick heuristic to fail fast for a *fully* untracked
++        # project — the real check is `git apply --check` below.
++        try:
++            top_level = subprocess.run(
++                ["git", "rev-parse", "--show-toplevel"],
++                cwd=PROJECT_ROOT,
++                capture_output=True,
++                text=True,
++                timeout=10,
++            )
++        except FileNotFoundError:
++            return {"error": "git is not installed or not on PATH."}
++        except subprocess.TimeoutExpired:
++            return {"error": "Checking for a git repository timed out."}
++        except Exception as exc:
++            return {"error": f"Could not check for a git repository: {exc}"}
++
++        if top_level.returncode != 0:
++            return {
++                "error": (
++                    "apply_patch requires the project to be inside "
++                    "a git repository (no .git found in "
++                    "PROJECT_ROOT or any parent directory)."
++                )
++            }
++
++    target_paths = _extract_patch_target_paths(patch)
++
++    if not target_paths:
++        return {
++            "error": (
++                "Could not find any '--- a/<path>' / '+++ b/<path>' "
++                "headers in the patch. Provide a standard unified diff."
++            )
++        }
++
++    resolved_paths = []
++
++    for relative_path in target_paths:
++        try:
++            file_path = safe_path(relative_path)
++        except ValueError as exc:
++            return {
++                "error": (
++                    f"Patch touches an invalid path "
++                    f"'{relative_path}': {exc}"
++                )
++            }
++
++        if is_sensitive_path(file_path):
++            return {
++                "error": (
++                    f"Refusing to patch sensitive file: {relative_path}"
++                )
++            }
++
++        resolved_paths.append(str(file_path.relative_to(PROJECT_ROOT)))
++
++    try:
++        check = subprocess.run(
++            ["git", "apply", "--check", "-"],
++            input=patch,
++            cwd=PROJECT_ROOT,
++            capture_output=True,
++            text=True,
++            timeout=30,
++        )
++    except FileNotFoundError:
++        return {"error": "git is not installed or not on PATH."}
++    except subprocess.TimeoutExpired:
++        return {"error": "Validating the patch timed out."}
++    except Exception as exc:
++        return {"error": f"Could not validate patch: {exc}"}
++
++    if check.returncode != 0:
++        return {
++            "error": (
++                f"Patch does not apply cleanly: "
++                f"{check.stderr.strip() or check.stdout.strip()}"
++            )
++        }
++
++    if not confirm:
++        return {
++            "requires_confirmation": True,
++            "files": resolved_paths,
++            "message": (
++                f"This patch was NOT applied. It would modify: "
++                f"{', '.join(resolved_paths)}. Show the user the "
++                f"patch and ask them to explicitly confirm it, then "
++                f"call apply_patch again with confirm=true."
++            ),
++        }
++
++    try:
++        applied = subprocess.run(
++            ["git", "apply", "-"],
++            input=patch,
++            cwd=PROJECT_ROOT,
++            capture_output=True,
++            text=True,
++            timeout=30,
++        )
++    except subprocess.TimeoutExpired:
++        return {"error": "Applying the patch timed out."}
++    except Exception as exc:
++        return {"error": f"Could not apply patch: {exc}"}
++
++    if applied.returncode != 0:
++        return {
++            "error": (
++                f"Failed to apply patch: "
++                f"{applied.stderr.strip() or applied.stdout.strip()}"
++            )
++        }
++
++    return {"files": resolved_paths, "applied": True}
++
++
++# ---------------------------------------------------------
++# Tool registry
++# ---------------------------------------------------------
++
++TOOL_FUNCTIONS = {
++    "list_files": list_files,
++    "read_file": read_file,
++    "search_files": search_files,
++    "run_command": run_command,
++    "git_status": git_status,
++    "git_diff": git_diff,
++    "git_log": git_log,
++    "git_branch": git_branch,
++    "create_file": create_file,
++    "write_file": write_file,
++    "apply_patch": apply_patch,
++    "delete_file": delete_file,
++}
++
++# Tools that only read or inspect the project. Kept separate from the
++# write/destructive tools below purely for clarity when reasoning about
++# the system's blast radius.
++READ_ONLY_TOOL_NAMES = {
++    "list_files",
++    "read_file",
++    "search_files",
++    "run_command",
++    "git_status",
++    "git_diff",
++    "git_log",
++    "git_branch",
++}
++
++# Tools that create, modify, or delete files. All of these require
++# confirm=True on a second call before they take effect (see each
++# tool's docstring) — the first call only previews the change.
++WRITE_TOOL_NAMES = {
++    "create_file",
++    "write_file",
++    "apply_patch",
++    "delete_file",
++}
++
++# Per-tool execution timeouts (seconds), enforced generically in
++# agent.run_agent_loop so a single slow tool can't stall the whole
++# agent. Read-only inspection tools get short budgets; run_command and
++# apply_patch get more room since they may shell out to real
++# subprocesses (run_command already enforces its own internal timeout
++# too, set slightly below this ceiling so its own clean timeout
++# message fires first).
++TOOL_TIMEOUTS = {
++    "list_files": 5,
++    "read_file": 5,
++    "search_files": 15,
++    "run_command": 65,
++    "git_status": 10,
++    "git_diff": 10,
++    "git_log": 10,
++    "git_branch": 10,
++    "create_file": 5,
++    "write_file": 5,
++    "apply_patch": 35,
++    "delete_file": 5,
++}
++DEFAULT_TOOL_TIMEOUT = 15
++
++# Shared executor used to run each tool call so it can be bounded by
++# TOOL_TIMEOUTS without blocking the whole process. Python threads
++# can't be forcibly killed, so a timed-out tool's thread may keep
++# running in the background even after the agent moves on and reports
++# the timeout — this bounds how long the *agent* waits, not how long
++# the underlying work actually takes.
++TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8)
++
++
++# ---------------------------------------------------------
++# Canonical (provider-agnostic) tool schemas
++# ---------------------------------------------------------
++#
++# Standard JSON Schema, lowercase types ("object", "string", ...).
++# providers/gemini.py upcases these into Gemini's FunctionDeclaration
++# format; providers/openai_compatible.py (Ollama, the Kilo gateway,
++# OpenAI) uses them close to as-is, since that's already the format
++# OpenAI-style `tools` arrays expect. Add a new tool in exactly one
++# place — here plus TOOL_FUNCTIONS above — and every provider picks
++# it up automatically.
++
++TOOL_SCHEMAS = {
++    "list_files": {
++        "description": (
++            "Lists files and directories inside the application "
++            "project. Use this to explore the project structure "
++            "before reading or editing files."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "path": {
++                    "type": "string",
++                    "description": (
++                        "Relative directory path inside the project. "
++                        "Use '.' for the project root."
++                    ),
++                },
++            },
++            "required": [],
++        },
++    },
++    "read_file": {
++        "description": (
++            "Reads a UTF-8 text file inside the application project. "
++            "Always read a file before editing it."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "path": {
++                    "type": "string",
++                    "description": "Relative path to the text file.",
++                },
++            },
++            "required": ["path"],
++        },
++    },
++    "search_files": {
++        "description": (
++            "Searches text files inside the project for a query "
++            "string (case-insensitive substring match), returning "
++            "matching file paths, line numbers, and lines."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "query": {
++                    "type": "string",
++                    "description": "Text to search for.",
++                },
++                "path": {
++                    "type": "string",
++                    "description": (
++                        "Relative directory to search under. Use '.' "
++                        "for the whole project."
++                    ),
++                },
++            },
++            "required": ["query"],
++        },
++    },
++    "run_command": {
++        "description": (
++            "Runs one of the explicitly allowed development commands "
++            "inside the local project directory: read-only git "
++            "inspection (status, log, diff, branch), directory "
++            "listings, tool versions, installing dependencies, and "
++            "running tests/builds/linters. Use this when the user "
++            "asks you to run the tests, install dependencies, build "
++            "the project, or check something the dedicated tools "
++            "don't cover. It cannot run destructive, system-level, or "
++            "credential-exposing commands."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "command": {
++                    "type": "string",
++                    "description": (
++                        "An allowed command such as 'pytest', "
++                        "'npm test', 'npm install', 'git log -n 5', "
++                        "or 'npm run build'."
++                    ),
++                },
++            },
++            "required": ["command"],
++        },
++    },
++    "git_status": {
++        "description": (
++            "Shows the current git status (branch and changed files) "
++            "of the project. Always call this instead of guessing or "
++            "assuming the repository state."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {},
++            "required": [],
++        },
++    },
++    "git_diff": {
++        "description": (
++            "Shows the current git diff for the project, or for a "
++            "single file. Use this to see exactly what has changed "
++            "before or after making edits."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "path": {
++                    "type": "string",
++                    "description": (
++                        "Optional relative path to scope the diff to "
++                        "a single file. Leave empty for the whole "
++                        "project."
++                    ),
++                },
++                "staged": {
++                    "type": "boolean",
++                    "description": (
++                        "If true, show staged changes instead of "
++                        "unstaged changes."
++                    ),
++                },
++            },
++            "required": [],
++        },
++    },
++    "git_log": {
++        "description": (
++            "Shows recent commit history for the project (one line "
++            "per commit). Use this to understand recent changes "
++            "instead of guessing."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "max_count": {
++                    "type": "integer",
++                    "description": (
++                        "Number of commits to show (1-100). Defaults "
++                        "to 10."
++                    ),
++                },
++            },
++            "required": [],
++        },
++    },
++    "git_branch": {
++        "description": (
++            "Lists local git branches and shows which one is "
++            "currently checked out."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {},
++            "required": [],
++        },
++    },
++    "create_file": {
++        "description": (
++            "Creates a new file with the given contents inside the "
++            "local project. Fails if the file already exists — use "
++            "write_file to modify an existing file instead. Requires "
++            "confirmation: calling without confirm=true will NOT "
++            "create anything, it only returns a preview. Only call "
++            "it again with confirm=true after the user has "
++            "explicitly agreed."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "path": {
++                    "type": "string",
++                    "description": "Relative path for the new file.",
++                },
++                "contents": {
++                    "type": "string",
++                    "description": "Text contents to write to the file.",
++                },
++                "confirm": {
++                    "type": "boolean",
++                    "description": (
++                        "Must be true to actually create the file. "
++                        "Defaults to false."
++                    ),
++                },
++            },
++            "required": ["path", "contents"],
++        },
++    },
++    "write_file": {
++        "description": (
++            "Overwrites an existing file (or creates it if missing) "
++            "with new contents inside the local project. Read the "
++            "file first with read_file so you don't discard "
++            "unrelated user changes, and prefer apply_patch for a "
++            "small, targeted change instead of rewriting the whole "
++            "file. Requires confirmation: calling without "
++            "confirm=true will NOT write anything, it only returns a "
++            "diff preview. Only call it again with confirm=true "
++            "after the user has explicitly agreed."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "path": {
++                    "type": "string",
++                    "description": "Relative path to the file.",
++                },
++                "contents": {
++                    "type": "string",
++                    "description": "The complete new contents of the file.",
++                },
++                "confirm": {
++                    "type": "boolean",
++                    "description": (
++                        "Must be true to actually write the file. "
++                        "Defaults to false."
++                    ),
++                },
++            },
++            "required": ["path", "contents"],
++        },
++    },
++    "apply_patch": {
++        "description": (
++            "Applies a small, targeted unified diff (like `git diff` "
++            "output) to one or more project files. This is the "
++            "preferred way to make a focused change to an existing "
++            "file instead of rewriting it entirely with write_file. "
++            "Requires confirmation: calling without confirm=true will "
++            "NOT apply anything, it only validates the patch and "
++            "reports which files would change. Only call it again "
++            "with confirm=true after the user has explicitly agreed."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "patch": {
++                    "type": "string",
++                    "description": (
++                        "The unified diff text, including "
++                        "'--- a/<path>' / '+++ b/<path>' headers and "
++                        "'@@ ... @@' hunks."
++                    ),
++                },
++                "confirm": {
++                    "type": "boolean",
++                    "description": (
++                        "Must be true to actually apply the patch. "
++                        "Defaults to false."
++                    ),
++                },
++            },
++            "required": ["patch"],
++        },
++    },
++    "delete_file": {
++        "description": (
++            "Deletes a single file inside the local project. This is "
++            "destructive. Calling it without confirm=true will NOT "
++            "delete anything — it only returns what would be "
++            "deleted. Only call it again with confirm=true after the "
++            "user has explicitly agreed to the deletion in the "
++            "conversation."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "path": {
++                    "type": "string",
++                    "description": "Relative path to the file to delete.",
++                },
++                "confirm": {
++                    "type": "boolean",
++                    "description": (
++                        "Must be true to actually perform the "
++                        "deletion. Defaults to false."
++                    ),
++                },
++            },
++            "required": ["path"],
++        },
++    },
++}
++
++assert TOOL_SCHEMAS.keys() == TOOL_FUNCTIONS.keys(), (
++    "TOOL_SCHEMAS and TOOL_FUNCTIONS must declare exactly the same "
++    "tool names."
++)
