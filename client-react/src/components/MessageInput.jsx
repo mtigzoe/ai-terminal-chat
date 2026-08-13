@@ -24,7 +24,11 @@ import { faPaperPlane } from '@fortawesome/free-solid-svg-icons';
 const MessageInput = ({ inputRef, waiting, handleClick }) => {
   return (
     <div className="message-input">
+      <label htmlFor="chat-message-input" className="sr-only">
+        Chat message
+      </label>
       <input
+        id="chat-message-input"
         className="chat_msg_input"
         type="text"
         name="chat"
@@ -35,8 +39,14 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
           if (e.key === "Enter") handleClick();
         }}
       />
-      <button className="chat_msg_btn" onClick={handleClick}>
-        <span className="fa-span-send">
+      <button
+        type="button"
+        className="chat_msg_btn"
+        onClick={handleClick}
+        aria-label="Send message"
+        disabled={waiting}
+      >
+        <span className="fa-span-send" aria-hidden="true">
           <FontAwesomeIcon icon={faPaperPlane} />
         </span>
       </button>
