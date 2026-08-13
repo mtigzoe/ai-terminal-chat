@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import difflib
+import json
 import os
 import re
+import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -487,13 +489,15 @@ def run_command(command: str) -> dict:
         }
 
     try:
+        args = shlex.split(command, posix=False)
+
         result = subprocess.run(
-            command,
-            cwd=PROJECT_ROOT,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
+        args,
+        cwd=PROJECT_ROOT,
+        shell=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
         )
 
         # Cap output so a noisy command can't blow up the context window.
