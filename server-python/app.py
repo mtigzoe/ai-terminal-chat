@@ -1835,7 +1835,7 @@ def run_agent_loop(contents):
                 future = TOOL_EXECUTOR.submit(function, **function_args)
 
                 try:
-                    result = future.result(timeout=timeout_seconds)
+                    future.result(timeout=timeout_seconds)
 
                 except FutureTimeoutError:
                     result = {
