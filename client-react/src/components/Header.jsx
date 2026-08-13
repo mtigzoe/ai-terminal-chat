@@ -1,22 +1,26 @@
 import React from 'react';
 
 const Header = ({ toggled, setToggled }) => {
+  const label = toggled ? 'Streaming response On' : 'Streaming response Off';
+
   return (
     <div className="chat-header">
       <h1>Example chat app</h1>
-      <span className='toggle-text'>Stream Response</span>
-      <button 
-        className={`toggle-btn ${toggled ? "toggled": ""}`}
+      <span className="toggle-text" id="stream-response-label">
+        Stream Response
+      </span>
+      <button
+        type="button"
+        className={`toggle-btn ${toggled ? "toggled" : ""}`}
         onClick={() => setToggled(!toggled)}
+        aria-label={label}
+        aria-pressed={toggled}
+        aria-labelledby="stream-response-label"
       >
-        <div className="toggle-hover">
-          <div className='thumb'></div>
-          {toggled === false ? (
-            <span className="toggle-hover-text">Streaming response Off</span>
-          ) : (
-            <span className="toggle-hover-text">Streaming response On</span>
-          )}
-        </div>
+        <span className="toggle-hover" aria-hidden="true">
+          <span className="thumb"></span>
+          <span className="toggle-hover-text">{label}</span>
+        </span>
       </button>
     </div>
   );
