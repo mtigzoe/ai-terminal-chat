@@ -26,12 +26,14 @@ import MessageInput from './components/MessageInput.jsx';
 
 function App() {
   const inputRef = useRef();
+  const abortControllerRef = useRef(null);
   const host = import.meta.env.VITE_API_URL || "http://localhost:9000";
   const url = host + "/chat";
   const streamUrl = host + "/stream";
   const [data, setData] = useState([]);
   const [answer, setAnswer] = useState("");
   const [streamdiv, showStreamdiv] = useState(false);
+  const [streamToolActivity, setStreamToolActivity] = useState([]);
   const [toggled, setToggled] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const is_stream = toggled;
@@ -117,6 +119,10 @@ function App() {
     fetchData();
   };
 
+  const stopStreaming = () => {
+    abortControllerRef.current?.abort();
+  };
+
   const handleStreamingChat = async () => {
     const chatData = {
       chat: inputRef.current.value,
@@ -136,19 +142,55 @@ function App() {
     executeScroll();
 
     const headerConfig = {
-      Accept: "text/plain",
+      Accept: "application/x-ndjson, text/plain",
       "Content-Type": "application/json",
     };
 
     const fetchStreamData = async () => {
       let modelResponse = "";
+      let toolActivity = [];
+      let cancelled = false;
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      const handleEvent = (event) => {
+        if (!event || typeof event !== "object") return;
+
+        if (event.type === "text" || event.type === "final") {
+          const text = event.text || "";
+          modelResponse += text;
+          setAnswer((currentAnswer) => currentAnswer + text);
+        } else if (event.type === "tool_call" || event.type === "tool_result") {
+          const activity = {
+            type: event.type,
+            name: event.name,
+          };
+          if (event.type === "tool_call") {
+            activity.args = event.args || {};
+          } else {
+            activity.result = event.result || {};
+          }
+          toolActivity.push(activity);
+          setStreamToolActivity([...toolActivity]);
+        } else if (event.type === "error") {
+          const message = event.message || "Streaming request failed.";
+          modelResponse += `\n[Error: ${message}]`;
+          setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`);
+        } else if (event.type === "cancelled") {
+          cancelled = true;
+        }
+      };
 
       try {
         setAnswer("");
+        setStreamToolActivity([]);
+        showStreamdiv(true);
+
         const response = await fetch(streamUrl, {
           method: "POST",
           headers: headerConfig,
           body: JSON.stringify(chatData),
+          signal: controller.signal,
         });
 
         if (!response.ok || !response.body) {
@@ -164,24 +206,65 @@ function App() {
 
         const reader = response.body.getReader();
         const txtdecoder = new TextDecoder();
-        showStreamdiv(true);
+        let buffer = "";
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          const decodedTxt = txtdecoder.decode(value, { stream: true });
-          setAnswer((currentAnswer) => currentAnswer + decodedTxt);
-          modelResponse += decodedTxt;
+
+          buffer += txtdecoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+
+            // Version 3 accepts structured NDJSON, while remaining
+            // backward-compatible with the current plain-text backend.
+            try {
+              handleEvent(JSON.parse(trimmed));
+            } catch {
+              modelResponse += line;
+              setAnswer((currentAnswer) => currentAnswer + line);
+            }
+          }
+
           executeScroll();
         }
+
+        buffer += txtdecoder.decode();
+        if (buffer.trim()) {
+          try {
+            handleEvent(JSON.parse(buffer.trim()));
+          } catch {
+            modelResponse += buffer;
+            setAnswer((currentAnswer) => currentAnswer + buffer);
+          }
+        }
       } catch (err) {
-        modelResponse = `Error: ${err?.message || "Streaming request failed."}`;
+        if (err?.name === "AbortError") {
+          cancelled = true;
+          if (!modelResponse.trim()) {
+            modelResponse = "[Streaming stopped by user.]";
+          } else {
+            modelResponse += "\n[Streaming stopped by user.]";
+          }
+        } else {
+          modelResponse = modelResponse
+            ? `${modelResponse}\n[Error: ${err?.message || "Streaming request failed."}]`
+            : `Error: ${err?.message || "Streaming request failed."}`;
+        }
       } finally {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+
         setAnswer("");
         const updatedData = [...ndata, {
           role: "model",
-          parts: [{ text: modelResponse }],
-          toolActivity: []
+          parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }],
+          toolActivity
         }];
 
         flushSync(() => {
@@ -190,6 +273,7 @@ function App() {
           setWaiting(false);
         });
         showStreamdiv(false);
+        setStreamToolActivity([]);
         executeScroll();
       }
     };
@@ -201,7 +285,21 @@ function App() {
     <center>
       <div className="chat-app">
         <Header toggled={toggled} setToggled={setToggled} />
-        <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} />
+        <ConversationDisplayArea
+          data={data}
+          streamdiv={streamdiv}
+          answer={answer}
+          streamToolActivity={streamToolActivity}
+        />
+        {waiting && is_stream && (
+          <button
+            type="button"
+            onClick={stopStreaming}
+            aria-label="Stop streaming response"
+          >
+            Stop
+          </button>
+        )}
         <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
       </div>
     </center>

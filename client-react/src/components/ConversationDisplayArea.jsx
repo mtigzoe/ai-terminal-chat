@@ -28,7 +28,7 @@ function ToolActivity({ activity = [] }) {
   );
 }
 
-const ChatArea = ({ data, streamdiv, answer }) => {
+const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [] }) => {
   return (
     <div className="chat-area">
       {data?.length <= 0 ? (
@@ -58,7 +58,10 @@ const ChatArea = ({ data, streamdiv, answer }) => {
       {streamdiv && (
         <div className="tempResponse">
           <img src={chatbotIcon} alt="Icon" />
-          {answer && <p><Markdown>{answer}</Markdown></p>}
+          <div>
+            <ToolActivity activity={streamToolActivity} />
+            {answer && <p><Markdown>{answer}</Markdown></p>}
+          </div>
         </div>
       )}
 
