@@ -1,13 +1,16 @@
-"""Provider factory.
-
-Set PROVIDER=gemini (default), ollama, or kilo in .env to pick a
-backend. Each branch below only reads the env vars it needs, and the
-corresponding provider module is only imported once selected.
-"""
+"""Provider factory for Gemini, Ollama, and Kilo."""
 
 import os
+import sys
+
+import base as _base
 
 from base import Provider, ProviderResponse, ToolCall
+
+# Keep the existing provider modules compatible with their
+# `from providers.base import ...` imports while providers.py is a
+# module rather than a package.
+sys.modules.setdefault("providers.base", _base)
 
 __all__ = ["Provider", "ProviderResponse", "ToolCall", "get_provider"]
 
@@ -30,11 +33,9 @@ def get_provider(name: str = None) -> Provider:
         from openai_compatible import OpenAICompatibleProvider
         api_key = os.getenv("KILO_API_KEY")
         if not api_key:
-            raise RuntimeError(
-                "KILO_API_KEY is not set. Add it to your .env file."
-            )
+            raise RuntimeError("KILO_API_KEY is not set. Add it to your .env file.")
         return OpenAICompatibleProvider(
-            base_url=os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway"),
+            base_url=os.getenv("KILO_BASE_URL", ""),
             model=os.getenv("KILO_MODEL", "kilocode/kilo-auto/balanced"),
             api_key=api_key,
         )
