@@ -139,6 +139,9 @@ http://localhost:3000
 
 If the frontend needs a different backend URL, set `VITE_API_URL` in the frontend environment configuration. The frontend defaults to `http://localhost:9000`.
 
+<<<<<<< HEAD
+The Python backend can be run with [uv](https://docs.astral.sh/uv/), a fast Python package and project manager. This is the recommended way to run the backend during development.
+=======
 ## Running the Python backend with uv
 
 The normal development workflow is:
@@ -166,8 +169,20 @@ Using `uv run` ensures commands use the project's managed Python environment and
 ## Running without uv
 
 `uv` is the recommended workflow, but a standard Python virtual environment can also be used:
+>>>>>>> origin/main
 
 ### Windows PowerShell
+
+From the repository root:
+
+```powershell
+cd server-python
+uv run app.py
+```
+
+`uv run` creates and manages the project's virtual environment as needed and runs the application with its dependencies available. You do not need to manually activate a virtual environment first.
+
+If you prefer to create and activate a virtual environment yourself, you can instead use:
 
 ```powershell
 cd server-python
@@ -177,7 +192,11 @@ pip install -r requirements.txt
 python app.py
 ```
 
+<<<<<<< HEAD
+Then install the dependencies with:
+=======
 ### Linux/macOS
+>>>>>>> origin/main
 
 ```bash
 cd server-python
@@ -187,11 +206,21 @@ pip install -r requirements.txt
 python app.py
 ```
 
+<<<<<<< HEAD
+If the Google GenAI SDK is not already included by the requirements file, install it with:
+=======
 ## API endpoints
+>>>>>>> origin/main
 
 The Flask backend provides these main endpoints:
 
+<<<<<<< HEAD
+### Configuration
+
+Create a `.env` file from `.env.example` and set your Gemini API key:
+=======
 ### Chat
+>>>>>>> origin/main
 
 ```text
 POST /chat
@@ -199,7 +228,20 @@ POST /chat
 
 Runs a conversation to completion and returns the final model response together with tool activity.
 
+<<<<<<< HEAD
+### Start the server with uv
+
+The simplest development command is:
+
+```powershell
+cd server-python
+uv run app.py
+```
+
+The backend runs at:
+=======
 ### Streaming chat
+>>>>>>> origin/main
 
 ```text
 POST /stream
