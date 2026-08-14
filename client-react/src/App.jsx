@@ -23,6 +23,14 @@ import './App.css';
 import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
+import {
+  statusFromProgressEvent,
+  statusFromPendingConfirmation,
+  statusFromErrorEvent,
+  statusFromToolActivity,
+  statusFromStreamLine,
+  isAgentStatusStreamLine,
+} from './agentStatus.js';
 
 function App() {
   const inputRef = useRef();
@@ -36,6 +44,8 @@ function App() {
   const [streamToolActivity, setStreamToolActivity] = useState([]);
   const [toggled, setToggled] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  /** Current agent lifecycle status for UI + screen-reader live region. */
+  const [agentStatus, setAgentStatus] = useState(null);
   const is_stream = toggled;
 
   function executeScroll() {
@@ -80,6 +90,11 @@ function App() {
       inputRef.current.value = "";
       inputRef.current.placeholder = "Waiting for model's response";
       setWaiting(true);
+      setAgentStatus({
+        phase: 'plan',
+        message: 'Planning next step',
+        assertive: false,
+      });
     });
 
     executeScroll();
@@ -98,8 +113,24 @@ function App() {
         const response = await axios.post(url, chatData, headerConfig);
         modelResponse = response.data.text || "";
         toolActivity = response.data.tool_activity || [];
+
+        const status = statusFromToolActivity(toolActivity);
+        if (status) {
+          setAgentStatus(status);
+        } else if (modelResponse) {
+          setAgentStatus({
+            phase: 'complete',
+            message: 'Task completed',
+            assertive: false,
+          });
+        }
       } catch (error) {
         modelResponse = `Error: ${getErrorMessage(error)}`;
+        setAgentStatus({
+          phase: 'error',
+          message: getErrorMessage(error),
+          assertive: true,
+        });
       } finally {
         const updatedData = [...ndata, {
           role: "model",
@@ -137,6 +168,11 @@ function App() {
       inputRef.current.value = "";
       inputRef.current.placeholder = "Waiting for model's response";
       setWaiting(true);
+      setAgentStatus({
+        phase: 'plan',
+        message: 'Planning next step',
+        assertive: false,
+      });
     });
 
     executeScroll();
@@ -156,10 +192,37 @@ function App() {
       const handleEvent = (event) => {
         if (!event || typeof event !== "object") return;
 
+        if (event.type === "progress") {
+          const status = statusFromProgressEvent(event);
+          if (status) setAgentStatus(status);
+          toolActivity.push({
+            type: "progress",
+            phase: event.phase,
+            message: event.message,
+          });
+          setStreamToolActivity([...toolActivity]);
+          return;
+        }
+
+        if (event.type === "pending_confirmation") {
+          const status = statusFromPendingConfirmation(event);
+          if (status) setAgentStatus(status);
+          toolActivity.push(event);
+          setStreamToolActivity([...toolActivity]);
+          return;
+        }
+
         if (event.type === "text" || event.type === "final") {
           const text = event.text || "";
           modelResponse += text;
           setAnswer((currentAnswer) => currentAnswer + text);
+          if (event.type === "final") {
+            setAgentStatus({
+              phase: 'complete',
+              message: 'Task completed',
+              assertive: false,
+            });
+          }
         } else if (event.type === "tool_call" || event.type === "tool_result") {
           const activity = {
             type: event.type,
@@ -173,12 +236,37 @@ function App() {
           toolActivity.push(activity);
           setStreamToolActivity([...toolActivity]);
         } else if (event.type === "error") {
+          const status = statusFromErrorEvent(event);
+          if (status) setAgentStatus(status);
           const message = event.message || "Streaming request failed.";
           modelResponse += `\n[Error: ${message}]`;
           setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`);
         } else if (event.type === "cancelled") {
           cancelled = true;
         }
+      };
+
+      /**
+       * Handle a plain-text stream line from the current backend.
+       * Agent status lines update the live region; chat text goes to the answer.
+       */
+      const handlePlainLine = (line) => {
+        if (isAgentStatusStreamLine(line)) {
+          const status = statusFromStreamLine(line);
+          if (status) {
+            setAgentStatus(status);
+            toolActivity.push({
+              type: 'progress',
+              phase: status.phase,
+              message: status.message,
+            });
+            setStreamToolActivity([...toolActivity]);
+          }
+          return;
+        }
+
+        modelResponse += line;
+        setAnswer((currentAnswer) => currentAnswer + line);
       };
 
       try {
@@ -220,13 +308,11 @@ function App() {
             const trimmed = line.trim();
             if (!trimmed) continue;
 
-            // Version 3 accepts structured NDJSON, while remaining
-            // backward-compatible with the current plain-text backend.
+            // Prefer structured NDJSON when present; otherwise plain text.
             try {
               handleEvent(JSON.parse(trimmed));
             } catch {
-              modelResponse += line;
-              setAnswer((currentAnswer) => currentAnswer + line);
+              handlePlainLine(line);
             }
           }
 
@@ -238,10 +324,10 @@ function App() {
           try {
             handleEvent(JSON.parse(buffer.trim()));
           } catch {
-            modelResponse += buffer;
-            setAnswer((currentAnswer) => currentAnswer + buffer);
+            handlePlainLine(buffer);
           }
         }
+
       } catch (err) {
         if (err?.name === "AbortError") {
           cancelled = true;
@@ -250,10 +336,21 @@ function App() {
           } else {
             modelResponse += "\n[Streaming stopped by user.]";
           }
+          setAgentStatus({
+            phase: 'complete',
+            message: 'Streaming stopped by user',
+            assertive: false,
+          });
         } else {
+          const message = err?.message || "Streaming request failed.";
           modelResponse = modelResponse
-            ? `${modelResponse}\n[Error: ${err?.message || "Streaming request failed."}]`
-            : `Error: ${err?.message || "Streaming request failed."}`;
+            ? `${modelResponse}\n[Error: ${message}]`
+            : `Error: ${message}`;
+          setAgentStatus({
+            phase: 'error',
+            message,
+            assertive: true,
+          });
         }
       } finally {
         if (abortControllerRef.current === controller) {
@@ -290,6 +387,7 @@ function App() {
           streamdiv={streamdiv}
           answer={answer}
           streamToolActivity={streamToolActivity}
+          agentStatus={agentStatus}
         />
         {waiting && is_stream && (
           <button
