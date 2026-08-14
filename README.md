@@ -2,7 +2,9 @@
 
 An accessible AI chat interface for working with a local project through controlled tools.
 
-The project currently combines a React frontend with a Flask/Python backend and Google Gemini. The backend uses Gemini's function/tool calling so the model can request operations such as listing files, reading files, and running approved terminal commands. The Python application executes the requested tool and sends the result back to Gemini.
+The project combines a React frontend with a Flask/Python backend and a provider layer for AI models. Gemini currently provides the primary function/tool-calling implementation, while the provider architecture is designed to make additional providers such as Ollama easier to add.
+
+The backend does not give an AI model unrestricted access to the computer. The model can request explicitly exposed tools, and the Python backend validates and executes those requests.
 
 ## Architecture
 
@@ -14,24 +16,29 @@ React client (:3000)
 Flask server (:9000)
         |
         v
-Google Gemini API
-        |
-        | tool calls
-        v
+Provider layer
+   |         |
+ Gemini    Ollama
+   |
+   | tool calls
+   v
 Local Python tools
   - list files
   - read files
+  - search files
   - run approved commands
+  - inspect Git state
+  - modify files with confirmation
 ```
 
-The tool system is deliberately controlled by the backend. Gemini does not receive unrestricted access to the computer.
+The tool system is deliberately controlled by the backend. AI providers do not receive unrestricted shell or filesystem access.
 
 ## Repository layout
 
 ```text
 ai-terminal-chat/
 ├── client-react/       # React/Vite chat frontend
-├── server-python/      # Flask + Google Gemini backend
+├── server-python/      # Flask backend, providers, and local tools
 ├── LICENSE             # Apache License 2.0
 └── README.md
 ```
@@ -39,19 +46,84 @@ ai-terminal-chat/
 ## Current features
 
 - React chat interface
+- Keyboard-friendly and screen-reader-oriented interface
 - Gemini-powered conversations
+- Provider abstraction for AI backends
 - Gemini function/tool calling
 - Local project directory listing
 - Local text-file reading
+- Text-file searching
 - Controlled terminal command execution
+- Git status, diff, log, and branch inspection
 - Streaming responses
+- Tool-activity reporting
+- Confirmation-required file creation, modification, patching, and deletion
+- Filesystem access restricted to the project directory
+- Sensitive-file protection for files such as `.env`, credentials, keys, and `.git`
+- Maximum file-size protection when reading and searching files
+- Per-tool execution timeouts
+- Protection against repeated/stuck tool calls
 - CORS support for local frontend/backend development
-- Filesystem access restricted to the configured project directory
-- Maximum file-size protection when reading files
 
-## Running the React frontend
+## Prerequisites
 
-From `client-react`:
+- Git
+- Node.js and npm
+- Python 3.11 or newer
+- `uv` for Python dependency and environment management
+- A Google Gemini API key when using the Gemini provider
+
+Install `uv` from the official Astral documentation if it is not already installed.
+
+## Quick start
+
+Clone the repository:
+
+```powershell
+git clone https://github.com/mtigzoe/ai-terminal-chat.git
+cd ai-terminal-chat
+```
+
+### 1. Configure the Python backend
+
+From `server-python`:
+
+```powershell
+cd server-python
+```
+
+Create or update the `.env` file from `.env.example` and set your API key:
+
+```text
+GOOGLE_API_KEY=your_api_key_here
+PORT=9000
+```
+
+Do not commit `.env` or expose your API key in source code.
+
+Install the Python project dependencies with `uv`:
+
+```powershell
+uv sync
+```
+
+`uv` creates and manages the project's virtual environment and installs the dependencies declared by the Python project. You do not need to manually create or activate a traditional `venv` when using this workflow.
+
+Start the backend:
+
+```powershell
+uv run app.py
+```
+
+The backend normally runs at:
+
+```text
+http://127.0.0.1:9000
+```
+
+### 2. Start the React frontend
+
+Open a second terminal and from the repository root run:
 
 ```powershell
 cd client-react
@@ -65,9 +137,35 @@ The Vite development server normally runs at:
 http://localhost:3000
 ```
 
-## Running the Python backend
+If the frontend needs a different backend URL, set `VITE_API_URL` in the frontend environment configuration. The frontend defaults to `http://localhost:9000`.
 
-From `server-python`, create and activate a virtual environment:
+## Running the Python backend with uv
+
+The normal development workflow is:
+
+```powershell
+cd server-python
+uv sync
+uv run app.py
+```
+
+To run the test suite:
+
+```powershell
+uv run pytest
+```
+
+To run a particular test file:
+
+```powershell
+uv run pytest tests/test_app.py
+```
+
+Using `uv run` ensures commands use the project's managed Python environment and dependencies.
+
+## Running without uv
+
+`uv` is the recommended workflow, but a standard Python virtual environment can also be used:
 
 ### Windows PowerShell
 
@@ -75,97 +173,166 @@ From `server-python`, create and activate a virtual environment:
 cd server-python
 python -m venv .venv
 .\.venv\Scripts\activate
+pip install -r requirements.txt
+python app.py
 ```
 
-Install the dependencies:
+### Linux/macOS
 
-```powershell
-uv pip install -r requirements.txt
+```bash
+cd server-python
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
 ```
 
-The backend also uses the Google GenAI SDK. If it is not already included by the requirements file, install it with:
+## API endpoints
 
-```powershell
-uv pip install google-genai
-```
+The Flask backend provides these main endpoints:
 
-Create a `.env` file from `.env.example` and set your Gemini API key:
+### Chat
 
 ```text
-GOOGLE_API_KEY=your_api_key_here
-PORT=9000
+POST /chat
 ```
 
-Do not commit `.env` or expose your API key in source code.
+Runs a conversation to completion and returns the final model response together with tool activity.
 
-Start the server:
-
-```powershell
-uv run .\app.py
-```
-
-The backend runs at:
+### Streaming chat
 
 ```text
-http://127.0.0.1:9000
+POST /stream
 ```
 
-The chat endpoint is:
-
-```text
-POST http://127.0.0.1:9000/chat
-```
-
-The streaming endpoint is:
-
-```text
-POST http://127.0.0.1:9000/stream
-```
+Streams tool activity and the model's response as plain text for compatibility with the React client.
 
 ## Tool calling
 
-The backend exposes Python functions to Gemini as tools. A typical interaction is:
+The backend exposes selected Python functions to the AI provider. A typical interaction is:
 
 ```text
-User: git status
+User: What files are in the project?
         |
         v
-Gemini requests run_command("git status")
+AI requests list_files(".")
         |
         v
-Python executes the approved command
+Python validates and executes the tool
         |
         v
-Command output is returned to Gemini
+Directory information is returned to the AI
         |
         v
-Gemini explains the result to the user
+AI explains the result to the user
 ```
 
-The same architecture can be extended with additional tools while keeping explicit restrictions on what the AI can access or execute.
+For a development request such as modifying a file, the workflow is intentionally more restrictive:
 
-## Security considerations
+```text
+User requests a change
+        |
+        v
+AI inspects the relevant files
+        |
+        v
+AI prepares a change
+        |
+        v
+Backend produces a confirmation preview
+        |
+        v
+User explicitly confirms
+        |
+        v
+Backend applies the change
+        |
+        v
+AI verifies the result
+```
 
-This project is intended for local development and experimentation.
+The confirmation requirement is enforced by the backend tool implementation rather than relying only on the model to behave correctly.
 
-The backend should not be exposed to an untrusted network without additional security controls. In particular:
+## Provider architecture
 
-- Keep API keys in environment variables.
-- Do not commit `.env` files or API keys.
-- Restrict filesystem access to the intended project directory.
-- Keep terminal command execution allowlisted or otherwise tightly controlled.
-- Review new tools before exposing them to an AI model.
+The Python backend is being organized around a provider abstraction so the application does not need to duplicate its agent logic for every model vendor.
+
+The intended separation is:
+
+```text
+Flask API
+   |
+   v
+Agent/tool loop
+   |
+   v
+Provider interface
+   |----------------|
+   v                v
+Gemini            Ollama
+```
+
+A provider is responsible for communicating with an AI model, while the agent/tool layer remains responsible for executing local tools and enforcing the application's safety rules.
+
+This makes it possible to add or change providers without moving filesystem, terminal, Git, or confirmation logic into each provider implementation.
+
+## Accessibility
+
+Accessibility is a core project goal rather than an optional UI feature.
+
+The frontend is designed to support keyboard-only operation and screen-reader users. Tool activity and important application state should be presented in a way that can be understood without relying on visual-only indicators.
+
+When adding UI controls:
+
+- Give every interactive control an accessible name.
+- Prefer native HTML controls where possible.
+- Make status changes available to assistive technology.
+- Do not rely on color alone to communicate state.
+- Keep keyboard focus behavior predictable.
+- Test changes with a screen reader such as JAWS or NVDA.
+
+## Security model
+
+This project is intended for local development and experimentation. The backend should not be exposed to an untrusted network without additional security controls.
+
+Important protections include:
+
+- API keys are loaded from environment variables rather than source code.
+- Sensitive files such as `.env`, credentials, private keys, and `.git` contents are blocked from model access.
+- Filesystem paths are resolved and restricted to the project directory.
+- File reads and searches have size limits.
+- Terminal commands are restricted to an explicit allowlist.
+- Command chaining, piping, redirection, and shell substitution are blocked.
+- Destructive/system commands are denied.
+- File creation, modification, patching, and deletion require explicit confirmation.
+- Tool calls have execution time limits.
+- Repeated identical tool calls are detected to prevent stuck loops.
+
+These controls are defense-in-depth measures, not a guarantee that the application is safe to expose as a public service.
+
+## Development guidelines
+
+When extending the project:
+
+1. Inspect the existing implementation before changing it.
+2. Keep provider-specific code inside the provider layer.
+3. Keep local-tool validation and security rules in the backend rather than trusting the model.
+4. Prefer small, targeted changes over rewriting complete files unnecessarily.
+5. Add tests for new provider behavior and important tool/security behavior.
+6. Run the relevant tests with `uv run pytest` before committing.
+7. Test frontend accessibility changes with keyboard navigation and a screen reader.
 
 ## Future direction
 
 Possible future work includes:
 
-- Additional filesystem and Git tools
+- Complete provider/agent test coverage
+- Additional providers such as Ollama and other OpenAI-compatible backends
+- A unified pending-action confirmation system
+- More accessible presentation of tool results
+- Additional Git tools with explicit permissions
 - More terminal commands with explicit permissions
-- Better tool-result presentation in the React interface
-- Accessible screen-reader announcements for tool activity
-- Gemini and Ollama as interchangeable AI providers
-- A shared TypeScript tool layer
+- Better error and timeout handling
 - More advanced terminal-agent behavior
 
 ## License
