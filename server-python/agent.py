@@ -6,6 +6,7 @@ from providers.base import Provider
 from pending import create_pending
 from tools import (
     DEFAULT_TOOL_TIMEOUT,
+    GIT_CONFIRM_TOOL_NAMES,
     TOOL_EXECUTOR,
     TOOL_FUNCTIONS,
     TOOL_TIMEOUTS,
@@ -81,6 +82,9 @@ def _describe_tool_progress(function_name: str, function_args: dict) -> tuple:
             return "confirm", "Preparing to patch file(s)"
         return "confirm", f"Preparing to {action}{path_label or ' file(s)'}"
 
+    if function_name in GIT_CONFIRM_TOOL_NAMES:
+        return "confirm", f"Preparing to stage{path_label or ' file(s)'}"
+
     if function_name in _INSPECT_TOOLS:
         if function_name == "read_file":
             return "inspect", f"Inspecting{path_label or ' file'}"
@@ -120,6 +124,7 @@ def _is_successful_write_result(result: dict) -> bool:
         or result.get("overwritten") is not None
         or result.get("applied")
         or result.get("deleted")
+        or result.get("staged")
         or result.get("bytes_written") is not None
     )
 
@@ -267,7 +272,10 @@ def run_agent_loop(provider: Provider, contents: list):
                     )
                 }
 
-            elif function_name in WRITE_TOOL_NAMES:
+            elif (
+                function_name in WRITE_TOOL_NAMES
+                or function_name in GIT_CONFIRM_TOOL_NAMES
+            ):
                 # Security invariant: the model can never self-confirm.
                 # First call always runs with confirm=False for a preview only.
                 preview_args = dict(function_args)
@@ -299,6 +307,12 @@ def run_agent_loop(provider: Provider, contents: list):
                     if function_name == "apply_patch":
                         confirm_message = (
                             "Waiting for confirmation to apply patch"
+                        )
+                    elif function_name == "git_add":
+                        confirm_message = (
+                            f"Waiting for confirmation to stage {path}"
+                            if isinstance(path, str) and path.strip()
+                            else "Waiting for confirmation to stage file(s)"
                         )
                     elif isinstance(path, str) and path.strip():
                         confirm_message = (
