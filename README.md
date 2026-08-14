@@ -57,6 +57,8 @@ ai-terminal-chat/
 - Git status, diff, log, and branch inspection
 - Streaming responses
 - Tool-activity reporting
+- Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, and completion
+- Accessible frontend agent-status announcements
 - Confirmation-required file creation, modification, patching, and deletion
 - Filesystem access restricted to the project directory
 - Sensitive-file protection for files such as `.env`, credentials, keys, and `.git`
@@ -372,20 +374,20 @@ The long-term goal is to develop AI Terminal Chat into an accessible, security-c
 
 ### Agent capabilities
 
-Work in progress on the `agent-capabilities` branch focuses on making multi-step agent behaviour more explicit, recoverable, and easier to follow while keeping backend-enforced safety intact:
+The core Agent Capabilities milestone is implemented on the `agent-capabilities` branch. It adds multi-step agent behavior, lifecycle progress reporting, recovery from failed or repeated actions, verification guidance, and accessible frontend status announcements while preserving backend-enforced safety controls.
 
-- Multi-step task execution with explicit planning and progress reporting  
-  (system prompt guidance plus progress events from the agent loop)
-- Automatic verification after file, terminal, and Git changes  
-  (reinforced in the system prompt; verification remains model-driven with tool support)
-- Recovery and retry strategies for failed commands or tools  
-  (clearer failure messaging, recovery hints after consecutive errors, and guidance not to repeat identical failing calls)
-- Better context-aware tool selection  
-  (prompt guidance favoring inspection, targeted patches, and minimal useful tool sequences)
-- Improved detection and recovery from repeated or stuck agent actions  
-  (existing identical-call limits retained; stronger messages and recovery hints added)
+Implemented capabilities include:
 
-Further work may include structured plan objects, richer frontend progress presentation, and expanded automated tests for multi-step workflows.
+- Multi-step task execution with explicit planning and progress reporting
+- Lifecycle progress phases for planning, inspection, execution, confirmation, verification, recovery, completion, and errors
+- Post-change verification guidance and support; verification remains model-driven with tool support rather than an unconditional automatic command runner
+- Recovery and retry guidance for failed tools, including recovery hints after consecutive errors
+- Detection and protection against repeated or stuck agent actions
+- Context-aware tool-selection guidance that favors inspection, targeted changes, and minimal useful tool sequences
+- Structured frontend agent-status events and screen-reader announcements without unnecessary focus changes
+- Expanded agent and pending-confirmation tests
+
+Further enhancements may include structured plan objects, automatic continuation after a confirmed write, richer frontend progress presentation, and expanded end-to-end testing. These are follow-up improvements rather than requirements for the completed milestone.
 
 ### Security and permissions
 
