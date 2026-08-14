@@ -1,3 +1,4 @@
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,8 @@ from agent import (  # noqa: E402
 from base import Provider, ProviderResponse, ToolCall  # noqa: E402
 from pending import clear_pending, get_pending  # noqa: E402
 import agent  # noqa: E402
+import security  # noqa: E402
+import tools  # noqa: E402
 
 
 class FakeProvider(Provider):
@@ -484,6 +487,51 @@ def test_verification_hint_after_successful_write_result(monkeypatch):
         assert "verification_hint" in results[0]["result"]
     finally:
         agent.WRITE_TOOL_NAMES.add("create_file")
+
+
+def test_git_add_never_self_confirms_through_agent_loop(tmp_path, monkeypatch):
+    """The real git_add tool (not a fake) must go through the same
+    generic preview/pending gate as the filesystem write tools, even
+    though it isn't in WRITE_TOOL_NAMES.
+    """
+
+    clear_pending()
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(tools, "PROJECT_ROOT", tmp_path)
+    (tmp_path / "file.txt").write_text("hello")
+
+    # The model tries to skip the preview and self-confirm directly.
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("git_add", {"path": "file.txt", "confirm": True})],
+        )
+    ])
+
+    events = list(run_agent_loop(provider, []))
+
+    pending = next(e for e in events if e["type"] == "pending_confirmation")
+    stored = get_pending(pending["action_id"])
+
+    # Nothing was staged despite the model requesting confirm=True.
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert status.stdout.strip().startswith("??")
+    assert stored.tool_name == "git_add"
+    assert pending["preview"]["requires_confirmation"] is True
+
+    confirm_progress = [
+        e for e in events
+        if e["type"] == "progress" and e.get("phase") == "confirm"
+    ]
+    assert any("stage" in e["message"].lower() for e in confirm_progress)
+    clear_pending()
 
 
 def test_final_completion_progress():

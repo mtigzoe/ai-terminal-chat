@@ -24,6 +24,7 @@ from tools import (
     TOOL_FUNCTIONS,
     TOOL_TIMEOUTS,
     DEFAULT_TOOL_TIMEOUT,
+    GIT_CONFIRM_TOOL_NAMES,
     WRITE_TOOL_NAMES,
     is_command_allowed,
     run_command,
@@ -82,7 +83,10 @@ def confirm_action():
     if action is None:
         return {"error": "Pending action not found or already resolved."}, 404
 
-    if action.tool_name not in WRITE_TOOL_NAMES:
+    if (
+        action.tool_name not in WRITE_TOOL_NAMES
+        and action.tool_name not in GIT_CONFIRM_TOOL_NAMES
+    ):
         return {"error": "Only pending write actions can be confirmed."}, 400
 
     function = TOOL_FUNCTIONS.get(action.tool_name)
