@@ -338,11 +338,20 @@ The long-term goal is to develop AI Terminal Chat into an accessible, security-c
 
 ### Agent capabilities
 
-- Multi-step task execution with explicit planning and progress reporting
-- Automatic verification after file, terminal, and Git changes
-- Recovery and retry strategies for failed commands or tools
-- Better context-aware tool selection
-- Improved detection and recovery from repeated or stuck agent actions
+Work in progress on the `agent-capabilities` branch focuses on making multi-step agent behaviour more explicit, recoverable, and easier to follow while keeping backend-enforced safety intact:
+
+- Multi-step task execution with explicit planning and progress reporting  
+  (system prompt guidance plus progress events from the agent loop)
+- Automatic verification after file, terminal, and Git changes  
+  (reinforced in the system prompt; verification remains model-driven with tool support)
+- Recovery and retry strategies for failed commands or tools  
+  (clearer failure messaging, recovery hints after consecutive errors, and guidance not to repeat identical failing calls)
+- Better context-aware tool selection  
+  (prompt guidance favoring inspection, targeted patches, and minimal useful tool sequences)
+- Improved detection and recovery from repeated or stuck agent actions  
+  (existing identical-call limits retained; stronger messages and recovery hints added)
+
+Further work may include structured plan objects, richer frontend progress presentation, and expanded automated tests for multi-step workflows.
 
 ### Security and permissions
 

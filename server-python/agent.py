@@ -25,12 +25,27 @@ def run_agent_loop(provider: Provider, contents: list):
     a pending_confirmation event is emitted and the loop stops. The HTTP
     layer can expose that event to the user and use /confirm to authorize the
     exact stored action later.
+
+    The loop also surfaces progress events and strengthens recovery from
+    repeated or stuck tool calls so multi-step work is easier to follow
+    and less likely to loop uselessly.
     """
 
     last_call_signature = None
     consecutive_repeat_count = 0
+    consecutive_error_count = 0
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for round_index in range(MAX_TOOL_ROUNDS):
+        yield {
+            "type": "progress",
+            "round": round_index + 1,
+            "max_rounds": MAX_TOOL_ROUNDS,
+            "message": (
+                f"Agent round {round_index + 1} of {MAX_TOOL_ROUNDS}: "
+                f"requesting next model turn."
+            ),
+        }
+
         try:
             response = provider.generate(contents)
         except Exception as exc:
@@ -86,7 +101,8 @@ def run_agent_loop(provider: Provider, contents: list):
                     "type": "error",
                     "message": (
                         f"Stopping: {function_name} was called with the exact same "
-                        f"arguments {consecutive_repeat_count} times in a row."
+                        f"arguments {consecutive_repeat_count} times in a row. "
+                        f"Change approach rather than repeating the identical call."
                     ),
                 }
                 return
@@ -95,7 +111,10 @@ def run_agent_loop(provider: Provider, contents: list):
                 result = {
                     "error": (
                         f"{function_name} has already been called with these exact "
-                        f"arguments {consecutive_repeat_count - 1} time(s) in a row."
+                        f"arguments {consecutive_repeat_count - 1} time(s) in a row. "
+                        f"Do not retry the identical call. Inspect the previous "
+                        f"result, choose a different tool or different arguments, "
+                        f"or explain the blockage to the user."
                     )
                 }
 
@@ -149,6 +168,22 @@ def run_agent_loop(provider: Provider, contents: list):
                 except Exception as exc:
                     result = {"error": f"Tool {function_name} failed: {exc}"}
 
+            if isinstance(result, dict) and result.get("error"):
+                consecutive_error_count += 1
+            else:
+                consecutive_error_count = 0
+
+            # Surface repeated failures so the model is pushed toward recovery
+            # rather than silent re-attempts of the same failing pattern.
+            if consecutive_error_count >= 3 and isinstance(result, dict):
+                result = dict(result)
+                result["recovery_hint"] = (
+                    "Multiple consecutive tool failures have occurred. "
+                    "Stop repeating the same pattern: report the errors, "
+                    "inspect the project state if needed, and try a different "
+                    "approach or explain the blockage to the user."
+                )
+
             print(f"[tool result] {function_name}: {result}")
             yield {
                 "type": "tool_result",
@@ -161,5 +196,9 @@ def run_agent_loop(provider: Provider, contents: list):
 
     yield {
         "type": "error",
-        "message": "Model exceeded the maximum number of tool-calling rounds without producing a final response.",
+        "message": (
+            "Model exceeded the maximum number of tool-calling rounds "
+            "without producing a final response. Break the task into "
+            "smaller steps or ask the user how to proceed."
+        ),
     }

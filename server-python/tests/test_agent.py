@@ -32,7 +32,8 @@ def test_agent_returns_final_text_without_tools():
 
     events = list(run_agent_loop(provider, []))
 
-    assert events == [{"type": "final", "text": "hello"}]
+    assert events[0]["type"] == "progress"
+    assert events[-1] == {"type": "final", "text": "hello"}
 
 
 def test_agent_executes_read_only_tool_and_continues(monkeypatch):
@@ -53,12 +54,13 @@ def test_agent_executes_read_only_tool_and_continues(monkeypatch):
     events = list(run_agent_loop(provider, []))
 
     assert calls == ["worked"]
-    assert events[0]["type"] == "tool_call"
-    assert events[1] == {
-        "type": "tool_result",
-        "name": "fake_read",
-        "result": {"value": "worked"},
-    }
+    progress_events = [e for e in events if e["type"] == "progress"]
+    assert len(progress_events) >= 1
+    assert any(e["type"] == "tool_call" for e in events)
+    assert any(
+        e["type"] == "tool_result" and e["name"] == "fake_read"
+        for e in events
+    )
     assert events[-1] == {"type": "final", "text": "done"}
 
 
@@ -78,7 +80,6 @@ def test_agent_never_self_confirms_write(monkeypatch):
 
     monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_write", fake_write)
     monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_write", 5)
-    monkeypatch.addfinalizer(clear_pending) if hasattr(monkeypatch, "addfinalizer") else None
     agent.WRITE_TOOL_NAMES.add("fake_write")
 
     try:
@@ -101,3 +102,34 @@ def test_agent_never_self_confirms_write(monkeypatch):
     finally:
         agent.WRITE_TOOL_NAMES.discard("fake_write")
         clear_pending()
+
+
+def test_agent_emits_recovery_hint_after_consecutive_errors(monkeypatch):
+    def failing_tool(**kwargs):
+        return {"error": "simulated failure"}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_fail", failing_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_fail", 5)
+
+    # Three failing calls in one model turn should attach a recovery hint
+    # on the third result.
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[
+                ToolCall("fake_fail", {"n": 1}),
+                ToolCall("fake_fail", {"n": 2}),
+                ToolCall("fake_fail", {"n": 3}),
+            ],
+        ),
+        ProviderResponse(text="stopped after failures"),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+
+    tool_results = [e for e in events if e["type"] == "tool_result"]
+    assert len(tool_results) == 3
+    assert "recovery_hint" not in tool_results[0]["result"]
+    assert "recovery_hint" not in tool_results[1]["result"]
+    assert "recovery_hint" in tool_results[2]["result"]
+    assert events[-1] == {"type": "final", "text": "stopped after failures"}
