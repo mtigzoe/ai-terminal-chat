@@ -149,10 +149,22 @@ uv sync
 uv run app.py
 ```
 
-To run the test suite:
+To run the full Python test suite:
 
 ```powershell
 uv run pytest
+```
+
+To run the agent tests specifically:
+
+```powershell
+uv run pytest tests/test_agent.py -q
+```
+
+To run the pending-confirmation tests specifically:
+
+```powershell
+uv run pytest tests/test_pending.py -q
 ```
 
 To run a particular test file:
@@ -162,6 +174,28 @@ uv run pytest tests/test_app.py
 ```
 
 Using `uv run` ensures commands use the project's managed Python environment and dependencies.
+
+## Running the frontend checks
+
+From `client-react`:
+
+```powershell
+npm install
+```
+
+Build the production frontend:
+
+```powershell
+npm run build
+```
+
+The agent-status helper has a standalone test script that does not require a test runner:
+
+```powershell
+node src/agentStatus.test.js
+```
+
+The current `package.json` does not define an `npm test` script. React Testing Library dependencies are present, but the React test files require a configured test runner before they can be executed as a standard npm test command.
 
 ## Running without uv
 
