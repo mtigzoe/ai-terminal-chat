@@ -145,7 +145,15 @@ def chat():
 
     try:
         for event in run_agent_loop(provider, contents):
-            if event["type"] == "tool_call":
+            if event["type"] == "progress":
+                tool_activity.append({
+                    "type": "progress",
+                    "phase": event.get("phase"),
+                    "message": event.get("message"),
+                    "round": event.get("round"),
+                    "tool": event.get("tool"),
+                })
+            elif event["type"] == "tool_call":
                 tool_activity.append({
                     "type": "tool_call",
                     "name": event["name"],
@@ -200,7 +208,10 @@ def stream():
 
         try:
             for event in run_agent_loop(provider, contents):
-                if event["type"] == "tool_call":
+                if event["type"] == "progress":
+                    # Plain-text progress for screen readers and terminals.
+                    yield f"\n[{event.get('phase', 'progress')}] {event.get('message', '')}\n"
+                elif event["type"] == "tool_call":
                     yield f"\n⚙️ {event['name']}({format_args(event['args'])})\n"
                 elif event["type"] == "tool_result":
                     result = event["result"]
@@ -209,7 +220,8 @@ def stream():
                 elif event["type"] == "pending_confirmation":
                     yield (
                         f"\n[Confirmation required: {event['name']} "
-                        f"action_id={event['action_id']}]\n"
+                        f"action_id={event['action_id']}] "
+                        f"Waiting for explicit user confirmation.\n"
                     )
                 elif event["type"] == "final":
                     yield event["text"]

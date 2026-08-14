@@ -57,6 +57,8 @@ ai-terminal-chat/
 - Git status, diff, log, and branch inspection
 - Streaming responses
 - Tool-activity reporting
+- Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, and completion
+- Accessible frontend agent-status announcements
 - Confirmation-required file creation, modification, patching, and deletion
 - Filesystem access restricted to the project directory
 - Sensitive-file protection for files such as `.env`, credentials, keys, and `.git`
@@ -149,10 +151,22 @@ uv sync
 uv run app.py
 ```
 
-To run the test suite:
+To run the full Python test suite:
 
 ```powershell
 uv run pytest
+```
+
+To run the agent tests specifically:
+
+```powershell
+uv run pytest tests/test_agent.py -q
+```
+
+To run the pending-confirmation tests specifically:
+
+```powershell
+uv run pytest tests/test_pending.py -q
 ```
 
 To run a particular test file:
@@ -162,6 +176,28 @@ uv run pytest tests/test_app.py
 ```
 
 Using `uv run` ensures commands use the project's managed Python environment and dependencies.
+
+## Running the frontend checks
+
+From `client-react`:
+
+```powershell
+npm install
+```
+
+Build the production frontend:
+
+```powershell
+npm run build
+```
+
+The agent-status helper has a standalone test script that does not require a test runner:
+
+```powershell
+node src/agentStatus.test.js
+```
+
+The current `package.json` does not define an `npm test` script. React Testing Library dependencies are present, but the React test files require a configured test runner before they can be executed as a standard npm test command.
 
 ## Running without uv
 
@@ -338,11 +374,20 @@ The long-term goal is to develop AI Terminal Chat into an accessible, security-c
 
 ### Agent capabilities
 
+The core Agent Capabilities milestone is implemented on the `agent-capabilities` branch. It adds multi-step agent behavior, lifecycle progress reporting, recovery from failed or repeated actions, verification guidance, and accessible frontend status announcements while preserving backend-enforced safety controls.
+
+Implemented capabilities include:
+
 - Multi-step task execution with explicit planning and progress reporting
-- Automatic verification after file, terminal, and Git changes
-- Recovery and retry strategies for failed commands or tools
-- Better context-aware tool selection
-- Improved detection and recovery from repeated or stuck agent actions
+- Lifecycle progress phases for planning, inspection, execution, confirmation, verification, recovery, completion, and errors
+- Post-change verification guidance and support; verification remains model-driven with tool support rather than an unconditional automatic command runner
+- Recovery and retry guidance for failed tools, including recovery hints after consecutive errors
+- Detection and protection against repeated or stuck agent actions
+- Context-aware tool-selection guidance that favors inspection, targeted changes, and minimal useful tool sequences
+- Structured frontend agent-status events and screen-reader announcements without unnecessary focus changes
+- Expanded agent and pending-confirmation tests
+
+Further enhancements may include structured plan objects, automatic continuation after a confirmed write, richer frontend progress presentation, and expanded end-to-end testing. These are follow-up improvements rather than requirements for the completed milestone.
 
 ### Security and permissions
 
