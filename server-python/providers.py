@@ -12,7 +12,18 @@ from base import Provider, ProviderResponse, ToolCall
 # module rather than a package.
 sys.modules.setdefault("providers.base", _base)
 
-__all__ = ["Provider", "ProviderResponse", "ToolCall", "get_provider"]
+__all__ = [
+    "Provider",
+    "ProviderResponse",
+    "ToolCall",
+    "SUPPORTED_PROVIDERS",
+    "get_provider",
+]
+
+# Single source of truth for which PROVIDER values are valid — used
+# both by get_provider()'s dispatch below and by app.py's /providers
+# endpoint, so the two can never drift out of sync.
+SUPPORTED_PROVIDERS = ["gemini", "ollama", "kilo"]
 
 
 def get_provider(name: str = None) -> Provider:
@@ -20,26 +31,34 @@ def get_provider(name: str = None) -> Provider:
 
     if name == "gemini":
         from gemini import GeminiProvider
-        return GeminiProvider()
+        provider = GeminiProvider()
 
-    if name == "ollama":
+    elif name == "ollama":
         from openai_compatible import OpenAICompatibleProvider
-        return OpenAICompatibleProvider(
+        provider = OpenAICompatibleProvider(
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
             model=os.getenv("OLLAMA_MODEL", "llama3.1"),
         )
 
-    if name == "kilo":
+    elif name == "kilo":
         from openai_compatible import OpenAICompatibleProvider
         api_key = os.getenv("KILO_API_KEY")
         if not api_key:
             raise RuntimeError("KILO_API_KEY is not set. Add it to your .env file.")
-        return OpenAICompatibleProvider(
+        provider = OpenAICompatibleProvider(
             base_url=os.getenv("KILO_BASE_URL", ""),
             model=os.getenv("KILO_MODEL", "kilocode/kilo-auto/balanced"),
             api_key=api_key,
         )
 
-    raise RuntimeError(
-        f"Unknown PROVIDER '{name}'. Expected one of: gemini, ollama, kilo."
-    )
+    else:
+        raise RuntimeError(
+            f"Unknown PROVIDER '{name}'. Expected one of: "
+            f"{', '.join(SUPPORTED_PROVIDERS)}."
+        )
+
+    # Tag the instance with the name it was resolved from so callers
+    # (e.g. the /providers endpoint) can report "current" without
+    # re-deriving it from the environment themselves.
+    provider.name = name
+    return provider

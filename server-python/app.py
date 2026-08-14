@@ -34,7 +34,7 @@ from flask import Flask, Response, request, stream_with_context
 from flask_cors import CORS
 
 from agent import run_agent_loop
-from providers import get_provider
+from providers import SUPPORTED_PROVIDERS, get_provider
 from security import PROJECT_ROOT, is_sensitive_filename, safe_path  # noqa: F401
 from tools import is_command_allowed, run_command  # noqa: F401
 
@@ -63,6 +63,27 @@ def handle_unexpected_error(exc):
         "text": "",
         "error": f"Unexpected server error: {exc}",
     }, 500
+
+
+# ---------------------------------------------------------
+# Providers endpoint
+# ---------------------------------------------------------
+
+@app.route("/providers", methods=["GET"])
+def providers():
+    """Report which provider is currently active and which are supported.
+
+    This is read-only: switching providers still requires setting
+    PROVIDER in .env and restarting the server (get_provider() is
+    only called once, at import time above). This endpoint exists so
+    the React client can display the active provider now, and could
+    back a provider selector later without the backend changing.
+    """
+
+    return {
+        "current": getattr(provider, "name", None),
+        "providers": SUPPORTED_PROVIDERS,
+    }
 
 
 # ---------------------------------------------------------
