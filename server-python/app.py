@@ -5,48 +5,31 @@
 # You may obtain a copy of the License at
 #
 # http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
-"""Flask HTTP layer only.
+"""Flask HTTP layer for the provider-agnostic terminal agent."""
 
-Everything that used to live in one 2000-line app.py now lives in:
-  security.py  - path containment / secrets-file detection
-  tools.py     - filesystem/git/shell tools + their schemas
-  prompts.py   - the system instruction, shared by every provider
-  providers/   - one adapter per backend (Gemini, OpenAI-compatible)
-  agent.py     - the provider-agnostic tool-calling loop
+import os
 
-app.py just wires an HTTP request to agent.run_agent_loop() and
-streams the result back out. It re-exports a few names (safe_path,
-PROJECT_ROOT, is_sensitive_filename, is_command_allowed, run_command)
-purely so tests/test_tools.py keeps working unchanged against
-`app.<name>` — new code should import those directly from security.py
-/ tools.py instead.
-"""
-
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dotenv import load_dotenv
 from flask import Flask, Response, request, stream_with_context
 from flask_cors import CORS
 
 from agent import run_agent_loop
+from pending import get_pending, pop_pending
 from providers import SUPPORTED_PROVIDERS, get_provider
 from security import PROJECT_ROOT, is_sensitive_filename, safe_path  # noqa: F401
-from tools import is_command_allowed, run_command  # noqa: F401
-
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+from tools import (
+    TOOL_EXECUTOR,
+    TOOL_FUNCTIONS,
+    TOOL_TIMEOUTS,
+    DEFAULT_TOOL_TIMEOUT,
+    WRITE_TOOL_NAMES,
+    is_command_allowed,
+    run_command,
+)  # noqa: F401
 
 load_dotenv()
-
-# Which backend answers /chat and /stream. Set PROVIDER=gemini
-# (default), ollama, or kilo in .env — see providers/__init__.py for
-# what each one reads.
 provider = get_provider()
 
 app = Flask(__name__)
@@ -55,30 +38,13 @@ CORS(app)
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(exc):
-    """Return a JSON error instead of Flask's default 500 HTML page."""
-
     print(f"[Unhandled error] {exc}")
+    return {"text": "", "error": f"Unexpected server error: {exc}"}, 500
 
-    return {
-        "text": "",
-        "error": f"Unexpected server error: {exc}",
-    }, 500
-
-
-# ---------------------------------------------------------
-# Providers endpoint
-# ---------------------------------------------------------
 
 @app.route("/providers", methods=["GET"])
 def providers():
-    """Report which provider is currently active and which are supported.
-
-    This is read-only: switching providers still requires setting
-    PROVIDER in .env and restarting the server (get_provider() is
-    only called once, at import time above). This endpoint exists so
-    the React client can display the active provider now, and could
-    back a provider selector later without the backend changing.
-    """
+    """Report the active provider and supported provider names."""
 
     return {
         "current": getattr(provider, "name", None),
@@ -86,16 +52,79 @@ def providers():
     }
 
 
-# ---------------------------------------------------------
-# Chat endpoint
-# ---------------------------------------------------------
+@app.route("/confirm", methods=["POST"])
+def confirm_action():
+    """Explicitly approve or reject a pending model write operation.
+
+    The model never receives a way to set confirm=True. Only this HTTP
+    endpoint can consume a pending action and execute its exact stored
+    arguments with confirmation enabled.
+    """
+
+    data = request.get_json(silent=True) or {}
+    action_id = str(data.get("action_id", "")).strip()
+    confirmed = data.get("confirmed")
+
+    if not action_id:
+        return {"error": "action_id is required."}, 400
+
+    if confirmed is not True:
+        action = pop_pending(action_id)
+        if action is None:
+            return {"error": "Pending action not found or already resolved."}, 404
+        return {
+            "confirmed": False,
+            "action_id": action_id,
+            "cancelled": True,
+        }
+
+    action = pop_pending(action_id)
+    if action is None:
+        return {"error": "Pending action not found or already resolved."}, 404
+
+    if action.tool_name not in WRITE_TOOL_NAMES:
+        return {"error": "Only pending write actions can be confirmed."}, 400
+
+    function = TOOL_FUNCTIONS.get(action.tool_name)
+    if function is None:
+        return {"error": f"Tool no longer exists: {action.tool_name}"}, 500
+
+    args = dict(action.args)
+    args["confirm"] = True
+    timeout_seconds = TOOL_TIMEOUTS.get(action.tool_name, DEFAULT_TOOL_TIMEOUT)
+    future = TOOL_EXECUTOR.submit(function, **args)
+
+    try:
+        result = future.result(timeout=timeout_seconds)
+    except FutureTimeoutError:
+        return {
+            "error": (
+                f"Tool {action.tool_name} exceeded its "
+                f"{timeout_seconds}s execution limit."
+            )
+        }, 504
+    except Exception as exc:
+        return {"error": f"Tool {action.tool_name} failed: {exc}"}, 500
+
+    if isinstance(result, dict) and result.get("error"):
+        return {
+            "confirmed": True,
+            "action_id": action_id,
+            "tool": action.tool_name,
+            "result": result,
+        }, 400
+
+    return {
+        "confirmed": True,
+        "action_id": action_id,
+        "tool": action.tool_name,
+        "result": result,
+    }
+
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    """Process a chat request and run the tool-calling loop to completion."""
-
     data = request.get_json(silent=True) or {}
-
     msg = data.get("chat", "")
     history = data.get("history", [])
 
@@ -117,21 +146,19 @@ def chat():
     try:
         for event in run_agent_loop(provider, contents):
             if event["type"] == "tool_call":
-                tool_activity.append(
-                    {
-                        "type": "tool_call",
-                        "name": event["name"],
-                        "args": event["args"],
-                    }
-                )
+                tool_activity.append({
+                    "type": "tool_call",
+                    "name": event["name"],
+                    "args": event["args"],
+                })
             elif event["type"] == "tool_result":
-                tool_activity.append(
-                    {
-                        "type": "tool_result",
-                        "name": event["name"],
-                        "result": event["result"],
-                    }
-                )
+                tool_activity.append({
+                    "type": "tool_result",
+                    "name": event["name"],
+                    "result": event["result"],
+                })
+            elif event["type"] == "pending_confirmation":
+                tool_activity.append(event)
             elif event["type"] == "final":
                 final_text = event["text"]
             elif event["type"] == "error":
@@ -146,35 +173,18 @@ def chat():
             "tool_activity": tool_activity,
         }, 502
 
-    return {
-        "text": final_text,
-        "tool_activity": tool_activity,
-    }
+    return {"text": final_text, "tool_activity": tool_activity}
 
-
-# ---------------------------------------------------------
-# Streaming endpoint
-# ---------------------------------------------------------
 
 @app.route("/stream", methods=["POST"])
 def stream():
-    """Stream the tool-calling loop's activity and final response.
-
-    The existing React client reads this endpoint as plain text and
-    appends every chunk directly to the message it is displaying, so
-    this keeps emitting plain text (no JSON envelope) to stay
-    compatible with it. Tool-call and tool-error activity is streamed
-    first as short, human-readable status lines, followed by the
-    model's final answer text.
-    """
+    """Stream agent activity and the final response as plain text."""
 
     def format_args(args):
         return ", ".join(f"{k}={v!r}" for k, v in args.items())
 
     def generate():
-
         data = request.get_json(silent=True) or {}
-
         msg = data.get("chat", "")
         history = data.get("history", [])
 
@@ -190,48 +200,27 @@ def stream():
 
         try:
             for event in run_agent_loop(provider, contents):
-
                 if event["type"] == "tool_call":
-                    yield (
-                        f"\n\u2699\ufe0f {event['name']}"
-                        f"({format_args(event['args'])})\n"
-                    )
-
+                    yield f"\n⚙️ {event['name']}({format_args(event['args'])})\n"
                 elif event["type"] == "tool_result":
                     result = event["result"]
                     if isinstance(result, dict) and result.get("error"):
-                        yield f"\u26a0\ufe0f {event['name']}: {result['error']}\n"
-
+                        yield f"⚠️ {event['name']}: {result['error']}\n"
+                elif event["type"] == "pending_confirmation":
+                    yield (
+                        f"\n[Confirmation required: {event['name']} "
+                        f"action_id={event['action_id']}]\n"
+                    )
                 elif event["type"] == "final":
                     yield event["text"]
-
                 elif event["type"] == "error":
                     yield f"\n[Error: {event['message']}]"
-
         except Exception as exc:
-            # Never let an uncaught exception surface as a bare
-            # connection drop / Flask 500 mid-stream.
             yield f"\n[Error: {exc}]"
 
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/plain",
-    )
+    return Response(stream_with_context(generate()), mimetype="text/plain")
 
-
-# ---------------------------------------------------------
-# Run Flask
-# ---------------------------------------------------------
 
 if __name__ == "__main__":
-
-    import os
-
-    port = int(
-        os.getenv("PORT", "9000")
-    )
-
-    app.run(
-        host="127.0.0.1",
-        port=port,
-    )
+    port = int(os.getenv("PORT", "9000"))
+    app.run(host="127.0.0.1", port=port)
