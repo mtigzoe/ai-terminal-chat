@@ -407,10 +407,25 @@ Further enhancements may include structured plan objects, automatic continuation
 
 ### Terminal and Git integration
 
-- Additional terminal commands with explicit permissions
-- More Git operations with appropriate confirmation requirements
-- Better presentation of command output and Git changes to screen-reader users
-- Improved handling of long-running commands and interactive workflows
+Read-only Git inspection and controlled terminal execution are implemented on the `git-integrations` branch. Dedicated tools expose `git status`, `git diff` (including staged), `git log`, and `git branch`. The general `run_command` tool remains restricted to an explicit allowlist of development commands (selected Git inspection forms, tests, builds, linters, and dependency installation). Destructive, system-level, and credential-exposing commands continue to be refused, and command chaining, piping, redirection, and shell substitution are blocked.
+
+Implemented capabilities include:
+
+- Dedicated Git inspection tools (`git_status`, `git_diff`, `git_log`, `git_branch`) separate from the general command runner
+- Allowlisted terminal commands for common local development workflows (tests, builds, package installs, version checks)
+- Backend validation of commands before execution, with timeouts and output size limits
+- Clear separation between read-only inspection and any future mutation of repository state
+
+Further work may include:
+
+- Additional terminal commands with explicit, reviewed permissions and clear documentation of each allowed prefix
+- Git mutation operations (for example add, commit, checkout, and carefully scoped push) gated by the same confirmation model used for file changes
+- Unified pending-action confirmation for terminal and Git writes, with accessible previews of the exact command or repository change
+- Better presentation of long command output and Git diffs for screen-reader users (structured summaries, navigable sections, and truncation notices)
+- Improved handling of long-running commands, cancellation, and non-interactive workflows
+- Expanded regression tests for allowlist enforcement, blocked patterns, Git tool boundaries, and confirmation requirements for any new write paths
+
+These extensions should preserve the existing security model: the backend, not the model, decides what may run, and repository-changing actions should never execute without explicit user confirmation.
 
 ### Provider ecosystem
 
