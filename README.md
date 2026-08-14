@@ -139,9 +139,6 @@ http://localhost:3000
 
 If the frontend needs a different backend URL, set `VITE_API_URL` in the frontend environment configuration. The frontend defaults to `http://localhost:9000`.
 
-<<<<<<< HEAD
-The Python backend can be run with [uv](https://docs.astral.sh/uv/), a fast Python package and project manager. This is the recommended way to run the backend during development.
-=======
 ## Running the Python backend with uv
 
 The normal development workflow is:
@@ -168,21 +165,11 @@ Using `uv run` ensures commands use the project's managed Python environment and
 
 ## Running without uv
 
-`uv` is the recommended workflow, but a standard Python virtual environment can also be used:
->>>>>>> origin/main
+`uv` is the recommended workflow, but a standard Python virtual environment can also be used.
 
 ### Windows PowerShell
 
 From the repository root:
-
-```powershell
-cd server-python
-uv run app.py
-```
-
-`uv run` creates and manages the project's virtual environment as needed and runs the application with its dependencies available. You do not need to manually activate a virtual environment first.
-
-If you prefer to create and activate a virtual environment yourself, you can instead use:
 
 ```powershell
 cd server-python
@@ -192,11 +179,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-<<<<<<< HEAD
-Then install the dependencies with:
-=======
 ### Linux/macOS
->>>>>>> origin/main
 
 ```bash
 cd server-python
@@ -206,21 +189,11 @@ pip install -r requirements.txt
 python app.py
 ```
 
-<<<<<<< HEAD
-If the Google GenAI SDK is not already included by the requirements file, install it with:
-=======
 ## API endpoints
->>>>>>> origin/main
 
 The Flask backend provides these main endpoints:
 
-<<<<<<< HEAD
-### Configuration
-
-Create a `.env` file from `.env.example` and set your Gemini API key:
-=======
 ### Chat
->>>>>>> origin/main
 
 ```text
 POST /chat
@@ -228,20 +201,7 @@ POST /chat
 
 Runs a conversation to completion and returns the final model response together with tool activity.
 
-<<<<<<< HEAD
-### Start the server with uv
-
-The simplest development command is:
-
-```powershell
-cd server-python
-uv run app.py
-```
-
-The backend runs at:
-=======
 ### Streaming chat
->>>>>>> origin/main
 
 ```text
 POST /stream
@@ -366,16 +326,69 @@ When extending the project:
 
 ## Future direction
 
-Possible future work includes:
+The long-term goal is to develop AI Terminal Chat into an accessible, security-conscious terminal agent for local software development. Possible future work includes:
+
+### Accessibility
+
+- Advanced screen-reader support for tool activity, model state, errors, and long terminal output
+- Accessible confirmation dialogs and action previews
+- Improved keyboard navigation and predictable focus management
+- Keyboard shortcuts for common terminal-agent workflows
+- Accessibility regression testing for important UI changes
+
+### Agent capabilities
+
+- Multi-step task execution with explicit planning and progress reporting
+- Automatic verification after file, terminal, and Git changes
+- Recovery and retry strategies for failed commands or tools
+- Better context-aware tool selection
+- Improved detection and recovery from repeated or stuck agent actions
+
+### Security and permissions
+
+- A unified pending-action confirmation system for files, terminal commands, and Git operations
+- Configurable permission levels for different tool categories
+- Clear previews of proposed changes before execution
+- Action history or audit logging
+- Expanded security regression tests for path traversal, command restrictions, sensitive files, and confirmation enforcement
+
+### Local and offline AI
+
+- Complete Ollama provider support
+- Support for additional OpenAI-compatible local providers
+- Local-only/offline operation without a cloud API dependency
+- Model selection and provider configuration from the application
+- Provider capability detection so unsupported tool or streaming features are handled cleanly
+
+### Terminal and Git integration
+
+- Additional terminal commands with explicit permissions
+- More Git operations with appropriate confirmation requirements
+- Better presentation of command output and Git changes to screen-reader users
+- Improved handling of long-running commands and interactive workflows
+
+### Provider ecosystem
 
 - Complete provider/agent test coverage
-- Additional providers such as Ollama and other OpenAI-compatible backends
-- A unified pending-action confirmation system
-- More accessible presentation of tool results
-- Additional Git tools with explicit permissions
-- More terminal commands with explicit permissions
-- Better error and timeout handling
-- More advanced terminal-agent behavior
+- Additional cloud and local AI providers
+- Consistent tool-calling and streaming behavior across providers
+- Provider compatibility tests to reduce regressions when adding models
+
+### Reliability and testing
+
+- End-to-end tests covering the frontend, backend, provider, and tool loop
+- Automated security and accessibility regression tests
+- Better error, timeout, cancellation, and recovery handling
+- More robust testing of multi-step agent workflows
+
+### Desktop application
+
+- An Electron-based desktop application for a more integrated terminal experience
+- Integrated project and terminal views
+- Native local-project selection and configuration
+- Accessible desktop workflows that do not depend on browser navigation
+
+The roadmap is intentionally incremental: safety, accessibility, reliability, and backend-enforced permissions should remain priorities as more agent capabilities are added.
 
 ## License
 
