@@ -55,11 +55,12 @@ ai-terminal-chat/
 - Text-file searching
 - Controlled terminal command execution
 - Git status, diff, log, and branch inspection
+- Git staging through a confirmation-required `git_add` operation
 - Streaming responses
 - Tool-activity reporting
 - Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, and completion
 - Accessible frontend agent-status announcements
-- Confirmation-required file creation, modification, patching, and deletion
+- Confirmation-required file creation, modification, patching, deletion, and Git staging
 - Filesystem access restricted to the project directory
 - Sensitive-file protection for files such as `.env`, credentials, keys, and `.git`
 - Maximum file-size protection when reading and searching files
@@ -103,18 +104,20 @@ PORT=9000
 
 Do not commit `.env` or expose your API key in source code.
 
-Install the Python project dependencies with `uv`:
+Install Python dependencies with the repository's supported environment workflow. If the repository has a `pyproject.toml`, use `uv sync`; otherwise use the `requirements.txt` workflow described below.
+
+For a standard Python virtual environment on Windows:
 
 ```powershell
-uv sync
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
 ```
-
-`uv` creates and manages the project's virtual environment and installs the dependencies declared by the Python project. You do not need to manually create or activate a traditional `venv` when using this workflow.
 
 Start the backend:
 
 ```powershell
-uv run app.py
+python app.py
 ```
 
 The backend normally runs at:
@@ -141,41 +144,33 @@ http://localhost:3000
 
 If the frontend needs a different backend URL, set `VITE_API_URL` in the frontend environment configuration. The frontend defaults to `http://localhost:9000`.
 
-## Running the Python backend with uv
+## Running the Python tests
 
-The normal development workflow is:
-
-```powershell
-cd server-python
-uv sync
-uv run app.py
-```
-
-To run the full Python test suite:
+From `server-python`, using an activated virtual environment with the required dependencies:
 
 ```powershell
-uv run pytest
+pytest
 ```
 
 To run the agent tests specifically:
 
 ```powershell
-uv run pytest tests/test_agent.py -q
+pytest tests/test_agent.py -q
 ```
 
 To run the pending-confirmation tests specifically:
 
 ```powershell
-uv run pytest tests/test_pending.py -q
+pytest tests/test_pending.py -q
 ```
 
 To run a particular test file:
 
 ```powershell
-uv run pytest tests/test_app.py
+pytest tests/test_app.py
 ```
 
-Using `uv run` ensures commands use the project's managed Python environment and dependencies.
+If the repository gains a `pyproject.toml` and `uv.lock` in the future, the equivalent managed-environment commands can be run with `uv run`.
 
 ## Running the frontend checks
 
@@ -199,32 +194,6 @@ node src/agentStatus.test.js
 
 The current `package.json` does not define an `npm test` script. React Testing Library dependencies are present, but the React test files require a configured test runner before they can be executed as a standard npm test command.
 
-## Running without uv
-
-`uv` is the recommended workflow, but a standard Python virtual environment can also be used.
-
-### Windows PowerShell
-
-From the repository root:
-
-```powershell
-cd server-python
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
-```
-
-### Linux/macOS
-
-```bash
-cd server-python
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
-```
-
 ## API endpoints
 
 The Flask backend provides these main endpoints:
@@ -244,6 +213,14 @@ POST /stream
 ```
 
 Streams tool activity and the model's response as plain text for compatibility with the React client.
+
+### Confirm a pending action
+
+```text
+POST /confirm
+```
+
+Explicitly authorizes a previously previewed mutating operation. The backend retrieves the exact pending operation by its opaque action ID rather than trusting model-supplied tool names or arguments.
 
 ## Tool calling
 
@@ -277,10 +254,13 @@ AI inspects the relevant files
 AI prepares a change
         |
         v
-Backend produces a confirmation preview
+Backend stores a pending confirmation action
         |
         v
 User explicitly confirms
+        |
+        v
+Backend retrieves the exact pending action
         |
         v
 Backend applies the change
@@ -289,7 +269,21 @@ Backend applies the change
 AI verifies the result
 ```
 
-The confirmation requirement is enforced by the backend tool implementation rather than relying only on the model to behave correctly.
+The confirmation requirement is enforced by the backend rather than relying only on the model to behave correctly. Pending actions use opaque identifiers, store the requested operation and arguments, and are consumed once when confirmed.
+
+### Confirmed operations
+
+The current confirmation system protects these mutating operations:
+
+- `create_file`
+- `write_file`
+- `apply_patch`
+- `delete_file`
+- `git_add`
+
+Read-only Git inspection tools such as `git_status`, `git_diff`, `git_log`, and `git_branch` do not require confirmation.
+
+The terminal `run_command` tool remains restricted to its existing read-only/low-risk allowlist. Confirmation does not bypass that allowlist or turn arbitrary shell commands into permitted commands.
 
 ## Provider architecture
 
@@ -343,6 +337,11 @@ Important protections include:
 - Command chaining, piping, redirection, and shell substitution are blocked.
 - Destructive/system commands are denied.
 - File creation, modification, patching, and deletion require explicit confirmation.
+- Git staging requires explicit confirmation.
+- Pending confirmations are stored server-side and identified by opaque action IDs.
+- The model cannot self-authorize a pending mutating operation.
+- Confirmed operations re-run their normal path and sensitive-file security checks before execution.
+- A pending authorization is consumed once and cannot be replayed.
 - Tool calls have execution time limits.
 - Repeated identical tool calls are detected to prevent stuck loops.
 
@@ -357,7 +356,7 @@ When extending the project:
 3. Keep local-tool validation and security rules in the backend rather than trusting the model.
 4. Prefer small, targeted changes over rewriting complete files unnecessarily.
 5. Add tests for new provider behavior and important tool/security behavior.
-6. Run the relevant tests with `uv run pytest` before committing.
+6. Run the relevant tests before committing.
 7. Test frontend accessibility changes with keyboard navigation and a screen reader.
 
 ## Future direction
@@ -374,7 +373,7 @@ The long-term goal is to develop AI Terminal Chat into an accessible, security-c
 
 ### Agent capabilities
 
-The core Agent Capabilities milestone is implemented on the `agent-capabilities` branch. It adds multi-step agent behavior, lifecycle progress reporting, recovery from failed or repeated actions, verification guidance, and accessible frontend status announcements while preserving backend-enforced safety controls.
+The core Agent Capabilities milestone is implemented. It adds multi-step agent behavior, lifecycle progress reporting, recovery from failed or repeated actions, verification guidance, and accessible frontend status announcements while preserving backend-enforced safety controls.
 
 Implemented capabilities include:
 
@@ -391,11 +390,25 @@ Further enhancements may include structured plan objects, automatic continuation
 
 ### Security and permissions
 
-- A unified pending-action confirmation system for files, terminal commands, and Git operations
+The core Security and Permissions milestone is implemented. It provides a unified backend-enforced pending-action confirmation system for filesystem mutations and Git staging while preserving the existing terminal allowlist and hard security restrictions.
+
+Implemented capabilities include:
+
+- Unified server-side pending actions for confirmation-required mutations
+- Opaque action IDs and exact storage of the requested tool and arguments
+- One-time confirmation authorization through the explicit `/confirm` endpoint
+- Protection against model-supplied `confirm=True` bypasses
+- Confirmation support for file creation, modification, patching, deletion, and Git staging
+- Reapplication of filesystem path and sensitive-file checks during confirmed execution
+- Confirmation lifecycle tests covering forged actions, replay attempts, cancellation, failures, and timeouts
+- Expanded security regression coverage for path, command, sensitive-file, and confirmation behavior
+
+The following remain future work rather than completed features:
+
 - Configurable permission levels for different tool categories
-- Clear previews of proposed changes before execution
 - Action history or audit logging
-- Expanded security regression tests for path traversal, command restrictions, sensitive files, and confirmation enforcement
+- Broader confirmation of terminal commands, subject to a separate security review
+- Additional Git mutations such as commit, checkout, reset, and push, with appropriate confirmation and permission controls
 
 ### Local and offline AI
 
@@ -407,10 +420,14 @@ Further enhancements may include structured plan objects, automatic continuation
 
 ### Terminal and Git integration
 
-- Additional terminal commands with explicit permissions
-- More Git operations with appropriate confirmation requirements
+The existing read-only terminal and Git inspection foundation is implemented. The remaining work focuses on usability, accessibility, testing, and carefully reviewed expansion rather than bypassing the current security model.
+
 - Better presentation of command output and Git changes to screen-reader users
-- Improved handling of long-running commands and interactive workflows
+- Explicit truncation reporting for long terminal and Git results
+- Improved handling of long-running commands and timeouts
+- Expanded terminal and Git regression tests
+- Additional terminal commands with explicit permissions
+- More Git operations with appropriate confirmation requirements, coordinated with the Security and Permissions architecture
 
 ### Provider ecosystem
 
