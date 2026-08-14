@@ -67,9 +67,20 @@ http://localhost:3000
 
 ## Running the Python backend
 
-From `server-python`, create and activate a virtual environment:
+The Python backend can be run with [uv](https://docs.astral.sh/uv/), a fast Python package and project manager. This is the recommended way to run the backend during development.
 
 ### Windows PowerShell
+
+From the repository root:
+
+```powershell
+cd server-python
+uv run app.py
+```
+
+`uv run` creates and manages the project's virtual environment as needed and runs the application with its dependencies available. You do not need to manually activate a virtual environment first.
+
+If you prefer to create and activate a virtual environment yourself, you can instead use:
 
 ```powershell
 cd server-python
@@ -77,17 +88,19 @@ python -m venv .venv
 .\.venv\Scripts\activate
 ```
 
-Install the dependencies:
+Then install the dependencies with:
 
 ```powershell
 uv pip install -r requirements.txt
 ```
 
-The backend also uses the Google GenAI SDK. If it is not already included by the requirements file, install it with:
+If the Google GenAI SDK is not already included by the requirements file, install it with:
 
 ```powershell
 uv pip install google-genai
 ```
+
+### Configuration
 
 Create a `.env` file from `.env.example` and set your Gemini API key:
 
@@ -98,10 +111,13 @@ PORT=9000
 
 Do not commit `.env` or expose your API key in source code.
 
-Start the server:
+### Start the server with uv
+
+The simplest development command is:
 
 ```powershell
-uv run .\app.py
+cd server-python
+uv run app.py
 ```
 
 The backend runs at:
