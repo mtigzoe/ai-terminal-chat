@@ -295,9 +295,9 @@ function App() {
           <button
             type="button"
             onClick={stopStreaming}
-            aria-label="Stop streaming response"
+            aria-label="Cancel response"
           >
-            Stop
+            Cancel response
           </button>
         )}
         <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
