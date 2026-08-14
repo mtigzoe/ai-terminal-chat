@@ -1,10 +1,18 @@
 import sys
+import time
 from pathlib import Path
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_DIR))
 
-from agent import run_agent_loop  # noqa: E402
+from agent import (  # noqa: E402
+    run_agent_loop,
+    _normalize_call_args,
+    MAX_TOOL_ROUNDS,
+    MAX_CONSECUTIVE_IDENTICAL_CALLS,
+    HARD_ABORT_CONSECUTIVE_CALLS,
+    MAX_CONSECUTIVE_ERRORS,
+)
 from base import Provider, ProviderResponse, ToolCall  # noqa: E402
 from pending import clear_pending, get_pending  # noqa: E402
 import agent  # noqa: E402
@@ -27,12 +35,33 @@ class FakeProvider(Provider):
         return contents + [{"role": "tool", "results": results}]
 
 
+class FailingProvider(Provider):
+    def build_contents(self, msg, history):
+        return []
+
+    def generate(self, contents):
+        raise RuntimeError("provider offline")
+
+    def append_model_turn(self, contents, response):
+        return contents
+
+    def append_tool_results(self, contents, results):
+        return contents
+
+
+def _events_of_type(events, event_type):
+    return [e for e in events if e["type"] == event_type]
+
+
 def test_agent_returns_final_text_without_tools():
     provider = FakeProvider([ProviderResponse(text="hello")])
 
     events = list(run_agent_loop(provider, []))
 
     assert events[0]["type"] == "progress"
+    assert events[0]["phase"] == "plan"
+    complete = [e for e in events if e.get("phase") == "complete"]
+    assert complete
     assert events[-1] == {"type": "final", "text": "hello"}
 
 
@@ -54,7 +83,7 @@ def test_agent_executes_read_only_tool_and_continues(monkeypatch):
     events = list(run_agent_loop(provider, []))
 
     assert calls == ["worked"]
-    progress_events = [e for e in events if e["type"] == "progress"]
+    progress_events = _events_of_type(events, "progress")
     assert len(progress_events) >= 1
     assert any(e["type"] == "tool_call" for e in events)
     assert any(
@@ -62,6 +91,71 @@ def test_agent_executes_read_only_tool_and_continues(monkeypatch):
         for e in events
     )
     assert events[-1] == {"type": "final", "text": "done"}
+    assert any(e.get("phase") == "complete" for e in progress_events)
+
+
+def test_multi_step_tool_execution(monkeypatch):
+    order = []
+
+    def inspect_tool(path="."):
+        order.append(("inspect", path))
+        return {"path": path, "entries": []}
+
+    def run_tool(command=""):
+        order.append(("run", command))
+        return {"command": command, "returncode": 0, "stdout": "ok", "stderr": ""}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "list_files", inspect_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "list_files", 5)
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "run_command", run_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "run_command", 5)
+
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("list_files", {"path": "."})],
+        ),
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("run_command", {"command": "pytest"})],
+        ),
+        ProviderResponse(text="tests passed"),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+
+    assert order == [("inspect", "."), ("run", "pytest")]
+    phases = [e.get("phase") for e in events if e["type"] == "progress"]
+    assert "plan" in phases
+    assert "inspect" in phases
+    assert "execute" in phases
+    assert "complete" in phases
+    assert events[-1] == {"type": "final", "text": "tests passed"}
+
+
+def test_progress_messages_are_meaningful(monkeypatch):
+    def read_tool(path):
+        return {"path": path, "contents": "x"}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "read_file", read_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "read_file", 5)
+
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("read_file", {"path": "app.py"})],
+        ),
+        ProviderResponse(text="done"),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+    progress = _events_of_type(events, "progress")
+    messages = [e["message"] for e in progress]
+
+    assert any("Planning" in m for m in messages)
+    assert any("Inspecting app.py" in m for m in messages)
+    assert any("Task completed" in m for m in messages)
+    assert not all("requesting next model turn" in m for m in messages)
 
 
 def test_agent_never_self_confirms_write(monkeypatch):
@@ -92,16 +186,57 @@ def test_agent_never_self_confirms_write(monkeypatch):
 
         events = list(run_agent_loop(provider, []))
 
-        pending = next(event for event in events if event["type"] == "pending_confirmation")
+        pending = next(e for e in events if e["type"] == "pending_confirmation")
         stored = get_pending(pending["action_id"])
 
         assert calls == [False]
         assert stored is not None
         assert stored.args == {"path": "example.txt"}
         assert pending["preview"]["requires_confirmation"] is True
+
+        confirm_progress = [
+            e for e in events
+            if e["type"] == "progress" and e.get("phase") == "confirm"
+        ]
+        assert confirm_progress
+        assert any("Waiting for confirmation" in e["message"] for e in confirm_progress)
     finally:
         agent.WRITE_TOOL_NAMES.discard("fake_write")
         clear_pending()
+
+
+def test_write_confirmation_stores_exact_requested_operation(monkeypatch):
+    clear_pending()
+
+    def fake_write(path, contents="", confirm=False):
+        if not confirm:
+            return {
+                "requires_confirmation": True,
+                "path": path,
+                "preview": contents,
+            }
+        return {"path": path, "created": True, "bytes_written": len(contents)}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "write_file", fake_write)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "write_file", 5)
+
+    requested = {"path": "src/main.py", "contents": "print(1)\n", "confirm": True}
+
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("write_file", requested)],
+        )
+    ])
+
+    events = list(run_agent_loop(provider, []))
+    pending = next(e for e in events if e["type"] == "pending_confirmation")
+    stored = get_pending(pending["action_id"])
+
+    assert stored.args["path"] == "src/main.py"
+    assert stored.args["contents"] == "print(1)\n"
+    assert pending["args"] == requested
+    clear_pending()
 
 
 def test_agent_emits_recovery_hint_after_consecutive_errors(monkeypatch):
@@ -111,8 +246,6 @@ def test_agent_emits_recovery_hint_after_consecutive_errors(monkeypatch):
     monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_fail", failing_tool)
     monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_fail", 5)
 
-    # Three failing calls in one model turn should attach a recovery hint
-    # on the third result.
     provider = FakeProvider([
         ProviderResponse(
             text=None,
@@ -127,9 +260,237 @@ def test_agent_emits_recovery_hint_after_consecutive_errors(monkeypatch):
 
     events = list(run_agent_loop(provider, []))
 
-    tool_results = [e for e in events if e["type"] == "tool_result"]
+    tool_results = _events_of_type(events, "tool_result")
     assert len(tool_results) == 3
     assert "recovery_hint" not in tool_results[0]["result"]
     assert "recovery_hint" not in tool_results[1]["result"]
     assert "recovery_hint" in tool_results[2]["result"]
+    recover_progress = [
+        e for e in events if e["type"] == "progress" and e.get("phase") == "recover"
+    ]
+    assert recover_progress
     assert events[-1] == {"type": "final", "text": "stopped after failures"}
+
+
+def test_consecutive_errors_hard_stop(monkeypatch):
+    def failing_tool(**kwargs):
+        return {"error": "always fails"}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_fail", failing_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_fail", 5)
+
+    calls = [
+        ToolCall("fake_fail", {"n": i}) for i in range(1, MAX_CONSECUTIVE_ERRORS + 1)
+    ]
+    provider = FakeProvider([
+        ProviderResponse(text=None, tool_calls=calls),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+
+    errors = _events_of_type(events, "error")
+    assert errors
+    assert "consecutive tool failures" in errors[-1]["message"]
+    assert not any(e["type"] == "final" for e in events)
+
+
+def test_repeated_identical_calls_soft_block(monkeypatch):
+    def ok_tool(path="x"):
+        return {"path": path, "contents": "data"}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "read_file", ok_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "read_file", 5)
+
+    n = MAX_CONSECUTIVE_IDENTICAL_CALLS + 1
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("read_file", {"path": "a.py"})] * n,
+        ),
+        ProviderResponse(text="recovered"),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+    tool_results = _events_of_type(events, "tool_result")
+    assert any("already been called" in r["result"].get("error", "") for r in tool_results)
+    assert events[-1]["type"] == "final"
+
+
+def test_repeated_identical_calls_hard_abort(monkeypatch):
+    def ok_tool(path="x"):
+        return {"path": path, "contents": "data"}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "read_file", ok_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "read_file", 5)
+
+    n = HARD_ABORT_CONSECUTIVE_CALLS + 1
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("read_file", {"path": "a.py"})] * n,
+        ),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+    errors = _events_of_type(events, "error")
+    assert errors
+    assert "times in a row" in errors[-1]["message"]
+    assert not any(e["type"] == "final" for e in events)
+
+
+def test_path_normalization_for_identical_calls(monkeypatch):
+    calls = []
+
+    def ok_tool(path="x"):
+        calls.append(path)
+        return {"path": path, "contents": "data"}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "read_file", ok_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "read_file", 5)
+
+    n = MAX_CONSECUTIVE_IDENTICAL_CALLS + 1
+    tool_calls = []
+    for i in range(n):
+        path = "./a.py" if i % 2 == 0 else "a.py"
+        tool_calls.append(ToolCall("read_file", {"path": path}))
+
+    provider = FakeProvider([
+        ProviderResponse(text=None, tool_calls=tool_calls),
+        ProviderResponse(text="done"),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+    tool_results = _events_of_type(events, "tool_result")
+    assert any("already been called" in r["result"].get("error", "") for r in tool_results)
+
+
+def test_normalize_call_args_strips_dot_slash():
+    assert _normalize_call_args({"path": "./src/app.py"}) == (
+        ("path", "src/app.py"),
+    )
+    assert _normalize_call_args({"path": "src/app.py"}) == (
+        ("path", "src/app.py"),
+    )
+    assert _normalize_call_args({"path": "./src/app.py"}) == _normalize_call_args(
+        {"path": "src/app.py"}
+    )
+
+
+def test_tool_timeout(monkeypatch):
+    def slow_tool(**kwargs):
+        time.sleep(2)
+        return {"ok": True}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_slow", slow_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_slow", 0.1)
+
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("fake_slow", {})],
+        ),
+        ProviderResponse(text="after timeout"),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+    tool_results = _events_of_type(events, "tool_result")
+    assert tool_results
+    assert "exceeded its" in tool_results[0]["result"]["error"]
+    assert events[-1] == {"type": "final", "text": "after timeout"}
+
+
+def test_provider_failure():
+    provider = FailingProvider()
+    events = list(run_agent_loop(provider, []))
+
+    errors = _events_of_type(events, "error")
+    assert errors
+    assert "provider offline" in errors[-1]["message"]
+    progress_errors = [
+        e for e in events if e["type"] == "progress" and e.get("phase") == "error"
+    ]
+    assert progress_errors
+
+
+def test_unknown_tool():
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("does_not_exist", {"x": 1})],
+        ),
+        ProviderResponse(text="handled unknown tool"),
+    ])
+
+    events = list(run_agent_loop(provider, []))
+    tool_results = _events_of_type(events, "tool_result")
+    assert "Unknown tool" in tool_results[0]["result"]["error"]
+    assert events[-1]["type"] == "final"
+
+
+def test_maximum_tool_rounds(monkeypatch):
+    def ok_tool(n=0):
+        return {"n": n}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_read", ok_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_read", 5)
+
+    responses = [
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("fake_read", {"n": i})],
+        )
+        for i in range(MAX_TOOL_ROUNDS)
+    ]
+    provider = FakeProvider(responses)
+
+    events = list(run_agent_loop(provider, []))
+    errors = _events_of_type(events, "error")
+    assert errors
+    assert "maximum number of tool-calling rounds" in errors[-1]["message"]
+    assert not any(e["type"] == "final" for e in events)
+
+
+def test_verification_hint_after_successful_write_result(monkeypatch):
+    """If a write success result is observed in-loop, emit verify progress + hint."""
+
+    def success_write(path, contents="", confirm=False):
+        return {
+            "path": path,
+            "created": True,
+            "bytes_written": len(contents or ""),
+        }
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "create_file", success_write)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "create_file", 5)
+
+    agent.WRITE_TOOL_NAMES.discard("create_file")
+    try:
+        provider = FakeProvider([
+            ProviderResponse(
+                text=None,
+                tool_calls=[
+                    ToolCall("create_file", {"path": "new.txt", "contents": "hi"})
+                ],
+            ),
+            ProviderResponse(text="verified"),
+        ])
+        events = list(run_agent_loop(provider, []))
+        verify = [
+            e for e in events
+            if e["type"] == "progress" and e.get("phase") == "verify"
+        ]
+        assert verify
+        results = _events_of_type(events, "tool_result")
+        assert "verification_hint" in results[0]["result"]
+    finally:
+        agent.WRITE_TOOL_NAMES.add("create_file")
+
+
+def test_final_completion_progress():
+    provider = FakeProvider([ProviderResponse(text="all done")])
+    events = list(run_agent_loop(provider, []))
+    assert any(
+        e["type"] == "progress" and e.get("phase") == "complete"
+        for e in events
+    )
+    assert events[-1] == {"type": "final", "text": "all done"}
