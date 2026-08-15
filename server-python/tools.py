@@ -361,23 +361,35 @@ def run_command(command: str) -> dict:
         args = shlex.split(command, posix=False)
 
         result = subprocess.run(
-        args,
-        cwd=PROJECT_ROOT,
-        shell=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
+            args,
+            cwd=PROJECT_ROOT,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
 
         # Cap output so a noisy command can't blow up the context window.
         max_output = 20_000
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        stdout_truncated = len(stdout) > max_output
+        stderr_truncated = len(stderr) > max_output
+        truncated = stdout_truncated or stderr_truncated
 
-        return {
+        payload = {
             "command": command,
             "returncode": result.returncode,
-            "stdout": result.stdout[:max_output],
-            "stderr": result.stderr[:max_output],
+            "stdout": stdout[:max_output],
+            "stderr": stderr[:max_output],
+            "truncated": truncated,
         }
+        if truncated:
+            payload["truncation_note"] = (
+                f"Output was truncated to {max_output} characters per "
+                f"stream so the model context is not overwhelmed."
+            )
+        return payload
 
     except subprocess.TimeoutExpired:
         return {
@@ -393,6 +405,22 @@ def run_command(command: str) -> dict:
 # ---------------------------------------------------------
 # Git tools
 # ---------------------------------------------------------
+
+# Subprocess timeouts for Git inspection tools. Kept at or below the
+# agent-level TOOL_TIMEOUTS entries so the tool returns a clear timeout
+# error before the agent abandons the call. True process cancellation is
+# intentionally not implemented in this milestone.
+GIT_STATUS_TIMEOUT = 10
+GIT_DIFF_TIMEOUT = 10
+GIT_LOG_TIMEOUT = 10
+GIT_BRANCH_TIMEOUT = 10
+
+# Output caps so pathological repos cannot overwhelm model context.
+GIT_STATUS_MAX_CHARS = 20_000
+GIT_LOG_MAX_CHARS = 20_000
+GIT_BRANCH_MAX_CHARS = 20_000
+GIT_DIFF_MAX_CHARS = 50_000
+
 
 def git_status() -> dict:
     """Show the current git status of the project.
@@ -410,19 +438,34 @@ def git_status() -> dict:
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=GIT_STATUS_TIMEOUT,
         )
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
-        return {"error": "git status timed out."}
+        return {
+            "error": (
+                f"git status timed out after {GIT_STATUS_TIMEOUT} seconds."
+            )
+        }
     except Exception as exc:
         return {"error": f"Could not run git status: {exc}"}
 
     if result.returncode != 0:
         return {"error": result.stderr.strip() or "git status failed."}
 
-    return {"status": result.stdout}
+    status_text = result.stdout or ""
+    truncated = len(status_text) > GIT_STATUS_MAX_CHARS
+    payload = {
+        "status": status_text[:GIT_STATUS_MAX_CHARS],
+        "truncated": truncated,
+    }
+    if truncated:
+        payload["truncation_note"] = (
+            f"Status output was truncated to {GIT_STATUS_MAX_CHARS} "
+            f"characters."
+        )
+    return payload
 
 
 def git_diff(path: str = "", staged: bool = False) -> dict:
@@ -457,27 +500,34 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=GIT_DIFF_TIMEOUT,
         )
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
-        return {"error": "git diff timed out."}
+        return {
+            "error": (
+                f"git diff timed out after {GIT_DIFF_TIMEOUT} seconds."
+            )
+        }
     except Exception as exc:
         return {"error": f"Could not run git diff: {exc}"}
 
     if result.returncode != 0:
         return {"error": result.stderr.strip() or "git diff failed."}
 
-    diff_text = result.stdout
-    max_diff = 50_000
-    truncated = False
-
-    if len(diff_text) > max_diff:
-        diff_text = diff_text[:max_diff]
-        truncated = True
-
-    return {"diff": diff_text, "truncated": truncated}
+    diff_text = result.stdout or ""
+    truncated = len(diff_text) > GIT_DIFF_MAX_CHARS
+    payload = {
+        "diff": diff_text[:GIT_DIFF_MAX_CHARS],
+        "truncated": truncated,
+    }
+    if truncated:
+        payload["truncation_note"] = (
+            f"Diff output was truncated to {GIT_DIFF_MAX_CHARS} "
+            f"characters. Request a path-scoped diff for a smaller view."
+        )
+    return payload
 
 
 def git_log(max_count: int = 10) -> dict:
@@ -503,19 +553,33 @@ def git_log(max_count: int = 10) -> dict:
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=GIT_LOG_TIMEOUT,
         )
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
-        return {"error": "git log timed out."}
+        return {
+            "error": (
+                f"git log timed out after {GIT_LOG_TIMEOUT} seconds."
+            )
+        }
     except Exception as exc:
         return {"error": f"Could not run git log: {exc}"}
 
     if result.returncode != 0:
         return {"error": result.stderr.strip() or "git log failed."}
 
-    return {"log": result.stdout}
+    log_text = result.stdout or ""
+    truncated = len(log_text) > GIT_LOG_MAX_CHARS
+    payload = {
+        "log": log_text[:GIT_LOG_MAX_CHARS],
+        "truncated": truncated,
+    }
+    if truncated:
+        payload["truncation_note"] = (
+            f"Log output was truncated to {GIT_LOG_MAX_CHARS} characters."
+        )
+    return payload
 
 
 def git_branch() -> dict:
@@ -532,19 +596,34 @@ def git_branch() -> dict:
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=GIT_BRANCH_TIMEOUT,
         )
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
-        return {"error": "git branch timed out."}
+        return {
+            "error": (
+                f"git branch timed out after {GIT_BRANCH_TIMEOUT} seconds."
+            )
+        }
     except Exception as exc:
         return {"error": f"Could not run git branch: {exc}"}
 
     if result.returncode != 0:
         return {"error": result.stderr.strip() or "git branch failed."}
 
-    return {"branches": result.stdout}
+    branches_text = result.stdout or ""
+    truncated = len(branches_text) > GIT_BRANCH_MAX_CHARS
+    payload = {
+        "branches": branches_text[:GIT_BRANCH_MAX_CHARS],
+        "truncated": truncated,
+    }
+    if truncated:
+        payload["truncation_note"] = (
+            f"Branch list was truncated to {GIT_BRANCH_MAX_CHARS} "
+            f"characters."
+        )
+    return payload
 
 
 def git_add(path: str, confirm: bool = False) -> dict:

@@ -99,11 +99,11 @@ def test_run_command_rejects_secret_access():
     assert "blocked" in result["error"].lower() or "not allowed" in result["error"].lower()
 
 
-def test_run_command_executes_pwd():
-    result = app.run_command("pwd")
+def test_run_command_executes_python_version():
+    result = app.run_command("python --version")
     assert result["returncode"] == 0
-    assert result["stdout"].strip()
-
+    assert result["stdout"].strip() or result["stderr"].strip()
+    assert result.get("truncated") is False
 
 # ---------------------------------------------------------
 # git_add: unified confirmation architecture, git category

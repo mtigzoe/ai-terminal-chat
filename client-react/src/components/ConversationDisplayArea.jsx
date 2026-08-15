@@ -70,10 +70,17 @@ function formatActivityItem(item) {
 
   if (item.type === 'tool_result') {
     const resultError = item.result?.error;
+    if (resultError) {
+      return {
+        kind: 'result',
+        text: `← ${item.name || 'tool'} — Error: ${resultError}`,
+      };
+    }
+    const truncated = item.result?.truncated === true;
     return {
       kind: 'result',
-      text: resultError
-        ? `← ${item.name || 'tool'} — Error: ${resultError}`
+      text: truncated
+        ? `← ${item.name || 'tool'} — Output truncated`
         : `← ${item.name || 'tool'}`,
     };
   }
