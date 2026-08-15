@@ -34,10 +34,11 @@ def get_provider(name: str = None) -> Provider:
         provider = GeminiProvider()
 
     elif name == "ollama":
-        from openai_compatible import OpenAICompatibleProvider
-        provider = OpenAICompatibleProvider(
+        from ollama import OllamaProvider
+        provider = OllamaProvider(
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
             model=os.getenv("OLLAMA_MODEL", "llama3.1"),
+            timeout=int(os.getenv("OLLAMA_TIMEOUT", "120")),
         )
 
     elif name == "kilo":
