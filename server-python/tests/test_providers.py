@@ -10,10 +10,12 @@ from gemini import _to_gemini_schema  # noqa: E402
 from kilo import KiloProvider  # noqa: E402
 from ollama import OllamaProvider, native_and_openai_urls  # noqa: E402
 from openai_compatible import OpenAICompatibleProvider  # noqa: E402
+from anthropic_provider import AnthropicProvider  # noqa: E402
 from openai_provider import OpenAIProvider  # noqa: E402
 from openrouter import OpenRouterProvider  # noqa: E402
 from providers import SUPPORTED_PROVIDERS, get_provider  # noqa: E402
 from xai import XAIProvider  # noqa: E402
+from base import ToolCall  # noqa: E402
 
 
 def test_gemini_schema_conversion_is_recursive():
@@ -1242,3 +1244,222 @@ def test_openrouter_public_config_never_includes_api_key(monkeypatch):
     assert "secret" not in str(public).lower()
     assert public["provider"] == "openrouter"
     assert public["base_url"] == "https://openrouter.ai/api/v1"
+
+
+# --- Anthropic (native Messages API) ---
+
+
+def test_anthropic_is_in_supported_providers():
+    assert "anthropic" in SUPPORTED_PROVIDERS
+
+
+def test_anthropic_provider_requires_api_key():
+    try:
+        AnthropicProvider(api_key=None)
+    except RuntimeError as exc:
+        assert "ANTHROPIC_API_KEY" in str(exc)
+    else:
+        raise AssertionError("AnthropicProvider should require an API key")
+
+
+def test_anthropic_provider_configuration():
+    provider = AnthropicProvider(
+        api_key="test-key",
+        model="claude-sonnet-4-5",
+        base_url="https://api.anthropic.com",
+    )
+    assert provider.model == "claude-sonnet-4-5"
+    assert provider.base_url == "https://api.anthropic.com"
+    assert provider.api_key == "test-key"
+    assert provider.capabilities.requires_api_key is True
+    assert provider.capabilities.tools is True
+    assert provider.capabilities.model_listing is False
+    assert provider.capabilities.local is False
+    assert not isinstance(provider, OpenAICompatibleProvider)
+
+
+def test_anthropic_headers_use_x_api_key():
+    provider = AnthropicProvider(api_key="sk-ant-test")
+    headers = provider._headers()
+    assert headers["x-api-key"] == "sk-ant-test"
+    assert headers["anthropic-version"] == "2023-06-01"
+    assert "Authorization" not in headers
+
+
+def test_anthropic_build_contents_maps_model_role_and_omits_system():
+    provider = AnthropicProvider(api_key="test-key")
+    contents = provider.build_contents(
+        "follow up",
+        [
+            {"role": "user", "parts": [{"text": "hello"}]},
+            {"role": "model", "parts": [{"text": "hi"}]},
+        ],
+    )
+    assert all(item["role"] in ("user", "assistant") for item in contents)
+    assert contents[-1] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "follow up"}],
+    }
+    assert any(
+        item["role"] == "assistant"
+        and item["content"][0]["text"] == "hi"
+        for item in contents
+    )
+
+
+def test_anthropic_parses_text_response():
+    provider = AnthropicProvider(api_key="test-key")
+    response = provider._parse_message(
+        {
+            "content": [{"type": "text", "text": "Hello from Claude"}],
+            "stop_reason": "end_turn",
+        }
+    )
+    assert response.text == "Hello from Claude"
+    assert response.tool_calls == []
+
+
+def test_anthropic_parses_tool_use_with_ids():
+    provider = AnthropicProvider(api_key="test-key")
+    response = provider._parse_message(
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01ABC",
+                    "name": "list_files",
+                    "input": {"path": "."},
+                }
+            ],
+            "stop_reason": "tool_use",
+        }
+    )
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "list_files"
+    assert response.tool_calls[0].args == {"path": "."}
+    assert response.tool_calls[0].id == "toolu_01ABC"
+    assert response.text is None
+
+
+def test_anthropic_tool_result_round_trip_uses_tool_use_id():
+    provider = AnthropicProvider(api_key="test-key")
+    contents = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_99",
+                    "name": "list_files",
+                    "input": {"path": "."},
+                }
+            ],
+        }
+    ]
+    updated = provider.append_tool_results(
+        contents,
+        [{"name": "list_files", "result": {"entries": ["a.py"]}}],
+    )
+    assert updated[-1]["role"] == "user"
+    block = updated[-1]["content"][0]
+    assert block["type"] == "tool_result"
+    assert block["tool_use_id"] == "toolu_99"
+    assert "a.py" in block["content"]
+
+
+def test_anthropic_append_model_turn_preserves_raw():
+    provider = AnthropicProvider(api_key="test-key")
+    raw = {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "read_file",
+                "input": {"path": "x"},
+            }
+        ],
+    }
+    response = ProviderResponse(
+        text=None,
+        tool_calls=[ToolCall("read_file", {"path": "x"}, id="toolu_1")],
+        raw=raw,
+    )
+    updated = provider.append_model_turn([], response)
+    assert updated[-1] is raw or updated[-1] == raw
+
+
+def test_anthropic_generate_posts_messages_api():
+    provider = AnthropicProvider(
+        api_key="sk-ant",
+        model="claude-sonnet-4-5",
+        base_url="https://api.anthropic.com",
+    )
+    mock_response = Mock(status_code=200)
+    mock_response.json.return_value = {
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+    }
+    mock_response.raise_for_status = Mock()
+
+    with patch(
+        "anthropic_provider.requests.post", return_value=mock_response
+    ) as post:
+        result = provider.generate(
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        )
+
+    assert result.text == "ok"
+    assert post.call_args.args[0] == "https://api.anthropic.com/v1/messages"
+    headers = post.call_args.kwargs["headers"]
+    assert headers["x-api-key"] == "sk-ant"
+    assert headers["anthropic-version"] == "2023-06-01"
+    payload = post.call_args.kwargs["json"]
+    assert payload["model"] == "claude-sonnet-4-5"
+    assert payload["max_tokens"] == 8192
+    assert "system" in payload
+    assert "tools" in payload
+    assert payload["tools"][0]["input_schema"]
+
+
+def test_anthropic_list_models_empty():
+    provider = AnthropicProvider(api_key="test-key")
+    assert provider.list_models() == []
+
+
+def test_provider_factory_uses_anthropic_provider(monkeypatch):
+    monkeypatch.setenv("PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "factory-ant-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+
+    provider = get_provider()
+    assert isinstance(provider, AnthropicProvider)
+    assert provider.name == "anthropic"
+    assert provider.model == "claude-sonnet-4-5"
+    assert provider.api_key == "factory-ant-key"
+    assert "api_key" not in provider.config.to_public_dict()
+
+
+def test_provider_factory_anthropic_missing_key_raises(monkeypatch):
+    monkeypatch.setenv("PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    try:
+        get_provider("anthropic")
+    except RuntimeError as exc:
+        assert "ANTHROPIC_API_KEY" in str(exc)
+    else:
+        raise AssertionError(
+            "get_provider('anthropic') should require ANTHROPIC_API_KEY"
+        )
+
+
+def test_anthropic_public_config_never_includes_api_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-ant-key-should-not-leak")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+
+    provider = get_provider("anthropic")
+    public = provider.config.to_public_dict()
+    assert "api_key" not in public
+    assert "secret" not in str(public).lower()
+    assert public["provider"] == "anthropic"

@@ -1,4 +1,4 @@
-"""Provider factory for Gemini, Ollama, Kilo, OpenAI, xAI, and OpenRouter."""
+"""Provider factory for Gemini, Ollama, Kilo, OpenAI, xAI, OpenRouter, and Anthropic."""
 
 import os
 import sys
@@ -27,7 +27,15 @@ __all__ = [
 # Single source of truth for which PROVIDER values are valid — used
 # both by get_provider()'s dispatch below and by app.py's /providers
 # endpoint, so the two can never drift out of sync.
-SUPPORTED_PROVIDERS = ["gemini", "ollama", "kilo", "openai", "xai", "openrouter"]
+SUPPORTED_PROVIDERS = [
+    "gemini",
+    "ollama",
+    "kilo",
+    "openai",
+    "xai",
+    "openrouter",
+    "anthropic",
+]
 
 
 @dataclass
@@ -135,6 +143,15 @@ def load_provider_config(name: str) -> ProviderConfig:
             timeout=int(os.getenv("OPENROUTER_TIMEOUT", "120")),
         )
 
+    if name == "anthropic":
+        return ProviderConfig(
+            provider="anthropic",
+            model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+            base_url=os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            timeout=int(os.getenv("ANTHROPIC_TIMEOUT", "120")),
+        )
+
     raise RuntimeError(
         f"Unknown PROVIDER '{name}'. Expected one of: "
         f"{', '.join(SUPPORTED_PROVIDERS)}."
@@ -202,6 +219,16 @@ def get_provider(name: str = None, model: str = None) -> Provider:
             timeout=config.timeout,
             http_referer=os.getenv("OPENROUTER_HTTP_REFERER"),
             app_title=os.getenv("OPENROUTER_APP_TITLE"),
+        )
+
+    elif config.provider == "anthropic":
+        from anthropic_provider import AnthropicProvider
+        provider = AnthropicProvider(
+            base_url=config.base_url,
+            model=config.model,
+            api_key=config.api_key,
+            timeout=config.timeout,
+            max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS", "8192")),
         )
 
     else:
