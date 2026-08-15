@@ -492,11 +492,11 @@ The following remain future work rather than requirements of the completed miles
 
 ### Local and offline AI
 
-The long-term goal is to support running AI Terminal Chat with a local AI model instead of requiring a cloud API.
+The core Local and Offline AI milestone is **implemented**. AI Terminal Chat can use Ollama as a local model provider without requiring a Gemini or other cloud API key. Ollama can run on the same machine as the application or on a separate Linux machine, while the React frontend and Flask backend run on Windows.
 
-The primary local-AI target is [Ollama](https://ollama.com/). The application supports a split-machine development setup in which the React frontend and Flask backend run on Windows while Ollama runs on a separate Linux machine with the GPU.
+#### Supported local workflow
 
-A possible deployment is:
+The primary tested development setup is:
 
 ```text
 Windows
@@ -505,36 +505,75 @@ Windows
           v
   Flask/Python backend (:9000)
           |
-          | Local network HTTP
+          | HTTP on local network
           v
 Linux
   Ollama (:11434)
           |
           v
-  Local AI model
+  Local model (for example qwen3:8b)
 ```
 
-This allows the Linux machine to handle model inference while the Windows machine runs the application and provides the user interface. The model itself does not need to communicate with a cloud AI service.
+The Linux machine performs model inference, while Windows runs the application and user interface. The model does not need a cloud AI service. Ollama can also run locally on Windows or on the same Linux machine as the backend.
 
-The core Ollama provider implementation is complete. Implemented capabilities include:
+#### Implemented capabilities
 
-- A dedicated `OllamaProvider`, configured through `OLLAMA_BASE_URL`/`OLLAMA_HOST` and `OLLAMA_MODEL`, so Ollama can run on the same computer or on another machine on the local network
-- Detection of whether the configured Ollama server is reachable, with a clear, actionable error (including possible causes) when it is unavailable — surfaced through `GET /providers`
-- Listing of installed Ollama models through the native `/api/tags` endpoint, exposed via `GET /providers/ollama/models` and selectable from the React UI without restarting the server
-- Local-only operation without a Gemini or other cloud API key
-- The existing backend-controlled tool execution and security model is preserved when using local models — local AI changes the model provider, not the tool/permission boundary
-- Capability detection (`ProviderCapabilities`) so a model without tool-calling support degrades to chat-only instead of sending a `tools` array the server would reject
-- An additional OpenAI-compatible local provider path (`OpenAICompatibleProvider`, shared with Kilo) that Ollama, LM Studio, llama.cpp, and similar local servers can all use
-- A real, opt-in end-to-end integration test (`server-python/tests/test_ollama_integration.py`) that exercises a live Ollama server, including a full tool-call round trip through the real agent loop — not just mocked HTTP responses. Skipped by default; enable with `OLLAMA_INTEGRATION_TEST=1` (or by setting `OLLAMA_BASE_URL`/`OLLAMA_HOST`) against a running `ollama serve`
-- Cooperative cancellation for long-running local-model generations, since local inference can take considerably longer than a cloud model — see `POST /cancel/<request_id>`
+- Dedicated `OllamaProvider` using `OLLAMA_BASE_URL`/`OLLAMA_HOST` and `OLLAMA_MODEL`
+- Ollama server availability/health detection with actionable diagnostics through `GET /providers`
+- Installed-model discovery through Ollama's `/api/tags` endpoint and `GET /providers/ollama/models`
+- Provider/model selection from the React UI without restarting the Flask server
+- Streaming responses with local models
+- Function/tool calling when the selected Ollama model supports tools
+- Capability detection so models without tool support can operate in chat-only mode
+- Shared OpenAI-compatible provider support for Ollama, Kilo, LM Studio, llama.cpp, and similar servers
+- Real opt-in Ollama end-to-end integration testing through the agent/tool loop, including a complete tool-call round trip
+- Cooperative cancellation for long-running local-model generations
+- Preservation of the existing backend-enforced filesystem, terminal, Git, sensitive-file, and confirmation security boundaries
+- Local-only operation without a Gemini API key
+- Windows startup support through `scripts/start-offline-ai.ps1`
+- Linux startup support through `scripts/start-offline-ai.sh`
+- Startup scripts that can create the Python `uv` environment, install backend requirements, install frontend npm dependencies, and start the application components for the intended local-AI workflow
 
-The existing `accessible-terminal-app` project uses a similar approach, with its Windows startup script allowing the Ollama host to be configured separately from the application host.
+#### Windows → Linux Ollama setup
 
-Future work includes:
+For the split-machine setup, configure the Windows backend environment with the Linux Ollama server address, for example:
 
-- Provide Windows and Linux startup scripts for common local-AI configurations
-- Support additional OpenAI-compatible local providers beyond Ollama and Kilo (e.g. LM Studio, llama.cpp, LocalAI) as first-class, dedicated provider entries rather than manual configuration
-- Richer per-model capability metadata (e.g. context window size, quantization) surfaced in the model-selection UI
+```text
+PROVIDER=ollama
+OLLAMA_HOST=http://<linux-host>:11434
+OLLAMA_MODEL=qwen3:8b
+```
+
+The Linux machine must have Ollama running and listening on an address reachable from Windows. The application itself continues to enforce its normal backend tool and permission controls; putting the model on Linux does not grant the model unrestricted access to either computer.
+
+#### Startup scripts
+
+From the repository root, the local-AI scripts are intended to simplify setup and startup:
+
+Windows PowerShell:
+
+```powershell
+.\scripts\start-offline-ai.ps1
+```
+
+Linux shell:
+
+```bash
+./scripts/start-offline-ai.sh
+```
+
+The scripts automate the routine environment setup where possible, including the Python `uv` environment/dependencies and frontend `npm install`, before starting the application. Environment-specific Ollama configuration remains the responsibility of the user.
+
+#### Verification
+
+The local-AI implementation has been exercised with a real Ollama server and a local model, including a tool call that listed project files and then returned a final response. The backend test suite currently passes 141 tests, including the opt-in Ollama integration test when enabled against a running Ollama server. The Vite production frontend also builds successfully.
+
+The remaining work is enhancement rather than completion of the core milestone:
+
+- Support additional OpenAI-compatible local providers as first-class provider entries rather than manual configuration
+- Surface richer per-model metadata such as context-window size and quantization in the model-selection UI
+- Add automatic Ollama installation and optional model pulling where platform support makes that practical
+- Expand cross-platform end-to-end coverage for Windows-only, Linux-only, and split-machine deployments
 
 The intended local-AI workflow is:
 
