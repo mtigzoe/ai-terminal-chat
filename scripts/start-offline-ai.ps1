@@ -4,6 +4,9 @@ param(
 )
 
 # Start the Windows Flask + React development environment using a Linux Ollama server.
+# The script installs frontend dependencies when needed and creates/updates the
+# Python uv virtual environment automatically.
+#
 # Override the defaults when needed:
 #   .\scripts\start-offline-ai.ps1 -LinuxOllamaHost "http://192.168.1.100:11434" -OllamaModel "qwen3.5:9b"
 
@@ -12,6 +15,16 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $serverDir = Join-Path $repoRoot "server-python"
 $clientDir = Join-Path $repoRoot "client-react"
+$venvDir = Join-Path $serverDir ".venv"
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
+
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+  throw "uv is required but was not found in PATH. Install uv and run this script again."
+}
+
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+  throw "npm is required but was not found in PATH. Install Node.js/npm and run this script again."
+}
 
 $ollamaHost = $LinuxOllamaHost.TrimEnd('/')
 $ollamaBaseUrl = "$ollamaHost/v1"
@@ -41,8 +54,40 @@ try {
 }
 
 Write-Host ""
+Write-Host "Preparing Python environment..."
+if (-not (Test-Path $venvPython)) {
+  Write-Host "Creating uv virtual environment..."
+  Push-Location $serverDir
+  try {
+    uv venv .venv
+  } finally {
+    Pop-Location
+  }
+}
+
+Write-Host "Installing/updating Python dependencies..."
+Push-Location $serverDir
+try {
+  uv pip install --python $venvPython -r requirements.txt
+} finally {
+  Pop-Location
+}
+
+if (-not (Test-Path (Join-Path $clientDir "node_modules"))) {
+  Write-Host "Installing React dependencies with npm..."
+  Push-Location $clientDir
+  try {
+    npm install
+  } finally {
+    Pop-Location
+  }
+} else {
+  Write-Host "React dependencies already installed; skipping npm install."
+}
+
+Write-Host ""
 Write-Host "Starting Flask backend..."
-$serverCommand = "Set-Location -LiteralPath '$serverDir'; python app.py"
+$serverCommand = "Set-Location -LiteralPath '$serverDir'; & '$venvPython' app.py"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $serverCommand
 
 Write-Host "Starting React frontend..."
