@@ -35,8 +35,17 @@ def get_provider(name: str = None) -> Provider:
 
     elif name == "ollama":
         from ollama import OllamaProvider
+
+        # OLLAMA_BASE_URL is the preferred setting because it can
+        # explicitly include /v1. OLLAMA_HOST is also accepted for
+        # compatibility with Ollama's own host configuration style.
+        ollama_url = (
+            os.getenv("OLLAMA_BASE_URL")
+            or os.getenv("OLLAMA_HOST")
+            or "http://localhost:11434/v1"
+        )
         provider = OllamaProvider(
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+            base_url=ollama_url,
             model=os.getenv("OLLAMA_MODEL", "llama3.1"),
             timeout=int(os.getenv("OLLAMA_TIMEOUT", "120")),
         )
