@@ -13,7 +13,7 @@ from google import genai
 from google.genai import types
 
 from prompts import SYSTEM_INSTRUCTION
-from providers.base import Provider, ProviderResponse, ToolCall
+from providers.base import Provider, ProviderCapabilities, ProviderResponse, ToolCall
 from tools import TOOL_SCHEMAS
 
 # tools.TOOL_SCHEMAS is written in standard (lowercase) JSON Schema so
@@ -87,6 +87,15 @@ class GeminiProvider(Provider):
         # model for harder tasks).
         self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
+        self.model = self.model_name
+        self._capabilities = ProviderCapabilities(
+            tools=True,
+            streaming=True,
+            model_listing=False,
+            requires_api_key=True,
+            local=False,
+        )
+
         self.config = types.GenerateContentConfig(
             tools=_build_tools(),
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
@@ -94,6 +103,10 @@ class GeminiProvider(Provider):
             ),
             system_instruction=SYSTEM_INSTRUCTION,
         )
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return self._capabilities
 
     def build_contents(self, msg, history):
         contents = []

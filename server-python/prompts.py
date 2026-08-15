@@ -3,9 +3,22 @@
 This used to live inline inside Gemini's GENERATE_CONFIG. It doesn't
 mention Gemini anywhere, so it's shared as-is by every provider:
 GeminiProvider passes it as `system_instruction`, and
-OpenAICompatibleProvider (Ollama, Kilo, OpenAI) sends it as the first
-`{"role": "system", ...}` message.
+OpenAICompatibleProvider (Ollama, LM Studio, llama.cpp, Kilo) sends
+it as the first `{"role": "system", ...}` message.
+
+When a backend or model does not support tools, use
+CHAT_ONLY_INSTRUCTION instead so the model is not told to call
+functions it cannot invoke.
 """
+
+CHAT_ONLY_INSTRUCTION = (
+    "You are a local coding/project assistant. This model does not "
+    "support tool calling, so you cannot read files, run commands, "
+    "or change the project. Answer from the conversation and from "
+    "your training knowledge. Be explicit when you cannot inspect "
+    "the local project. Do not invent tool calls or claim that you "
+    "ran a command, read a file, or modified anything."
+)
 
 SYSTEM_INSTRUCTION = (
     "You are a local coding/project agent operating on a single "

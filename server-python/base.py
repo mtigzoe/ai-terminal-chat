@@ -2,7 +2,7 @@
 
 A Provider hides everything specific to one backend's chat/tool-
 calling API — Gemini's google-genai SDK vs. an OpenAI-compatible
-`/chat/completions` endpoint (Ollama, the Kilo gateway, OpenAI) —
+`/chat/completions` endpoint (Ollama, LM Studio, llama.cpp, Kilo) —
 behind four methods. agent.run_agent_loop() only ever talks to this
 interface, so it doesn't need to know or care which backend is live.
 """
@@ -18,6 +18,33 @@ class ToolCall:
 
     name: str
     args: dict
+
+
+@dataclass
+class ProviderCapabilities:
+    """What this provider/model can actually do.
+
+    Local servers and smaller models often lack tool calling or
+    token streaming. Callers must check these flags and degrade
+    cleanly rather than sending unsupported request fields.
+    """
+
+    tools: bool = True
+    streaming: bool = True
+    model_listing: bool = False
+    requires_api_key: bool = False
+    local: bool = False
+    notes: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "tools": self.tools,
+            "streaming": self.streaming,
+            "model_listing": self.model_listing,
+            "requires_api_key": self.requires_api_key,
+            "local": self.local,
+            "notes": self.notes,
+        }
 
 
 @dataclass
@@ -39,6 +66,39 @@ class ProviderResponse:
 
 class Provider(ABC):
     """One backend's chat + tool-calling API, normalized to 4 methods."""
+
+    name: str = ""
+    model: str = ""
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        """Declared or last-detected capabilities for this backend."""
+
+        return ProviderCapabilities()
+
+    def list_models(self) -> list:
+        """Return installed/available models, if the backend can list them.
+
+        Each item is a dict with at least ``id``. An empty list means
+        listing is unsupported or the server is unreachable — it is
+        not an error.
+        """
+
+        return []
+
+    def probe(self) -> dict:
+        """Check whether the backend is reachable right now.
+
+        Returns ``{"available": bool, "error": str|None}``. Must not
+        raise: an unreachable local server is a status, not a crash.
+        """
+
+        return {"available": True, "error": None}
+
+    def refresh_capabilities(self) -> ProviderCapabilities:
+        """Re-probe the live backend/model and update capabilities."""
+
+        return self.capabilities
 
     @abstractmethod
     def build_contents(self, msg: str, history: list) -> list:
