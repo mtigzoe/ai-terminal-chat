@@ -126,9 +126,12 @@ def test_ollama_full_tool_call_round_trip(live_provider):
         )
 
     contents = live_provider.build_contents(
-        'Call the list_files tool with path "." to see what is in the '
-        "current directory, then briefly tell me how many entries it "
-        "returned. You must call the tool rather than guessing.",
+        'Call the list_files tool exactly once with path "." to see what '
+        "is in the current directory. After the tool returns, do not call "
+        "any other tool and do not call list_files again. Give a brief final "
+        "answer stating how many entries the tool returned. You must call "
+        "the tool rather than guessing, and you must finish with a normal "
+        "text response after receiving the tool result.",
         [],
     )
 
