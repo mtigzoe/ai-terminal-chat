@@ -626,6 +626,113 @@ def git_branch() -> dict:
     return payload
 
 
+def git_add(path: str, confirm: bool = False) -> dict:
+    """Stage a single file's current changes for the next commit.
+
+    This is the first *state-changing* Git operation exposed to the
+    model. It follows the exact same preview/confirm pattern as
+    create_file/write_file/apply_patch/delete_file: the first call
+    (confirm=False, the default) does NOT touch the git index at all
+    — it only reports what would be staged. Only pass confirm=True
+    after the user has explicitly agreed to it.
+
+    Staging is not committing: git_add only updates the index. It
+    does not create a commit, change file contents, or push anything.
+    There is deliberately no git_commit or git_push tool.
+
+    Args:
+        path: Relative path to the file to stage.
+        confirm: Must be True to actually stage the file.
+
+    Returns:
+        A dictionary confirming the staged file, or asking for
+        confirmation.
+    """
+
+    try:
+        file_path = safe_path(path)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    if is_sensitive_path(file_path):
+        return {"error": f"Refusing to stage sensitive file: {path}"}
+
+    if not (PROJECT_ROOT / ".git").exists():
+        # PROJECT_ROOT can be a subdirectory of the actual repo root
+        # (git discovers .git by walking upward from cwd, same as the
+        # other git_* tools and apply_patch above), so this is only a
+        # quick heuristic to fail fast for a fully untracked project.
+        try:
+            top_level = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except FileNotFoundError:
+            return {"error": "git is not installed or not on PATH."}
+        except subprocess.TimeoutExpired:
+            return {"error": "Checking for a git repository timed out."}
+        except Exception as exc:
+            return {"error": f"Could not check for a git repository: {exc}"}
+
+        if top_level.returncode != 0:
+            return {
+                "error": (
+                    "git_add requires the project to be inside a git "
+                    "repository (no .git found in PROJECT_ROOT or any "
+                    "parent directory)."
+                )
+            }
+
+    if not file_path.exists():
+        return {"error": f"File does not exist: {path}"}
+
+    if file_path.is_dir():
+        return {
+            "error": "git_add can only stage a single file, not a directory."
+        }
+
+    rel_path = str(file_path.relative_to(PROJECT_ROOT))
+
+    if not confirm:
+        return {
+            "requires_confirmation": True,
+            "path": rel_path,
+            "message": (
+                f"'{rel_path}' was NOT staged. Show the user what "
+                f"would be staged and ask them to explicitly confirm "
+                f"it, then call git_add again with confirm=true."
+            ),
+        }
+
+    try:
+        result = subprocess.run(
+            ["git", "add", "--", rel_path],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"error": "Staging the file timed out."}
+    except Exception as exc:
+        return {"error": f"Could not stage file: {exc}"}
+
+    if result.returncode != 0:
+        return {
+            "error": (
+                f"git add failed: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        }
+
+    return {"path": rel_path, "staged": True}
+
+
 # ---------------------------------------------------------
 # File-modification tools
 # ---------------------------------------------------------
@@ -1044,6 +1151,7 @@ TOOL_FUNCTIONS = {
     "write_file": write_file,
     "apply_patch": apply_patch,
     "delete_file": delete_file,
+    "git_add": git_add,
 }
 
 # Tools that only read or inspect the project. Kept separate from the
@@ -1070,6 +1178,21 @@ WRITE_TOOL_NAMES = {
     "delete_file",
 }
 
+# Git tools that change repository state (as opposed to git_status/
+# git_diff/git_log/git_branch, which are read-only and never require
+# confirmation). Kept as a separate set from WRITE_TOOL_NAMES so the
+# two categories (filesystem vs. git) stay distinguishable — agent.py
+# and app.py gate on both, but this set exists specifically so a
+# future permission-level system can grant/restrict git operations
+# independently of filesystem writes. Every tool here must follow the
+# same confirm=False (preview only) / confirm=True (execute) pattern
+# as WRITE_TOOL_NAMES. Deliberately does NOT include a commit or push
+# tool — staging is the only state-changing git operation exposed so
+# far, and it only touches the index, never file contents or history.
+GIT_CONFIRM_TOOL_NAMES = {
+    "git_add",
+}
+
 # Per-tool execution timeouts (seconds), enforced generically in
 # agent.run_agent_loop so a single slow tool can't stall the whole
 # agent. Read-only inspection tools get short budgets; run_command and
@@ -1090,6 +1213,7 @@ TOOL_TIMEOUTS = {
     "write_file": 5,
     "apply_patch": 35,
     "delete_file": 5,
+    "git_add": 10,
 }
 DEFAULT_TOOL_TIMEOUT = 15
 
@@ -1393,6 +1517,36 @@ TOOL_SCHEMAS = {
                     "description": (
                         "Must be true to actually perform the "
                         "deletion. Defaults to false."
+                    ),
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    "git_add": {
+        "description": (
+            "Stages a single file's current changes for the next "
+            "commit (git add). This only updates the git index — it "
+            "does not commit, push, or change any file's contents. "
+            "There is no git_commit or git_push tool, and no other "
+            "tool can commit or push either — those actions are not "
+            "available. Requires confirmation: calling without "
+            "confirm=true will NOT stage anything, it only reports "
+            "what would be staged. Only call it again with "
+            "confirm=true after the user has explicitly agreed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path to the file to stage.",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Must be true to actually stage the file. "
+                        "Defaults to false."
                     ),
                 },
             },
