@@ -104,7 +104,12 @@ class OllamaProvider(OpenAICompatibleProvider):
                 ),
             }
         except Exception as exc:
-            return {"available": False, "error": str(exc)}
+            # See OpenAICompatibleProvider.probe() for why this routes
+            # through _unreachable_message() rather than str(exc).
+            message = str(exc)
+            if not message.startswith("Could not reach Ollama"):
+                message = self._unreachable_message(exc)
+            return {"available": False, "error": message}
 
     def list_models(self) -> list:
         try:

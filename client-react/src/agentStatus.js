@@ -12,6 +12,7 @@ const PHASE_LABELS = {
   recover: 'Recovering',
   complete: 'Completed',
   error: 'Error',
+  cancelled: 'Cancelled',
 };
 
 /** Phases that should use assertive live-region announcements. */
@@ -111,7 +112,7 @@ export function statusFromStreamLine(line) {
   if (!trimmed) return null;
 
   const progressMatch = trimmed.match(
-    /^\[(plan|inspect|execute|confirm|verify|recover|complete|error|progress)\]\s*(.*)$/i
+    /^\[(plan|inspect|execute|confirm|verify|recover|complete|error|cancelled|progress)\]\s*(.*)$/i
   );
   if (progressMatch) {
     const phase = progressMatch[1].toLowerCase();

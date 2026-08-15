@@ -1,0 +1,1889 @@
+diff --git a/README.md b/README.md
+index 9b1153b..9929915 100644
+--- a/README.md
++++ b/README.md
+@@ -47,9 +47,12 @@ ai-terminal-chat/
+ 
+ - React chat interface
+ - Keyboard-friendly and screen-reader-oriented interface
+-- Gemini-powered conversations
+-- Provider abstraction for AI backends
+-- Gemini function/tool calling
++- Gemini-, Ollama-, and Kilo-powered conversations
++- Provider abstraction for AI backends, with a single `ProviderConfig` model for provider configuration
++- Provider capability detection (`tools`, `streaming`, `model_listing`, `local`, `requires_api_key`)
++- Backend-controlled provider and model selection from the UI (`/providers`, `/providers/select`, `/providers/<name>/models`)
++- Actionable connection diagnostics when a provider is unreachable
++- Gemini, Ollama, and Kilo function/tool calling
+ - Local project directory listing
+ - Local text-file reading
+ - Text-file searching
+@@ -57,8 +60,9 @@ ai-terminal-chat/
+ - Git status, diff, log, and branch inspection
+ - Git staging through a confirmation-required `git_add` operation
+ - Streaming responses
++- Cooperative request cancellation (`/cancel/<request_id>`), stopping the agent loop between rounds/tool calls rather than only dropping the client connection
+ - Tool-activity reporting
+-- Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, and completion
++- Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, completion, and cancellation
+ - Accessible frontend agent-status announcements
+ - Confirmation-required file creation, modification, patching, deletion, and Git staging
+ - Filesystem access restricted to the project directory
+@@ -204,7 +208,7 @@ The Flask backend provides these main endpoints:
+ POST /chat
+ ```
+ 
+-Runs a conversation to completion and returns the final model response together with tool activity.
++Runs a conversation to completion and returns the final model response together with tool activity. Accepts an optional `request_id` in the JSON body; pass one if you want to be able to cancel the request via `POST /cancel/<request_id>` while it's in flight.
+ 
+ ### Streaming chat
+ 
+@@ -212,7 +216,7 @@ Runs a conversation to completion and returns the final model response together
+ POST /stream
+ ```
+ 
+-Streams tool activity and the model's response as plain text for compatibility with the React client.
++Streams tool activity and the model's response as plain text for compatibility with the React client. Also accepts an optional `request_id` for cancellation.
+ 
+ ### Confirm a pending action
+ 
+@@ -222,6 +226,38 @@ POST /confirm
+ 
+ Explicitly authorizes a previously previewed mutating operation. The backend retrieves the exact pending operation by its opaque action ID rather than trusting model-supplied tool names or arguments.
+ 
++### Cancel an in-flight request
++
++```text
++POST /cancel/<request_id>
++```
++
++Cooperatively cancels a `/chat` or `/stream` request that was started with a matching `request_id`. The agent loop checks for cancellation between rounds and between individual tool calls and stops cleanly, rather than the client only dropping the HTTP connection while the backend keeps working — this matters most for local models, where a single round can take much longer than a cloud model. Returns `{"cancelled": false}` for an unknown or already-finished request id rather than an error.
++
++### Provider status
++
++```text
++GET /providers
++```
++
++Reports the active provider's name, model, capabilities (`tools`, `streaming`, `model_listing`, `local`, `requires_api_key`), and live availability, plus the list of supported provider names. Add `?probe=0` to skip the network reachability check (faster, but `available`/`error`/`diagnostics` are omitted). When a provider is unavailable, the response includes a `diagnostics` object (`provider`, `server`, `model`, `possible_causes`, `detail`) with actionable next steps instead of just a raw error string — useful for troubleshooting and for screen-reader users, since it doesn't depend on visually scanning logs. This endpoint never returns an API key.
++
++### List a provider's models
++
++```text
++GET /providers/<name>/models
++```
++
++Lists installed/available models for `name` (`gemini`, `ollama`, or `kilo`) without switching the active provider — used to populate the model-selection dropdown before committing to a switch. Returns an empty list, not an error, when the provider can't be reached or doesn't support listing models.
++
++### Switch the active provider
++
++```text
++POST /providers/select
++```
++
++Body: `{"provider": "ollama", "model": "qwen3.5:9b"}` (`model` is optional). The browser can only *request* a provider/model; this endpoint is what actually validates and constructs it. Selection is backend-controlled by design — see "Don't expose API keys to React" below. A request naming an unsupported provider, or one whose configuration is invalid (e.g. Kilo with no `KILO_API_KEY`), is rejected with a 400 and the previously active provider is left running rather than leaving the app without any provider at all.
++
+ ## Tool calling
+ 
+ The backend exposes selected Python functions to the AI provider. A typical interaction is:
+@@ -287,7 +323,7 @@ The terminal `run_command` tool remains restricted to its existing read-only/low
+ 
+ ## Provider architecture
+ 
+-The Python backend is being organized around a provider abstraction so the application does not need to duplicate its agent logic for every model vendor.
++The Python backend is organized around a provider abstraction so the application does not need to duplicate its agent logic for every model vendor.
+ 
+ The intended separation is:
+ 
+@@ -299,15 +335,35 @@ Agent/tool loop
+    |
+    v
+ Provider interface
+-   |----------------|
+-   v                v
+-Gemini            Ollama
++   |----------------|----------------|
++   v                v                v
++Gemini            Ollama            Kilo
+ ```
+ 
+ A provider is responsible for communicating with an AI model, while the agent/tool layer remains responsible for executing local tools and enforcing the application's safety rules.
+ 
++`ProviderConfig` (in `providers.py`) is the single place that reads provider environment variables (`GOOGLE_API_KEY`, `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `KILO_API_KEY`, and so on) into a plain `provider`/`model`/`base_url`/`api_key`/`timeout` structure. `get_provider()` resolves one of these and constructs the matching provider class, so `GeminiProvider`, `OllamaProvider`, and `KiloProvider` stay focused on talking to their backend rather than on `os.getenv()` calls. Adding a new provider means adding one branch to `load_provider_config()` and `get_provider()` rather than touching unrelated code.
++
++Every provider also declares `ProviderCapabilities` (`tools`, `streaming`, `model_listing`, `local`, `requires_api_key`) so the backend and frontend can ask "what can this provider/model actually do?" instead of assuming every provider supports tool calling and streaming — this matters in particular for Ollama, where not every locally installed model supports tool calling.
++
+ This makes it possible to add or change providers without moving filesystem, terminal, Git, or confirmation logic into each provider implementation.
+ 
++### Don't expose API keys to React
++
++API keys (`GOOGLE_API_KEY`, `KILO_API_KEY`) live exclusively in the Python backend's environment and are read only by `ProviderConfig`/the provider classes:
++
++```text
++React → Flask → Kilo/Gemini
++```
++
++never
++
++```text
++React → Kilo/Gemini API directly
++```
++
++`GET /providers` and `POST /providers/select` return provider status (name, model, capabilities, availability) but never the key itself — `ProviderConfig.to_public_dict()` omits `api_key` entirely rather than masking it, so there's no code path in those endpoints that can leak a credential to the browser.
++
+ ## Accessibility
+ 
+ Accessibility is a core project goal rather than an optional UI feature.
+@@ -378,7 +434,8 @@ The core Agent Capabilities milestone is implemented. It adds multi-step agent b
+ Implemented capabilities include:
+ 
+ - Multi-step task execution with explicit planning and progress reporting
+-- Lifecycle progress phases for planning, inspection, execution, confirmation, verification, recovery, completion, and errors
++- Lifecycle progress phases for planning, inspection, execution, confirmation, verification, recovery, completion, cancellation, and errors
++- Cooperative cancellation of an in-flight request (`POST /cancel/<request_id>`), checked between rounds and between individual tool calls
+ - Post-change verification guidance and support; verification remains model-driven with tool support rather than an unconditional automatic command runner
+ - Recovery and retry guidance for failed tools, including recovery hints after consecutive errors
+ - Detection and protection against repeated or stuck agent actions
+@@ -437,7 +494,7 @@ The following remain future work rather than requirements of the completed miles
+ 
+ The long-term goal is to support running AI Terminal Chat with a local AI model instead of requiring a cloud API.
+ 
+-The primary local-AI target is [Ollama](https://ollama.com/). The application should support a split-machine development setup in which the React frontend and Flask backend run on Windows while Ollama runs on a separate Linux machine with the GPU.
++The primary local-AI target is [Ollama](https://ollama.com/). The application supports a split-machine development setup in which the React frontend and Flask backend run on Windows while Ollama runs on a separate Linux machine with the GPU.
+ 
+ A possible deployment is:
+ 
+@@ -459,20 +516,25 @@ Linux
+ 
+ This allows the Linux machine to handle model inference while the Windows machine runs the application and provides the user interface. The model itself does not need to communicate with a cloud AI service.
+ 
++The core Ollama provider implementation is complete. Implemented capabilities include:
++
++- A dedicated `OllamaProvider`, configured through `OLLAMA_BASE_URL`/`OLLAMA_HOST` and `OLLAMA_MODEL`, so Ollama can run on the same computer or on another machine on the local network
++- Detection of whether the configured Ollama server is reachable, with a clear, actionable error (including possible causes) when it is unavailable — surfaced through `GET /providers`
++- Listing of installed Ollama models through the native `/api/tags` endpoint, exposed via `GET /providers/ollama/models` and selectable from the React UI without restarting the server
++- Local-only operation without a Gemini or other cloud API key
++- The existing backend-controlled tool execution and security model is preserved when using local models — local AI changes the model provider, not the tool/permission boundary
++- Capability detection (`ProviderCapabilities`) so a model without tool-calling support degrades to chat-only instead of sending a `tools` array the server would reject
++- An additional OpenAI-compatible local provider path (`OpenAICompatibleProvider`, shared with Kilo) that Ollama, LM Studio, llama.cpp, and similar local servers can all use
++- A real, opt-in end-to-end integration test (`server-python/tests/test_ollama_integration.py`) that exercises a live Ollama server, including a full tool-call round trip through the real agent loop — not just mocked HTTP responses. Skipped by default; enable with `OLLAMA_INTEGRATION_TEST=1` (or by setting `OLLAMA_BASE_URL`/`OLLAMA_HOST`) against a running `ollama serve`
++- Cooperative cancellation for long-running local-model generations, since local inference can take considerably longer than a cloud model — see `POST /cancel/<request_id>`
++
+ The existing `accessible-terminal-app` project uses a similar approach, with its Windows startup script allowing the Ollama host to be configured separately from the application host.
+ 
+ Future work includes:
+ 
+-- Complete the Ollama provider implementation.
+-- Allow the Ollama endpoint to be configured through an environment variable such as `OLLAMA_HOST`.
+-- Support Ollama running on the same computer or on another machine on the local network.
+-- Provide Windows and Linux startup scripts for common local-AI configurations.
+-- Detect whether the configured Ollama server is reachable and provide a clear error when it is unavailable.
+-- Allow the user to select an installed Ollama model.
+-- Support local-only operation without a Gemini or other cloud API key.
+-- Preserve the existing backend-controlled tool execution and security model when using local models.
+-- Detect provider capabilities so unsupported tool-calling or streaming features are handled cleanly.
+-- Support additional OpenAI-compatible local providers in the future.
++- Provide Windows and Linux startup scripts for common local-AI configurations
++- Support additional OpenAI-compatible local providers beyond Ollama and Kilo (e.g. LM Studio, llama.cpp, LocalAI) as first-class, dedicated provider entries rather than manual configuration
++- Richer per-model capability metadata (e.g. context window size, quantization) surfaced in the model-selection UI
+ 
+ The intended local-AI workflow is:
+ 
+@@ -507,15 +569,16 @@ The local model should not receive unrestricted access to the Windows or Linux f
+ ### Provider ecosystem
+ 
+ - Complete provider/agent test coverage
+-- Additional cloud and local AI providers
++- Additional cloud and local AI providers beyond Gemini, Ollama, and Kilo
+ - Consistent tool-calling and streaming behavior across providers
+ - Provider compatibility tests to reduce regressions when adding models
+ 
+ ### Reliability and testing
+ 
+-- End-to-end tests covering the frontend, backend, provider, and tool loop
++- End-to-end tests covering the frontend, backend, provider, and tool loop, including the frontend's provider/model selector
+ - Automated security and accessibility regression tests
+-- Better error, timeout, cancellation, and recovery handling
++- A frontend test runner that supports Vite's `import.meta.env` (the current CRA/Jest-based `react-scripts test` setup predates the move to Vite and cannot parse it — see `client-react/src/App.test.js`)
++- Cancellation coverage for the non-Ollama providers under real network conditions, beyond the existing agent-loop unit tests
+ - More robust testing of multi-step agent workflows
+ 
+ ### Desktop application
+diff --git a/client-react/src/App.css b/client-react/src/App.css
+index 3216e09..4d25105 100644
+--- a/client-react/src/App.css
++++ b/client-react/src/App.css
+@@ -339,6 +339,11 @@ body {
+   background-color: #eef7ee;
+ }
+ 
++.agent-status--cancelled {
++  border-color: #6b6b6b;
++  background-color: #f0f0f0;
++}
++
+ .agent-status--recover {
+   border-color: #c47d00;
+   background-color: #fff4e5;
+@@ -366,3 +371,79 @@ body {
+ .activity-item--progress code {
+   color: #334;
+ }
++
++/* Provider + model selector */
++.provider-selector {
++  text-align: left;
++  margin: 0 0 12px 0;
++  padding: 8px 12px;
++  border-radius: 8px;
++  border: 1px solid #9a9caa;
++  background-color: #f7f6f3;
++  font-size: 0.95em;
++}
++
++.provider-selector-row {
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 8px;
++}
++
++.provider-selector-label {
++  font-weight: 600;
++  color: #333;
++}
++
++.provider-selector select,
++.provider-selector input[type="text"] {
++  padding: 4px 8px;
++  border-radius: 6px;
++  border: 1px solid #9a9caa;
++  background-color: white;
++  font-size: 0.95em;
++}
++
++.provider-availability {
++  padding: 2px 8px;
++  border-radius: 99px;
++  font-size: 0.85em;
++  font-weight: 600;
++}
++
++.provider-availability--ok {
++  background-color: #eef7ee;
++  color: #2e7d32;
++  border: 1px solid #2e7d32;
++}
++
++.provider-availability--down {
++  background-color: #fdecec;
++  color: #a33;
++  border: 1px solid #a33;
++}
++
++.provider-selector-status {
++  margin-top: 6px;
++  color: #333;
++  min-height: 1.1em;
++}
++
++.provider-selector-status--error {
++  color: #a33;
++  font-weight: 600;
++}
++
++.provider-diagnostics {
++  margin-top: 6px;
++  padding: 6px 10px;
++  border-radius: 6px;
++  border: 1px solid #a33;
++  background-color: #fdecec;
++  color: #6b1f1f;
++}
++
++.provider-diagnostics ul {
++  margin: 4px 0 0 0;
++  padding-left: 1.2em;
++}
+diff --git a/client-react/src/App.jsx b/client-react/src/App.jsx
+index fb49999..967ac37 100644
+--- a/client-react/src/App.jsx
++++ b/client-react/src/App.jsx
+@@ -23,6 +23,7 @@ import './App.css';
+ import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
+ import Header from './components/Header.jsx';
+ import MessageInput from './components/MessageInput.jsx';
++import ProviderSelector from './components/ProviderSelector.jsx';
+ import {
+   statusFromProgressEvent,
+   statusFromPendingConfirmation,
+@@ -32,9 +33,17 @@ import {
+   isAgentStatusStreamLine,
+ } from './agentStatus.js';
+ 
++function generateRequestId() {
++  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
++    return crypto.randomUUID();
++  }
++  return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
++}
++
+ function App() {
+   const inputRef = useRef();
+   const abortControllerRef = useRef(null);
++  const requestIdRef = useRef(null);
+   const host = import.meta.env.VITE_API_URL || "http://localhost:9000";
+   const url = host + "/chat";
+   const streamUrl = host + "/stream";
+@@ -66,6 +75,26 @@ function App() {
+     return fallback;
+   }
+ 
++  /**
++   * Best-effort backend cancellation. Aborting the fetch/axios request
++   * only stops this browser tab from reading the response — the Flask
++   * process keeps running the agent loop unless it's told to stop.
++   * This tells run_agent_loop (via cancellation.py) to check its
++   * cancel_event and stop between rounds/tool calls instead.
++   */
++  const cancelBackendRequest = () => {
++    const requestId = requestIdRef.current;
++    if (!requestId) return;
++    fetch(`${host}/cancel/${requestId}`, { method: "POST" }).catch(() => {
++      // Best-effort: the client-side abort below still applies either way.
++    });
++  };
++
++  const stopCurrentRequest = () => {
++    cancelBackendRequest();
++    abortControllerRef.current?.abort();
++  };
++
+   const handleClick = () => {
+     if (validationCheck(inputRef.current.value)) {
+       console.log("Empty or invalid entry");
+@@ -77,9 +106,15 @@ function App() {
+   };
+ 
+   const handleNonStreamingChat = async () => {
++    const requestId = generateRequestId();
++    requestIdRef.current = requestId;
++    const controller = new AbortController();
++    abortControllerRef.current = controller;
++
+     const chatData = {
+       chat: inputRef.current.value,
+-      history: data
++      history: data,
++      request_id: requestId,
+     };
+ 
+     const ndata = [...data,
+@@ -102,36 +137,65 @@ function App() {
+     const headerConfig = {
+       headers: {
+         'Content-Type': 'application/json;charset=UTF-8',
+-      }
++      },
++      signal: controller.signal,
+     };
+ 
+     const fetchData = async () => {
+       let modelResponse = "";
+       let toolActivity = [];
++      let cancelled = false;
+ 
+       try {
+         const response = await axios.post(url, chatData, headerConfig);
+         modelResponse = response.data.text || "";
+         toolActivity = response.data.tool_activity || [];
++        cancelled = Boolean(response.data.cancelled);
+ 
+-        const status = statusFromToolActivity(toolActivity);
+-        if (status) {
+-          setAgentStatus(status);
+-        } else if (modelResponse) {
++        if (cancelled) {
++          if (!modelResponse.trim()) {
++            modelResponse = "[Response stopped by user.]";
++          }
+           setAgentStatus({
+             phase: 'complete',
+-            message: 'Task completed',
++            message: 'Stopped by user',
+             assertive: false,
+           });
++        } else {
++          const status = statusFromToolActivity(toolActivity);
++          if (status) {
++            setAgentStatus(status);
++          } else if (modelResponse) {
++            setAgentStatus({
++              phase: 'complete',
++              message: 'Task completed',
++              assertive: false,
++            });
++          }
+         }
+       } catch (error) {
+-        modelResponse = `Error: ${getErrorMessage(error)}`;
+-        setAgentStatus({
+-          phase: 'error',
+-          message: getErrorMessage(error),
+-          assertive: true,
+-        });
++        if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") {
++          cancelled = true;
++          modelResponse = "[Response stopped by user.]";
++          setAgentStatus({
++            phase: 'complete',
++            message: 'Stopped by user',
++            assertive: false,
++          });
++        } else {
++          modelResponse = `Error: ${getErrorMessage(error)}`;
++          setAgentStatus({
++            phase: 'error',
++            message: getErrorMessage(error),
++            assertive: true,
++          });
++        }
+       } finally {
++        if (abortControllerRef.current === controller) {
++          abortControllerRef.current = null;
++        }
++        requestIdRef.current = null;
++
+         const updatedData = [...ndata, {
+           role: "model",
+           parts: [{ text: modelResponse }],
+@@ -150,10 +214,6 @@ function App() {
+     fetchData();
+   };
+ 
+-  const stopStreaming = () => {
+-    abortControllerRef.current?.abort();
+-  };
+-
+   const handleStreamingChat = async () => {
+     const chatData = {
+       chat: inputRef.current.value,
+@@ -186,6 +246,9 @@ function App() {
+       let modelResponse = "";
+       let toolActivity = [];
+       let cancelled = false;
++      const requestId = generateRequestId();
++      requestIdRef.current = requestId;
++      chatData.request_id = requestId;
+       const controller = new AbortController();
+       abortControllerRef.current = controller;
+ 
+@@ -243,6 +306,11 @@ function App() {
+           setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`);
+         } else if (event.type === "cancelled") {
+           cancelled = true;
++          setAgentStatus({
++            phase: 'cancelled',
++            message: 'Cancelled by user request.',
++            assertive: false,
++          });
+         }
+       };
+ 
+@@ -255,6 +323,9 @@ function App() {
+           const status = statusFromStreamLine(line);
+           if (status) {
+             setAgentStatus(status);
++            if (status.phase === 'cancelled') {
++              cancelled = true;
++            }
+             toolActivity.push({
+               type: 'progress',
+               phase: status.phase,
+@@ -356,6 +427,9 @@ function App() {
+         if (abortControllerRef.current === controller) {
+           abortControllerRef.current = null;
+         }
++        if (requestIdRef.current === requestId) {
++          requestIdRef.current = null;
++        }
+ 
+         setAnswer("");
+         const updatedData = [...ndata, {
+@@ -382,6 +456,7 @@ function App() {
+     <center>
+       <div className="chat-app">
+         <Header toggled={toggled} setToggled={setToggled} />
++        <ProviderSelector host={host} waiting={waiting} />
+         <ConversationDisplayArea
+           data={data}
+           streamdiv={streamdiv}
+@@ -389,10 +464,10 @@ function App() {
+           streamToolActivity={streamToolActivity}
+           agentStatus={agentStatus}
+         />
+-        {waiting && is_stream && (
++        {waiting && (
+           <button
+             type="button"
+-            onClick={stopStreaming}
++            onClick={stopCurrentRequest}
+             aria-label="Cancel response"
+           >
+             Cancel response
+diff --git a/client-react/src/agentStatus.js b/client-react/src/agentStatus.js
+index b9029cc..44771c9 100644
+--- a/client-react/src/agentStatus.js
++++ b/client-react/src/agentStatus.js
+@@ -12,6 +12,7 @@ const PHASE_LABELS = {
+   recover: 'Recovering',
+   complete: 'Completed',
+   error: 'Error',
++  cancelled: 'Cancelled',
+ };
+ 
+ /** Phases that should use assertive live-region announcements. */
+@@ -111,7 +112,7 @@ export function statusFromStreamLine(line) {
+   if (!trimmed) return null;
+ 
+   const progressMatch = trimmed.match(
+-    /^\[(plan|inspect|execute|confirm|verify|recover|complete|error|progress)\]\s*(.*)$/i
++    /^\[(plan|inspect|execute|confirm|verify|recover|complete|error|cancelled|progress)\]\s*(.*)$/i
+   );
+   if (progressMatch) {
+     const phase = progressMatch[1].toLowerCase();
+diff --git a/client-react/src/components/ProviderSelector.jsx b/client-react/src/components/ProviderSelector.jsx
+new file mode 100644
+index 0000000..352ff45
+--- /dev/null
++++ b/client-react/src/components/ProviderSelector.jsx
+@@ -0,0 +1,209 @@
++import React, { useCallback, useEffect, useState } from 'react';
++import axios from 'axios';
++
++/**
++ * Provider + model selector.
++ *
++ * Selection is always backend-controlled: choosing a provider or
++ * model here sends a request to POST /providers/select, and the
++ * Flask backend is what actually constructs (and can reject) the
++ * provider — see "Don't expose API keys to React" in the README.
++ * Nothing here assumes a choice succeeded until the backend confirms
++ * it; a rejected switch leaves the previous provider active and
++ * reports why.
++ */
++const ProviderSelector = ({ host, waiting }) => {
++  const [providerNames, setProviderNames] = useState([]);
++  const [current, setCurrent] = useState(null); // last known /providers response
++  const [models, setModels] = useState([]);
++  const [modelsSupported, setModelsSupported] = useState(false);
++  const [loadingModels, setLoadingModels] = useState(false);
++  const [switching, setSwitching] = useState(false);
++  const [statusMessage, setStatusMessage] = useState('');
++  const [statusIsError, setStatusIsError] = useState(false);
++
++  const loadProviders = useCallback(async () => {
++    try {
++      const response = await axios.get(`${host}/providers`);
++      setCurrent(response.data);
++      setProviderNames(response.data.providers || []);
++    } catch {
++      setStatusIsError(true);
++      setStatusMessage('Could not load provider status from the backend.');
++    }
++  }, [host]);
++
++  const loadModels = useCallback(
++    async (providerName) => {
++      setLoadingModels(true);
++      try {
++        const response = await axios.get(`${host}/providers/${providerName}/models`);
++        setModels(response.data.models || []);
++        setModelsSupported(Boolean(response.data.supports_listing));
++      } catch {
++        setModels([]);
++        setModelsSupported(false);
++      } finally {
++        setLoadingModels(false);
++      }
++    },
++    [host]
++  );
++
++  useEffect(() => {
++    loadProviders();
++  }, [loadProviders]);
++
++  useEffect(() => {
++    if (current?.name) {
++      loadModels(current.name);
++    }
++    // Only re-run when the active provider actually changes.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [current?.name]);
++
++  const selectProvider = async (providerName, model) => {
++    setSwitching(true);
++    setStatusMessage('');
++    setStatusIsError(false);
++    try {
++      const response = await axios.post(`${host}/providers/select`, {
++        provider: providerName,
++        model: model || undefined,
++      });
++      setCurrent(response.data);
++      const modelSuffix = response.data.model ? ` (${response.data.model})` : '';
++      setStatusMessage(`Switched to ${response.data.name}${modelSuffix}.`);
++    } catch (error) {
++      const message =
++        error?.response?.data?.error || error?.message || 'Could not switch provider.';
++      setStatusMessage(message);
++      setStatusIsError(true);
++      // The switch failed server-side; re-sync with whichever provider
++      // is actually still active rather than trusting the dropdown.
++      loadProviders();
++    } finally {
++      setSwitching(false);
++    }
++  };
++
++  const handleProviderChange = (event) => {
++    selectProvider(event.target.value);
++  };
++
++  const handleModelSelectChange = (event) => {
++    if (current?.name) {
++      selectProvider(current.name, event.target.value);
++    }
++  };
++
++  const handleModelInputBlur = (event) => {
++    const value = event.target.value.trim();
++    if (current?.name && value && value !== current.model) {
++      selectProvider(current.name, value);
++    }
++  };
++
++  if (!current) {
++    return null;
++  }
++
++  const disabled = waiting || switching;
++  const availabilityKnown = typeof current.available === 'boolean';
++  const modelIsKnown = models.some((m) => m.id === current.model);
++
++  return (
++    <div className="provider-selector">
++      <div className="provider-selector-row">
++        <label htmlFor="provider-select" className="provider-selector-label">
++          AI Provider
++        </label>
++        <select
++          id="provider-select"
++          value={current.name || ''}
++          onChange={handleProviderChange}
++          disabled={disabled}
++        >
++          {providerNames.map((name) => (
++            <option key={name} value={name}>
++              {name}
++            </option>
++          ))}
++        </select>
++
++        {modelsSupported && (
++          <>
++            <label htmlFor="model-select" className="provider-selector-label">
++              Model
++            </label>
++            {models.length > 0 ? (
++              <select
++                id="model-select"
++                value={current.model || ''}
++                onChange={handleModelSelectChange}
++                disabled={disabled || loadingModels}
++              >
++                {!modelIsKnown && current.model && (
++                  <option value={current.model}>{current.model}</option>
++                )}
++                {models.map((m) => (
++                  <option key={m.id} value={m.id}>
++                    {m.id}
++                  </option>
++                ))}
++              </select>
++            ) : (
++              <input
++                id="model-select"
++                type="text"
++                defaultValue={current.model || ''}
++                disabled={disabled}
++                onBlur={handleModelInputBlur}
++                aria-label="Model name"
++                placeholder={loadingModels ? 'Loading models…' : 'Model name'}
++              />
++            )}
++          </>
++        )}
++
++        {availabilityKnown && (
++          <span
++            className={`provider-availability provider-availability--${
++              current.available ? 'ok' : 'down'
++            }`}
++          >
++            {current.available ? 'Available' : 'Unavailable'}
++          </span>
++        )}
++      </div>
++
++      <div
++        className={`provider-selector-status${statusIsError ? ' provider-selector-status--error' : ''}`}
++        role="status"
++        aria-live="polite"
++      >
++        {statusMessage}
++      </div>
++
++      {current.available === false && current.diagnostics && (
++        <div className="provider-diagnostics" role="status" aria-live="polite">
++          <p>
++            {current.diagnostics.provider} is unavailable
++            {current.diagnostics.server ? ` at ${current.diagnostics.server}` : ''}
++            {current.model ? ` (model: ${current.model})` : ''}.
++          </p>
++          {Array.isArray(current.diagnostics.possible_causes) &&
++            current.diagnostics.possible_causes.length > 0 && (
++              <ul>
++                {current.diagnostics.possible_causes.map((cause) => (
++                  <li key={cause}>{cause}</li>
++                ))}
++              </ul>
++            )}
++        </div>
++      )}
++    </div>
++  );
++};
++
++export default ProviderSelector;
+diff --git a/server-python/agent.py b/server-python/agent.py
+index 73d11cb..f36ce55 100644
+--- a/server-python/agent.py
++++ b/server-python/agent.py
+@@ -1,6 +1,8 @@
+ """Provider-agnostic tool-calling loop with explicit write confirmation."""
+ 
+ from concurrent.futures import TimeoutError as FutureTimeoutError
++from threading import Event
++from typing import Optional
+ 
+ from providers.base import Provider
+ from pending import create_pending
+@@ -129,7 +131,15 @@ def _is_successful_write_result(result: dict) -> bool:
+     )
+ 
+ 
+-def run_agent_loop(provider: Provider, contents: list):
++def _cancelled_event():
++    return {"type": "cancelled"}
++
++
++def run_agent_loop(
++    provider: Provider,
++    contents: list,
++    cancel_event: Optional[Event] = None,
++):
+     """Run the provider and explicitly execute requested tools.
+ 
+     Lifecycle (visible via progress events):
+@@ -143,6 +153,13 @@ def run_agent_loop(provider: Provider, contents: list):
+ 
+     Progress events are provider-agnostic and intended for frontend and
+     screen-reader consumption.
++
++    `cancel_event`, when provided, is checked before each provider call
++    and before each tool call. This is cooperative cancellation: a call
++    already in flight (a slow provider.generate() or a running tool)
++    still runs to completion, but the loop stops taking further action
++    as soon as it next checks the event, instead of continuing to spend
++    rounds, tool calls, and provider time after the user asked to stop.
+     """
+ 
+     last_call_signature = None
+@@ -159,6 +176,16 @@ def run_agent_loop(provider: Provider, contents: list):
+     for round_index in range(MAX_TOOL_ROUNDS):
+         round_number = round_index + 1
+ 
++        if cancel_event is not None and cancel_event.is_set():
++            yield _progress(
++                "cancelled",
++                "Stopped: cancelled by user",
++                round=round_number,
++                max_rounds=MAX_TOOL_ROUNDS,
++            )
++            yield _cancelled_event()
++            return
++
+         try:
+             response = provider.generate(contents)
+         except Exception as exc:
+@@ -201,6 +228,16 @@ def run_agent_loop(provider: Provider, contents: list):
+         tool_results = []
+ 
+         for call in response.tool_calls:
++            if cancel_event is not None and cancel_event.is_set():
++                yield _progress(
++                    "cancelled",
++                    "Stopped: cancelled by user",
++                    round=round_number,
++                    max_rounds=MAX_TOOL_ROUNDS,
++                )
++                yield _cancelled_event()
++                return
++
+             function_name = call.name
+             function_args = dict(call.args or {})
+ 
+diff --git a/server-python/app.py b/server-python/app.py
+index fdb432d..db4a678 100644
+--- a/server-python/app.py
++++ b/server-python/app.py
+@@ -9,12 +9,16 @@
+ """Flask HTTP layer for the provider-agnostic terminal agent."""
+ 
+ import os
++import uuid
+ 
+ from concurrent.futures import TimeoutError as FutureTimeoutError
++from threading import Lock
++
+ from dotenv import load_dotenv
+ from flask import Flask, Response, request, stream_with_context
+ from flask_cors import CORS
+ 
++import cancellation
+ from agent import run_agent_loop
+ from pending import get_pending, pop_pending
+ from providers import SUPPORTED_PROVIDERS, get_provider
+@@ -32,6 +36,7 @@ from tools import (
+ 
+ load_dotenv()
+ provider = get_provider()
++_provider_lock = Lock()
+ 
+ app = Flask(__name__)
+ CORS(app)
+@@ -43,16 +48,171 @@ def handle_unexpected_error(exc):
+     return {"text": "", "error": f"Unexpected server error: {exc}"}, 500
+ 
+ 
++def _provider_status(target=None, probe: bool = True) -> dict:
++    """Build the status payload for one provider instance.
++
++    Never includes an api_key — ProviderConfig.to_public_dict() omits
++    it entirely, and nothing below reads provider.api_key either, so
++    this can't accidentally leak a Kilo/Gemini credential to the
++    browser (see "Don't expose API keys to React" in the README).
++    """
++
++    target = target or provider
++    config = getattr(target, "config", None)
++    status = {
++        "name": getattr(target, "name", None),
++        "model": getattr(target, "model", None),
++        "capabilities": target.capabilities.to_dict(),
++    }
++    if config is not None:
++        status["base_url"] = config.to_public_dict().get("base_url")
++
++    if probe:
++        probe_result = target.probe()
++        status["available"] = probe_result["available"]
++        status["error"] = probe_result["error"]
++        if not probe_result["available"]:
++            status["diagnostics"] = _diagnostics(target, probe_result["error"])
++
++    return status
++
++
++def _diagnostics(target, error: str) -> dict:
++    """Structured, actionable detail for an unreachable provider.
++
++    Turns "Could not reach Ollama." into something a user can act on
++    without inspecting server logs — useful for screen-reader users in
++    particular, where a wall of log text is much harder to scan than a
++    short list of concrete next steps.
++    """
++
++    config = getattr(target, "config", None)
++    causes = [f"{getattr(target, 'display_name', target.name)} is not running"]
++
++    is_local = bool(target.capabilities.local)
++    if is_local:
++        causes.append("The host running it is unreachable from this machine")
++        causes.append("The port is blocked by a firewall")
++        causes.append(
++            "The configured server URL/host environment variable is incorrect"
++        )
++    else:
++        causes.append("The API key is missing, revoked, or incorrect")
++        causes.append("The network connection is down")
++
++    return {
++        "provider": getattr(target, "display_name", getattr(target, "name", None)),
++        "server": getattr(config, "base_url", None),
++        "model": getattr(target, "model", None),
++        "possible_causes": causes,
++        "detail": error,
++    }
++
++
+ @app.route("/providers", methods=["GET"])
+ def providers():
+-    """Report the active provider and supported provider names."""
++    """Report the active provider's status and the supported provider names.
++
++    Pass `?probe=0` to skip the network probe (faster, but `available`
++    will be omitted) — useful for a UI that just wants to know what
++    provider/model is currently selected.
++    """
++
++    probe = request.args.get("probe", "1") != "0"
++    status = _provider_status(probe=probe)
++    status["current"] = status["name"]
++    status["providers"] = SUPPORTED_PROVIDERS
++    return status
++
++
++@app.route("/providers/<name>/models", methods=["GET"])
++def provider_models(name):
++    """List installed/available models for a provider, without switching to it.
++
++    Builds a throwaway provider instance from the same environment
++    configuration /providers/select would use, so the model list
++    reflects the server the user would actually get if they switched.
++    Returns an empty list (not an error) when the provider can't be
++    reached or doesn't support listing — see Provider.list_models().
++    """
++
++    name = (name or "").lower()
++    if name not in SUPPORTED_PROVIDERS:
++        return {
++            "error": (
++                f"Unknown provider '{name}'. Expected one of: "
++                f"{', '.join(SUPPORTED_PROVIDERS)}."
++            )
++        }, 404
++
++    try:
++        candidate = get_provider(name)
++    except Exception as exc:
++        return {"provider": name, "models": [], "error": str(exc)}, 200
+ 
+     return {
+-        "current": getattr(provider, "name", None),
+-        "providers": SUPPORTED_PROVIDERS,
++        "provider": name,
++        "supports_listing": candidate.capabilities.model_listing,
++        "models": candidate.list_models(),
+     }
+ 
+ 
++@app.route("/providers/select", methods=["POST"])
++def select_provider():
++    """Switch the active provider and/or model.
++
++    The browser can only *request* a provider by name; this endpoint
++    is what actually validates and constructs it. A request for an
++    unsupported name, or one whose credentials/config are missing
++    (e.g. no KILO_API_KEY), is rejected with the current provider left
++    running rather than leaving the app without any provider at all.
++    """
++
++    global provider
++
++    data = request.get_json(silent=True) or {}
++    name = str(data.get("provider", "")).strip().lower()
++    model = data.get("model")
++    model = str(model).strip() if model else None
++
++    if not name:
++        return {"error": "provider is required."}, 400
++
++    if name not in SUPPORTED_PROVIDERS:
++        return {
++            "error": (
++                f"Unknown provider '{name}'. Expected one of: "
++                f"{', '.join(SUPPORTED_PROVIDERS)}."
++            )
++        }, 400
++
++    try:
++        candidate = get_provider(name, model=model)
++    except Exception as exc:
++        return {"error": f"Could not switch to '{name}': {exc}"}, 400
++
++    with _provider_lock:
++        provider = candidate
++
++    return _provider_status(probe=True)
++
++
++@app.route("/cancel/<request_id>", methods=["POST"])
++def cancel_request(request_id):
++    """Cooperatively cancel an in-flight /chat or /stream request.
++
++    See cancellation.py: this sets the request's cancellation event,
++    which run_agent_loop checks between rounds and tool calls. A
++    request the server never registered (already finished, or the
++    client never sent a request_id) returns cancelled=False rather
++    than an error — the client's own abort of the HTTP connection is
++    still effective either way.
++    """
++
++    cancelled = cancellation.cancel(request_id)
++    return {"request_id": request_id, "cancelled": cancelled}
++
++
+ @app.route("/confirm", methods=["POST"])
+ def confirm_action():
+     """Explicitly approve or reject a pending model write operation.
+@@ -131,6 +291,7 @@ def chat():
+     data = request.get_json(silent=True) or {}
+     msg = data.get("chat", "")
+     history = data.get("history", [])
++    request_id = str(data.get("request_id") or uuid.uuid4().hex)
+ 
+     if not msg or not str(msg).strip():
+         return {"text": "", "error": "Message must not be empty."}, 400
+@@ -146,9 +307,11 @@ def chat():
+     tool_activity = []
+     final_text = ""
+     error_message = None
++    cancelled = False
++    cancel_event = cancellation.register(request_id)
+ 
+     try:
+-        for event in run_agent_loop(provider, contents):
++        for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
+             if event["type"] == "progress":
+                 tool_activity.append({
+                     "type": "progress",
+@@ -175,17 +338,34 @@ def chat():
+                 final_text = event["text"]
+             elif event["type"] == "error":
+                 error_message = event["message"]
++            elif event["type"] == "cancelled":
++                cancelled = True
+     except Exception as exc:
+         error_message = f"Unexpected server error: {exc}"
++    finally:
++        cancellation.release(request_id)
++
++    if cancelled:
++        return {
++            "text": final_text,
++            "tool_activity": tool_activity,
++            "cancelled": True,
++            "request_id": request_id,
++        }
+ 
+     if error_message and not final_text:
+         return {
+             "text": "",
+             "error": error_message,
+             "tool_activity": tool_activity,
++            "request_id": request_id,
+         }, 502
+ 
+-    return {"text": final_text, "tool_activity": tool_activity}
++    return {
++        "text": final_text,
++        "tool_activity": tool_activity,
++        "request_id": request_id,
++    }
+ 
+ 
+ @app.route("/stream", methods=["POST"])
+@@ -199,6 +379,7 @@ def stream():
+         data = request.get_json(silent=True) or {}
+         msg = data.get("chat", "")
+         history = data.get("history", [])
++        request_id = str(data.get("request_id") or uuid.uuid4().hex)
+ 
+         if not msg or not str(msg).strip():
+             yield "Please enter a message."
+@@ -210,8 +391,10 @@ def stream():
+             yield f"[Error building request: {exc}]"
+             return
+ 
++        cancel_event = cancellation.register(request_id)
++
+         try:
+-            for event in run_agent_loop(provider, contents):
++            for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
+                 if event["type"] == "progress":
+                     # Plain-text progress for screen readers and terminals.
+                     yield f"\n[{event.get('phase', 'progress')}] {event.get('message', '')}\n"
+@@ -231,8 +414,12 @@ def stream():
+                     yield event["text"]
+                 elif event["type"] == "error":
+                     yield f"\n[Error: {event['message']}]"
++                elif event["type"] == "cancelled":
++                    yield "\n[cancelled] Cancelled by user request.\n"
+         except Exception as exc:
+             yield f"\n[Error: {exc}]"
++        finally:
++            cancellation.release(request_id)
+ 
+     return Response(stream_with_context(generate()), mimetype="text/plain")
+ 
+diff --git a/server-python/cancellation.py b/server-python/cancellation.py
+new file mode 100644
+index 0000000..9e9a7ab
+--- /dev/null
++++ b/server-python/cancellation.py
+@@ -0,0 +1,60 @@
++"""Cooperative cancellation registry for in-flight chat requests.
++
++The agent loop can run for a long time — local models in particular
++can take far longer than cloud models to generate a turn. A client
++that wants to stop early assigns a request_id before starting a
++/chat or /stream call, then POSTs that id to /cancel. run_agent_loop
++checks the associated threading.Event between rounds and between
++tool calls and stops cleanly instead of relying on the client simply
++abandoning the HTTP connection while the backend keeps working.
++
++This mirrors pending.py's in-memory, single-process store: no
++persistence is needed since a cancellation only matters for the
++lifetime of the request it belongs to.
++"""
++
++from threading import Event, Lock
++
++MAX_TRACKED_REQUESTS = 200
++
++_EVENTS = {}
++_LOCK = Lock()
++
++
++def register(request_id: str) -> Event:
++    """Create (or reset) the cancellation event for a request id."""
++
++    event = Event()
++    with _LOCK:
++        if len(_EVENTS) >= MAX_TRACKED_REQUESTS:
++            oldest_id = next(iter(_EVENTS))
++            del _EVENTS[oldest_id]
++        _EVENTS[request_id] = event
++    return event
++
++
++def cancel(request_id: str) -> bool:
++    """Signal cancellation for a request id. Returns False if unknown."""
++
++    with _LOCK:
++        event = _EVENTS.get(request_id)
++    if event is None:
++        return False
++    event.set()
++    return True
++
++
++def release(request_id: str) -> None:
++    """Stop tracking a request id once it has finished."""
++
++    if not request_id:
++        return
++    with _LOCK:
++        _EVENTS.pop(request_id, None)
++
++
++def clear() -> None:
++    """Clear all tracked requests. Intended for tests."""
++
++    with _LOCK:
++        _EVENTS.clear()
+diff --git a/server-python/ollama.py b/server-python/ollama.py
+index 4e05f3e..a620912 100644
+--- a/server-python/ollama.py
++++ b/server-python/ollama.py
+@@ -104,7 +104,12 @@ class OllamaProvider(OpenAICompatibleProvider):
+                 ),
+             }
+         except Exception as exc:
+-            return {"available": False, "error": str(exc)}
++            # See OpenAICompatibleProvider.probe() for why this routes
++            # through _unreachable_message() rather than str(exc).
++            message = str(exc)
++            if not message.startswith("Could not reach Ollama"):
++                message = self._unreachable_message(exc)
++            return {"available": False, "error": message}
+ 
+     def list_models(self) -> list:
+         try:
+diff --git a/server-python/openai_compatible.py b/server-python/openai_compatible.py
+index 4850561..6e17154 100644
+--- a/server-python/openai_compatible.py
++++ b/server-python/openai_compatible.py
+@@ -175,7 +175,16 @@ class OpenAICompatibleProvider(Provider):
+                 ),
+             }
+         except Exception as exc:
+-            return {"available": False, "error": str(exc)}
++            # _request() already wraps requests.RequestException in an
++            # actionable RuntimeError via _unreachable_message(). Route
++            # anything else (e.g. a raw ConnectionError that didn't come
++            # through requests) through the same message builder so a
++            # caller never sees a bare "connection refused" instead of
++            # a diagnosable "Could not reach <provider> at <url>".
++            message = str(exc)
++            if not message.startswith(f"Could not reach {self.display_name}"):
++                message = self._unreachable_message(exc)
++            return {"available": False, "error": message}
+ 
+     def list_models(self) -> list:
+         try:
+diff --git a/server-python/providers.py b/server-python/providers.py
+index f769990..bbd8e46 100644
+--- a/server-python/providers.py
++++ b/server-python/providers.py
+@@ -2,6 +2,8 @@
+ 
+ import os
+ import sys
++from dataclasses import dataclass
++from typing import Optional
+ 
+ import base as _base
+ 
+@@ -16,7 +18,9 @@ __all__ = [
+     "Provider",
+     "ProviderResponse",
+     "ToolCall",
++    "ProviderConfig",
+     "SUPPORTED_PROVIDERS",
++    "load_provider_config",
+     "get_provider",
+ ]
+ 
+@@ -26,44 +30,132 @@ __all__ = [
+ SUPPORTED_PROVIDERS = ["gemini", "ollama", "kilo"]
+ 
+ 
+-def get_provider(name: str = None) -> Provider:
+-    name = (name or os.getenv("PROVIDER", "gemini")).lower()
++@dataclass
++class ProviderConfig:
++    """Resolved configuration for one provider, before construction.
+ 
+-    if name == "gemini":
+-        from gemini import GeminiProvider
+-        provider = GeminiProvider()
++    Every provider used to read its own environment variables inline
++    inside get_provider()'s branches. This dataclass is the single
++    place that knows *where configuration comes from*, so
++    GeminiProvider, OllamaProvider, and KiloProvider can stay focused
++    on talking to their backend rather than on os.getenv() calls.
++    Adding a new provider means adding one branch to
++    load_provider_config() instead of touching provider classes.
++    """
+ 
+-    elif name == "ollama":
+-        from ollama import OllamaProvider
++    provider: str
++    model: str
++    base_url: Optional[str] = None
++    api_key: Optional[str] = None
++    timeout: int = 120
++
++    def to_public_dict(self) -> dict:
++        """Non-secret view of this config, safe to return over HTTP.
++
++        `api_key` is deliberately omitted entirely — never included,
++        masked, or hashed — so this method can never become a leak
++        vector for a Kilo/Gemini credential regardless of how the
++        caller uses the result.
++        """
++
++        return {
++            "provider": self.provider,
++            "model": self.model,
++            "base_url": self.base_url,
++            "timeout": self.timeout,
++        }
++
++
++def load_provider_config(name: str) -> ProviderConfig:
++    """Read environment variables for `name` into a ProviderConfig.
+ 
+-        ollama_url = (
++    Raises RuntimeError for an unknown provider name; individual
++    provider constructors are still responsible for validating that
++    required fields (e.g. a Kilo API key) are actually present.
++    """
++
++    name = (name or "").lower()
++
++    if name == "gemini":
++        return ProviderConfig(
++            provider="gemini",
++            model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
++            api_key=os.getenv("GOOGLE_API_KEY"),
++        )
++
++    if name == "ollama":
++        base_url = (
+             os.getenv("OLLAMA_BASE_URL")
+             or os.getenv("OLLAMA_HOST")
+             or "http://localhost:11434/v1"
+         )
+-        provider = OllamaProvider(
+-            base_url=ollama_url,
++        return ProviderConfig(
++            provider="ollama",
+             model=os.getenv("OLLAMA_MODEL", "llama3.1"),
++            base_url=base_url,
+             timeout=int(os.getenv("OLLAMA_TIMEOUT", "120")),
+         )
+ 
+-    elif name == "kilo":
+-        from kilo import KiloProvider
+-        provider = KiloProvider(
+-            base_url=os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway"),
++    if name == "kilo":
++        return ProviderConfig(
++            provider="kilo",
+             model=os.getenv("KILO_MODEL", "kilocode/kilo-auto/balanced"),
++            base_url=os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway"),
+             api_key=os.getenv("KILO_API_KEY"),
+             timeout=int(os.getenv("KILO_TIMEOUT", "120")),
+         )
+ 
++    raise RuntimeError(
++        f"Unknown PROVIDER '{name}'. Expected one of: "
++        f"{', '.join(SUPPORTED_PROVIDERS)}."
++    )
++
++
++def get_provider(name: str = None, model: str = None) -> Provider:
++    """Build a Provider from environment configuration.
++
++    `model` optionally overrides the model that would otherwise come
++    from the environment — used by the /providers/select endpoint so
++    a user can switch models without restarting the server.
++    """
++
++    name = (name or os.getenv("PROVIDER", "gemini")).lower()
++    config = load_provider_config(name)
++    if model:
++        config.model = model
++
++    if config.provider == "gemini":
++        from gemini import GeminiProvider
++        provider = GeminiProvider(api_key=config.api_key, model=config.model)
++
++    elif config.provider == "ollama":
++        from ollama import OllamaProvider
++        provider = OllamaProvider(
++            base_url=config.base_url,
++            model=config.model,
++            timeout=config.timeout,
++        )
++
++    elif config.provider == "kilo":
++        from kilo import KiloProvider
++        provider = KiloProvider(
++            base_url=config.base_url,
++            model=config.model,
++            api_key=config.api_key,
++            timeout=config.timeout,
++        )
++
+     else:
++        # load_provider_config() already validates this, so this
++        # branch only guards against future drift between the two.
+         raise RuntimeError(
+-            f"Unknown PROVIDER '{name}'. Expected one of: "
++            f"Unknown PROVIDER '{config.provider}'. Expected one of: "
+             f"{', '.join(SUPPORTED_PROVIDERS)}."
+         )
+ 
+-    # Tag the instance with the name it was resolved from so callers
+-    # (e.g. the /providers endpoint) can report "current" without
+-    # re-deriving it from the environment themselves.
++    # Tag the instance with the name and resolved config it came from
++    # so callers (e.g. the /providers endpoint) can report status
++    # without re-deriving it from the environment themselves.
+     provider.name = name
++    provider.config = config
+     return provider
+diff --git a/server-python/tests/test_agent.py b/server-python/tests/test_agent.py
+index acf10d9..897df55 100644
+--- a/server-python/tests/test_agent.py
++++ b/server-python/tests/test_agent.py
+@@ -136,6 +136,110 @@ def test_multi_step_tool_execution(monkeypatch):
+     assert events[-1] == {"type": "final", "text": "tests passed"}
+ 
+ 
++def test_cancel_event_set_before_start_stops_before_any_provider_call():
++    from threading import Event
++
++    class ExplodingProvider(Provider):
++        def build_contents(self, msg, history):
++            return []
++
++        def generate(self, contents):
++            raise AssertionError("generate() must not be called once cancelled")
++
++        def append_model_turn(self, contents, response):
++            return contents
++
++        def append_tool_results(self, contents, results):
++            return contents
++
++    cancel_event = Event()
++    cancel_event.set()
++
++    events = list(run_agent_loop(ExplodingProvider(), [], cancel_event=cancel_event))
++
++    assert events[-1] == {"type": "cancelled"}
++    cancelled_progress = [e for e in events if e.get("phase") == "cancelled"]
++    assert cancelled_progress
++
++
++def test_cancel_event_set_mid_loop_stops_before_next_round(monkeypatch):
++    from threading import Event
++
++    def slow_tool(value="ok"):
++        return {"value": value}
++
++    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_read", slow_tool)
++    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_read", 5)
++
++    cancel_event = Event()
++
++    provider = FakeProvider([
++        ProviderResponse(
++            text=None,
++            tool_calls=[ToolCall("fake_read", {"value": "first"})],
++        ),
++        ProviderResponse(text="should never be reached"),
++    ])
++
++    # Cancel between round 1's tool call and round 2's provider.generate().
++    original_append_tool_results = provider.append_tool_results
++
++    def cancel_then_append(contents, results):
++        cancel_event.set()
++        return original_append_tool_results(contents, results)
++
++    provider.append_tool_results = cancel_then_append
++
++    events = list(run_agent_loop(provider, [], cancel_event=cancel_event))
++
++    assert events[-1] == {"type": "cancelled"}
++    assert {"type": "final", "text": "should never be reached"} not in events
++
++
++def test_cancel_event_checked_before_each_tool_call(monkeypatch):
++    from threading import Event
++
++    calls = []
++
++    def fake_tool(value="ok"):
++        calls.append(value)
++        return {"value": value}
++
++    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_read", fake_tool)
++    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_read", 5)
++
++    cancel_event = Event()
++
++    def cancel_after_first_call(value="ok"):
++        calls.append(value)
++        cancel_event.set()
++        return {"value": value}
++
++    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_read", cancel_after_first_call)
++
++    provider = FakeProvider([
++        ProviderResponse(
++            text=None,
++            tool_calls=[
++                ToolCall("fake_read", {"value": "one"}),
++                ToolCall("fake_read", {"value": "two"}),
++            ],
++        ),
++    ])
++
++    events = list(run_agent_loop(provider, [], cancel_event=cancel_event))
++
++    # Only the first of the two tool calls in this round should have run.
++    assert calls == ["one"]
++    assert events[-1] == {"type": "cancelled"}
++
++
++def test_no_cancel_event_behaves_exactly_as_before():
++    provider = FakeProvider([ProviderResponse(text="hello")])
++    events = list(run_agent_loop(provider, []))
++    assert events[-1] == {"type": "final", "text": "hello"}
++
++
+ def test_progress_messages_are_meaningful(monkeypatch):
+     def read_tool(path):
+         return {"path": path, "contents": "x"}
+diff --git a/server-python/tests/test_app.py b/server-python/tests/test_app.py
+index 9878b9d..33cc3c4 100644
+--- a/server-python/tests/test_app.py
++++ b/server-python/tests/test_app.py
+@@ -29,6 +29,109 @@ def test_providers_endpoint_reports_current_and_supported(client):
+     assert data["current"] == "gemini"
+     assert data["providers"] == ["gemini", "ollama", "kilo"]
+     assert data["current"] in data["providers"]
++    assert "capabilities" in data
++    assert "model" in data
++
++
++def test_providers_endpoint_never_leaks_api_key(client, monkeypatch):
++    monkeypatch.setenv("GOOGLE_API_KEY", "super-secret-key")
++
++    response = client.get("/providers")
++    assert response.status_code == 200
++    assert "super-secret-key" not in response.get_data(as_text=True)
++
++
++def test_providers_endpoint_skip_probe(client):
++    response = client.get("/providers?probe=0")
++    assert response.status_code == 200
++    assert "available" not in response.get_json()
++
++
++def test_providers_models_endpoint_rejects_unknown_provider(client):
++    response = client.get("/providers/not-a-provider/models")
++    assert response.status_code == 404
++    assert "unknown provider" in response.get_json()["error"].lower()
++
++
++def test_providers_models_endpoint_lists_ollama_models(client, monkeypatch):
++    import providers as providers_module
++
++    class FakeOllama:
++        name = "ollama"
++        capabilities = type(
++            "Caps", (), {"model_listing": True, "to_dict": lambda self: {}}
++        )()
++
++        def list_models(self):
++            return [{"id": "qwen3.5:9b"}, {"id": "llama3.1:8b"}]
++
++    monkeypatch.setattr(
++        providers_module, "get_provider", lambda name, model=None: FakeOllama()
++    )
++    monkeypatch.setattr(app, "get_provider", providers_module.get_provider)
++
++    response = client.get("/providers/ollama/models")
++    assert response.status_code == 200
++    data = response.get_json()
++    assert data["provider"] == "ollama"
++    assert data["supports_listing"] is True
++    assert [m["id"] for m in data["models"]] == ["qwen3.5:9b", "llama3.1:8b"]
++
++
++def test_select_provider_rejects_unknown_name(client):
++    response = client.post("/providers/select", json={"provider": "not-real"})
++    assert response.status_code == 400
++    assert "unknown provider" in response.get_json()["error"].lower()
++
++
++def test_select_provider_requires_name(client):
++    response = client.post("/providers/select", json={})
++    assert response.status_code == 400
++    assert "provider is required" in response.get_json()["error"].lower()
++
++
++def test_select_provider_rejects_misconfigured_provider_without_switching(
++    client, monkeypatch
++):
++    """Selecting Kilo with no KILO_API_KEY must fail cleanly and leave
++    the previously active provider (gemini, from the test env) in place
++    rather than leaving the app with no provider at all.
++    """
++
++    monkeypatch.delenv("KILO_API_KEY", raising=False)
++    original_provider = app.provider
++
++    response = client.post("/providers/select", json={"provider": "kilo"})
++
++    assert response.status_code == 400
++    assert "kilo" in response.get_json()["error"].lower()
++    assert app.provider is original_provider
++
++
++def test_select_provider_switches_active_provider(client, monkeypatch):
++    monkeypatch.setenv("PROVIDER", "gemini")
++    original_provider = app.provider
++
++    try:
++        response = client.post(
++            "/providers/select",
++            json={"provider": "gemini", "model": "gemini-3.6-pro"},
++        )
++        assert response.status_code == 200
++        data = response.get_json()
++        assert data["name"] == "gemini"
++        assert data["model"] == "gemini-3.6-pro"
++        assert app.provider.name == "gemini"
++        assert app.provider.model == "gemini-3.6-pro"
++    finally:
++        with app._provider_lock:
++            app.provider = original_provider
++
++
++def test_cancel_endpoint_reports_unknown_request_id(client):
++    response = client.post("/cancel/does-not-exist")
++    assert response.status_code == 200
++    assert response.get_json()["cancelled"] is False
+ 
+ 
+ def test_confirm_endpoint_requires_action_id(client):
+diff --git a/server-python/tests/test_cancellation.py b/server-python/tests/test_cancellation.py
+new file mode 100644
+index 0000000..0b8b6da
+--- /dev/null
++++ b/server-python/tests/test_cancellation.py
+@@ -0,0 +1,63 @@
++import sys
++from pathlib import Path
++
++SERVER_DIR = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(SERVER_DIR))
++
++import cancellation  # noqa: E402
++
++
++def teardown_function(_fn):
++    cancellation.clear()
++
++
++def test_register_returns_a_fresh_unset_event():
++    event = cancellation.register("req-1")
++    assert event.is_set() is False
++
++
++def test_cancel_sets_the_registered_event():
++    event = cancellation.register("req-1")
++    result = cancellation.cancel("req-1")
++
++    assert result is True
++    assert event.is_set() is True
++
++
++def test_cancel_unknown_request_id_returns_false():
++    assert cancellation.cancel("never-registered") is False
++
++
++def test_release_stops_tracking_a_request():
++    cancellation.register("req-1")
++    cancellation.release("req-1")
++
++    assert cancellation.cancel("req-1") is False
++
++
++def test_release_is_safe_for_unknown_or_empty_id():
++    # Must not raise even if the request was never registered, or the
++    # client never sent a request_id at all (empty string).
++    cancellation.release("never-registered")
++    cancellation.release("")
++    cancellation.release(None)
++
++
++def test_registering_the_same_id_twice_resets_the_event():
++    first = cancellation.register("req-1")
++    cancellation.cancel("req-1")
++    assert first.is_set() is True
++
++    second = cancellation.register("req-1")
++    assert second.is_set() is False
++
++
++def test_oldest_entry_is_evicted_once_capacity_is_reached(monkeypatch):
++    monkeypatch.setattr(cancellation, "MAX_TRACKED_REQUESTS", 2)
++
++    cancellation.register("req-1")
++    cancellation.register("req-2")
++    cancellation.register("req-3")
++
++    assert cancellation.cancel("req-1") is False
++    assert cancellation.cancel("req-3") is True
+diff --git a/server-python/tests/test_ollama_integration.py b/server-python/tests/test_ollama_integration.py
+new file mode 100644
+index 0000000..597253a
+--- /dev/null
++++ b/server-python/tests/test_ollama_integration.py
+@@ -0,0 +1,164 @@
++"""Real end-to-end Ollama integration test.
++
++Unlike the rest of the provider test suite, this test talks to an
++actual Ollama server instead of mocking `requests`. The unit tests in
++test_providers.py verify HTTP request/response shapes; this verifies
++the whole reason the Ollama provider exists — that a live local model
++can carry a conversation and call a project tool through the real
++backend loop, exactly as it would through the /chat endpoint in
++production:
++
++    Windows Flask -> cyber.local:11434 -> Linux Ollama -> model ->
++    tool call -> Windows Flask tool execution
++
++Skipped by default. Opt in by pointing at a running `ollama serve`
++(locally or over the network) with a pulled model:
++
++    OLLAMA_INTEGRATION_TEST=1 pytest tests/test_ollama_integration.py
++
++    # or, equivalently, if these are already set for real use:
++    OLLAMA_BASE_URL=http://cyber.local:11434 OLLAMA_MODEL=qwen3.5:9b \\
++        pytest tests/test_ollama_integration.py
++
++If the server configured this way is unreachable, or has no models
++pulled, individual tests skip themselves with an actionable reason
++rather than failing — an offline dev machine or CI runner without
++Ollama installed should never see a red build for this file.
++"""
++
++import os
++import sys
++from pathlib import Path
++
++import pytest
++
++SERVER_DIR = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(SERVER_DIR))
++
++from agent import run_agent_loop  # noqa: E402
++from ollama import OllamaProvider  # noqa: E402
++from tools import TOOL_FUNCTIONS  # noqa: E402
++
++
++def _integration_enabled() -> bool:
++    return bool(
++        os.getenv("OLLAMA_INTEGRATION_TEST")
++        or os.getenv("OLLAMA_BASE_URL")
++        or os.getenv("OLLAMA_HOST")
++    )
++
++
++def _make_provider() -> OllamaProvider:
++    base_url = (
++        os.getenv("OLLAMA_BASE_URL")
++        or os.getenv("OLLAMA_HOST")
++        or "http://localhost:11434/v1"
++    )
++    model = os.getenv("OLLAMA_MODEL", "qwen3.5:9b")
++    return OllamaProvider(base_url=base_url, model=model, timeout=60)
++
++
++pytestmark = pytest.mark.skipif(
++    not _integration_enabled(),
++    reason=(
++        "Set OLLAMA_INTEGRATION_TEST=1 (or OLLAMA_BASE_URL/OLLAMA_HOST) "
++        "to run the live Ollama integration test against a real server."
++    ),
++)
++
++
++@pytest.fixture(scope="module")
++def live_provider():
++    provider = _make_provider()
++    probe = provider.probe()
++    if not probe["available"]:
++        pytest.skip(
++            f"Ollama is not reachable at {provider.native_base_url}: "
++            f"{probe['error']}. Start `ollama serve` (and confirm "
++            "OLLAMA_BASE_URL/OLLAMA_HOST) to run this test."
++        )
++    return provider
++
++
++def test_ollama_server_is_reachable(live_provider):
++    result = live_provider.probe()
++    assert result["available"] is True
++    assert result["error"] is None
++
++
++def test_ollama_lists_at_least_one_installed_model(live_provider):
++    models = live_provider.list_models()
++    assert isinstance(models, list)
++    assert len(models) >= 1, (
++        "Ollama is reachable but reports no installed models. Run "
++        f"`ollama pull {live_provider.model}` and retry."
++    )
++
++
++def test_ollama_chat_only_round_trip(live_provider):
++    """A plain chat turn with no tool calling involved."""
++
++    contents = live_provider.build_contents(
++        "Reply with exactly one word: hello", []
++    )
++    response = live_provider.generate(contents)
++
++    assert response.text
++    assert isinstance(response.text, str)
++
++
++def test_ollama_full_tool_call_round_trip(live_provider):
++    """Exercise the complete split-machine architecture end to end:
++
++    provider.generate() asks the real model for a tool call, the real
++    agent loop executes it against the real `list_files` tool, the
++    result is sent back to the model, and the model produces a final
++    answer — the same path /chat uses in production.
++    """
++
++    if not live_provider.capabilities.tools:
++        live_provider.refresh_capabilities()
++    if not live_provider.capabilities.tools:
++        pytest.skip(
++            f"Model {live_provider.model} does not advertise tool "
++            "calling; cannot exercise the tool-call round trip. Try a "
++            "model built for function calling (e.g. qwen3.5, llama3.1)."
++        )
++
++    contents = live_provider.build_contents(
++        'Call the list_files tool with path "." to see what is in the '
++        "current directory, then briefly tell me how many entries it "
++        "returned. You must call the tool rather than guessing.",
++        [],
++    )
++
++    calls = []
++    original_list_files = TOOL_FUNCTIONS.get("list_files")
++
++    def counting_list_files(*args, **kwargs):
++        calls.append((args, kwargs))
++        return original_list_files(*args, **kwargs)
++
++    TOOL_FUNCTIONS["list_files"] = counting_list_files
++    try:
++        events = list(run_agent_loop(live_provider, contents))
++    finally:
++        TOOL_FUNCTIONS["list_files"] = original_list_files
++
++    tool_calls = [e for e in events if e["type"] == "tool_call"]
++    tool_results = [e for e in events if e["type"] == "tool_result"]
++    final = [e for e in events if e["type"] == "final"]
++
++    assert calls, (
++        "The model never actually invoked list_files — check that "
++        f"{live_provider.model} supports tool calling and that the "
++        "backend->Ollama->model->tool-call->backend path is wired up "
++        "correctly end to end."
++    )
++    assert tool_calls, "No tool_call event was emitted by the agent loop."
++    assert not any(
++        isinstance(r["result"], dict) and r["result"].get("error")
++        for r in tool_results
++    ), f"Tool execution reported an error: {tool_results}"
++    assert final, "Agent loop never reached a final answer after the tool call."
++    assert final[-1]["text"], "Final answer text was empty."

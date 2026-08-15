@@ -175,7 +175,16 @@ class OpenAICompatibleProvider(Provider):
                 ),
             }
         except Exception as exc:
-            return {"available": False, "error": str(exc)}
+            # _request() already wraps requests.RequestException in an
+            # actionable RuntimeError via _unreachable_message(). Route
+            # anything else (e.g. a raw ConnectionError that didn't come
+            # through requests) through the same message builder so a
+            # caller never sees a bare "connection refused" instead of
+            # a diagnosable "Could not reach <provider> at <url>".
+            message = str(exc)
+            if not message.startswith(f"Could not reach {self.display_name}"):
+                message = self._unreachable_message(exc)
+            return {"available": False, "error": message}
 
     def list_models(self) -> list:
         try:

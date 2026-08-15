@@ -23,6 +23,7 @@ import './App.css';
 import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
+import ProviderSelector from './components/ProviderSelector.jsx';
 import {
   statusFromProgressEvent,
   statusFromPendingConfirmation,
@@ -32,9 +33,17 @@ import {
   isAgentStatusStreamLine,
 } from './agentStatus.js';
 
+function generateRequestId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function App() {
   const inputRef = useRef();
   const abortControllerRef = useRef(null);
+  const requestIdRef = useRef(null);
   const host = import.meta.env.VITE_API_URL || "http://localhost:9000";
   const url = host + "/chat";
   const streamUrl = host + "/stream";
@@ -66,6 +75,26 @@ function App() {
     return fallback;
   }
 
+  /**
+   * Best-effort backend cancellation. Aborting the fetch/axios request
+   * only stops this browser tab from reading the response — the Flask
+   * process keeps running the agent loop unless it's told to stop.
+   * This tells run_agent_loop (via cancellation.py) to check its
+   * cancel_event and stop between rounds/tool calls instead.
+   */
+  const cancelBackendRequest = () => {
+    const requestId = requestIdRef.current;
+    if (!requestId) return;
+    fetch(`${host}/cancel/${requestId}`, { method: "POST" }).catch(() => {
+      // Best-effort: the client-side abort below still applies either way.
+    });
+  };
+
+  const stopCurrentRequest = () => {
+    cancelBackendRequest();
+    abortControllerRef.current?.abort();
+  };
+
   const handleClick = () => {
     if (validationCheck(inputRef.current.value)) {
       console.log("Empty or invalid entry");
@@ -77,9 +106,15 @@ function App() {
   };
 
   const handleNonStreamingChat = async () => {
+    const requestId = generateRequestId();
+    requestIdRef.current = requestId;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     const chatData = {
       chat: inputRef.current.value,
-      history: data
+      history: data,
+      request_id: requestId,
     };
 
     const ndata = [...data,
@@ -102,36 +137,65 @@ function App() {
     const headerConfig = {
       headers: {
         'Content-Type': 'application/json;charset=UTF-8',
-      }
+      },
+      signal: controller.signal,
     };
 
     const fetchData = async () => {
       let modelResponse = "";
       let toolActivity = [];
+      let cancelled = false;
 
       try {
         const response = await axios.post(url, chatData, headerConfig);
         modelResponse = response.data.text || "";
         toolActivity = response.data.tool_activity || [];
+        cancelled = Boolean(response.data.cancelled);
 
-        const status = statusFromToolActivity(toolActivity);
-        if (status) {
-          setAgentStatus(status);
-        } else if (modelResponse) {
+        if (cancelled) {
+          if (!modelResponse.trim()) {
+            modelResponse = "[Response stopped by user.]";
+          }
           setAgentStatus({
             phase: 'complete',
-            message: 'Task completed',
+            message: 'Stopped by user',
             assertive: false,
           });
+        } else {
+          const status = statusFromToolActivity(toolActivity);
+          if (status) {
+            setAgentStatus(status);
+          } else if (modelResponse) {
+            setAgentStatus({
+              phase: 'complete',
+              message: 'Task completed',
+              assertive: false,
+            });
+          }
         }
       } catch (error) {
-        modelResponse = `Error: ${getErrorMessage(error)}`;
-        setAgentStatus({
-          phase: 'error',
-          message: getErrorMessage(error),
-          assertive: true,
-        });
+        if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") {
+          cancelled = true;
+          modelResponse = "[Response stopped by user.]";
+          setAgentStatus({
+            phase: 'complete',
+            message: 'Stopped by user',
+            assertive: false,
+          });
+        } else {
+          modelResponse = `Error: ${getErrorMessage(error)}`;
+          setAgentStatus({
+            phase: 'error',
+            message: getErrorMessage(error),
+            assertive: true,
+          });
+        }
       } finally {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+        requestIdRef.current = null;
+
         const updatedData = [...ndata, {
           role: "model",
           parts: [{ text: modelResponse }],
@@ -148,10 +212,6 @@ function App() {
     };
 
     fetchData();
-  };
-
-  const stopStreaming = () => {
-    abortControllerRef.current?.abort();
   };
 
   const handleStreamingChat = async () => {
@@ -186,6 +246,9 @@ function App() {
       let modelResponse = "";
       let toolActivity = [];
       let cancelled = false;
+      const requestId = generateRequestId();
+      requestIdRef.current = requestId;
+      chatData.request_id = requestId;
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
@@ -243,6 +306,11 @@ function App() {
           setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`);
         } else if (event.type === "cancelled") {
           cancelled = true;
+          setAgentStatus({
+            phase: 'cancelled',
+            message: 'Cancelled by user request.',
+            assertive: false,
+          });
         }
       };
 
@@ -255,6 +323,9 @@ function App() {
           const status = statusFromStreamLine(line);
           if (status) {
             setAgentStatus(status);
+            if (status.phase === 'cancelled') {
+              cancelled = true;
+            }
             toolActivity.push({
               type: 'progress',
               phase: status.phase,
@@ -356,6 +427,9 @@ function App() {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
         }
+        if (requestIdRef.current === requestId) {
+          requestIdRef.current = null;
+        }
 
         setAnswer("");
         const updatedData = [...ndata, {
@@ -382,6 +456,7 @@ function App() {
     <center>
       <div className="chat-app">
         <Header toggled={toggled} setToggled={setToggled} />
+        <ProviderSelector host={host} waiting={waiting} />
         <ConversationDisplayArea
           data={data}
           streamdiv={streamdiv}
@@ -389,10 +464,10 @@ function App() {
           streamToolActivity={streamToolActivity}
           agentStatus={agentStatus}
         />
-        {waiting && is_stream && (
+        {waiting && (
           <button
             type="button"
-            onClick={stopStreaming}
+            onClick={stopCurrentRequest}
             aria-label="Cancel response"
           >
             Cancel response
