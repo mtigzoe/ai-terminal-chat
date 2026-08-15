@@ -435,11 +435,74 @@ The following remain future work rather than requirements of the completed miles
 
 ### Local and offline AI
 
-- Complete Ollama provider support
-- Support for additional OpenAI-compatible local providers
-- Local-only/offline operation without a cloud API dependency
-- Model selection and provider configuration from the application
-- Provider capability detection so unsupported tool or streaming features are handled cleanly
+The long-term goal is to support running AI Terminal Chat with a local AI model instead of requiring a cloud API.
+
+The primary local-AI target is [Ollama](https://ollama.com/). The application should support a split-machine development setup in which the React frontend and Flask backend run on Windows while Ollama runs on a separate Linux machine with the GPU.
+
+A possible deployment is:
+
+```text
+Windows
+  React/Vite client (:3000)
+          |
+          v
+  Flask/Python backend (:9000)
+          |
+          | Local network HTTP
+          v
+Linux
+  Ollama (:11434)
+          |
+          v
+  Local AI model
+```
+
+This allows the Linux machine to handle model inference while the Windows machine runs the application and provides the user interface. The model itself does not need to communicate with a cloud AI service.
+
+The existing `accessible-terminal-app` project uses a similar approach, with its Windows startup script allowing the Ollama host to be configured separately from the application host.
+
+Future work includes:
+
+- Complete the Ollama provider implementation.
+- Allow the Ollama endpoint to be configured through an environment variable such as `OLLAMA_HOST`.
+- Support Ollama running on the same computer or on another machine on the local network.
+- Provide Windows and Linux startup scripts for common local-AI configurations.
+- Detect whether the configured Ollama server is reachable and provide a clear error when it is unavailable.
+- Allow the user to select an installed Ollama model.
+- Support local-only operation without a Gemini or other cloud API key.
+- Preserve the existing backend-controlled tool execution and security model when using local models.
+- Detect provider capabilities so unsupported tool-calling or streaming features are handled cleanly.
+- Support additional OpenAI-compatible local providers in the future.
+
+The intended local-AI workflow is:
+
+```text
+User
+  |
+  v
+React client
+  |
+  v
+Flask backend
+  |
+  v
+Ollama provider
+  |
+  | HTTP
+  v
+Linux Ollama server
+  |
+  v
+Local model
+  |
+  v
+Tool call / response
+  |
+  v
+Flask backend validates and executes tools
+```
+
+The local model should not receive unrestricted access to the Windows or Linux filesystem or shell. Local AI changes the model provider; it does not bypass the application's existing tool validation, filesystem restrictions, command allowlist, or confirmation requirements.
 
 ### Provider ecosystem
 
