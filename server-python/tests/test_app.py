@@ -26,7 +26,7 @@ def test_providers_endpoint_reports_current_and_supported(client):
     assert response.status_code == 200
 
     data = response.get_json()
-    assert data["providers"] == ["gemini", "ollama", "kilo"]
+    assert data["providers"] == ["gemini", "ollama", "kilo", "openai", "xai"]
     assert data["current"] in data["providers"]
     assert "capabilities" in data
     assert "model" in data
