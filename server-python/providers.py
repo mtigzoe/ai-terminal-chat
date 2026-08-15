@@ -36,9 +36,6 @@ def get_provider(name: str = None) -> Provider:
     elif name == "ollama":
         from ollama import OllamaProvider
 
-        # OLLAMA_BASE_URL is the preferred setting because it can
-        # explicitly include /v1. OLLAMA_HOST is also accepted for
-        # compatibility with Ollama's own host configuration style.
         ollama_url = (
             os.getenv("OLLAMA_BASE_URL")
             or os.getenv("OLLAMA_HOST")
@@ -51,14 +48,12 @@ def get_provider(name: str = None) -> Provider:
         )
 
     elif name == "kilo":
-        from openai_compatible import OpenAICompatibleProvider
-        api_key = os.getenv("KILO_API_KEY")
-        if not api_key:
-            raise RuntimeError("KILO_API_KEY is not set. Add it to your .env file.")
-        provider = OpenAICompatibleProvider(
-            base_url=os.getenv("KILO_BASE_URL", ""),
+        from kilo import KiloProvider
+        provider = KiloProvider(
+            base_url=os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway"),
             model=os.getenv("KILO_MODEL", "kilocode/kilo-auto/balanced"),
-            api_key=api_key,
+            api_key=os.getenv("KILO_API_KEY"),
+            timeout=int(os.getenv("KILO_TIMEOUT", "120")),
         )
 
     else:
