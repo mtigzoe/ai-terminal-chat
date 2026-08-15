@@ -2,6 +2,9 @@
 set -euo pipefail
 
 # Start AI Terminal Chat on Linux with a local Ollama server.
+# The script installs frontend dependencies when needed and creates/updates the
+# Python uv virtual environment automatically.
+#
 # Override the model when needed:
 #   ./scripts/start-offline-ai.sh qwen3.5:9b
 
@@ -9,6 +12,18 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 SERVER_DIR="$REPO_ROOT/server-python"
 CLIENT_DIR="$REPO_ROOT/client-react"
+VENV_DIR="$SERVER_DIR/.venv"
+VENV_PYTHON="$VENV_DIR/bin/python"
+
+if ! command -v uv >/dev/null 2>&1; then
+    printf 'Error: uv is required but was not found in PATH.\n' >&2
+    exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+    printf 'Error: npm is required but was not found in PATH.\n' >&2
+    exit 1
+fi
 
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 OLLAMA_HOST="${OLLAMA_HOST%/}"
@@ -43,10 +58,26 @@ else
     printf 'Warning: ollama CLI was not found; continuing because the HTTP server is reachable.\n' >&2
 fi
 
+printf '\nPreparing Python environment...\n'
+if [[ ! -x "$VENV_PYTHON" ]]; then
+    printf 'Creating uv virtual environment...\n'
+    (cd "$SERVER_DIR" && uv venv .venv)
+fi
+
+printf 'Installing/updating Python dependencies...\n'
+(cd "$SERVER_DIR" && uv pip install --python "$VENV_PYTHON" -r requirements.txt)
+
+if [[ ! -d "$CLIENT_DIR/node_modules" ]]; then
+    printf 'Installing React dependencies with npm...\n'
+    (cd "$CLIENT_DIR" && npm install)
+else
+    printf 'React dependencies already installed; skipping npm install.\n'
+fi
+
 printf '\nStarting Flask backend...\n'
 (
     cd "$SERVER_DIR"
-    exec python app.py
+    exec "$VENV_PYTHON" app.py
 ) &
 SERVER_PID=$!
 
