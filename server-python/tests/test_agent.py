@@ -136,6 +136,110 @@ def test_multi_step_tool_execution(monkeypatch):
     assert events[-1] == {"type": "final", "text": "tests passed"}
 
 
+def test_cancel_event_set_before_start_stops_before_any_provider_call():
+    from threading import Event
+
+    class ExplodingProvider(Provider):
+        def build_contents(self, msg, history):
+            return []
+
+        def generate(self, contents):
+            raise AssertionError("generate() must not be called once cancelled")
+
+        def append_model_turn(self, contents, response):
+            return contents
+
+        def append_tool_results(self, contents, results):
+            return contents
+
+    cancel_event = Event()
+    cancel_event.set()
+
+    events = list(run_agent_loop(ExplodingProvider(), [], cancel_event=cancel_event))
+
+    assert events[-1] == {"type": "cancelled"}
+    cancelled_progress = [e for e in events if e.get("phase") == "cancelled"]
+    assert cancelled_progress
+
+
+def test_cancel_event_set_mid_loop_stops_before_next_round(monkeypatch):
+    from threading import Event
+
+    def slow_tool(value="ok"):
+        return {"value": value}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_read", slow_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_read", 5)
+
+    cancel_event = Event()
+
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("fake_read", {"value": "first"})],
+        ),
+        ProviderResponse(text="should never be reached"),
+    ])
+
+    # Cancel between round 1's tool call and round 2's provider.generate().
+    original_append_tool_results = provider.append_tool_results
+
+    def cancel_then_append(contents, results):
+        cancel_event.set()
+        return original_append_tool_results(contents, results)
+
+    provider.append_tool_results = cancel_then_append
+
+    events = list(run_agent_loop(provider, [], cancel_event=cancel_event))
+
+    assert events[-1] == {"type": "cancelled"}
+    assert {"type": "final", "text": "should never be reached"} not in events
+
+
+def test_cancel_event_checked_before_each_tool_call(monkeypatch):
+    from threading import Event
+
+    calls = []
+
+    def fake_tool(value="ok"):
+        calls.append(value)
+        return {"value": value}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_read", fake_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "fake_read", 5)
+
+    cancel_event = Event()
+
+    def cancel_after_first_call(value="ok"):
+        calls.append(value)
+        cancel_event.set()
+        return {"value": value}
+
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "fake_read", cancel_after_first_call)
+
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[
+                ToolCall("fake_read", {"value": "one"}),
+                ToolCall("fake_read", {"value": "two"}),
+            ],
+        ),
+    ])
+
+    events = list(run_agent_loop(provider, [], cancel_event=cancel_event))
+
+    # Only the first of the two tool calls in this round should have run.
+    assert calls == ["one"]
+    assert events[-1] == {"type": "cancelled"}
+
+
+def test_no_cancel_event_behaves_exactly_as_before():
+    provider = FakeProvider([ProviderResponse(text="hello")])
+    events = list(run_agent_loop(provider, []))
+    assert events[-1] == {"type": "final", "text": "hello"}
+
+
 def test_progress_messages_are_meaningful(monkeypatch):
     def read_tool(path):
         return {"path": path, "contents": "x"}

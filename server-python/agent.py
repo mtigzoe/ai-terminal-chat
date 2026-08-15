@@ -1,6 +1,8 @@
 """Provider-agnostic tool-calling loop with explicit write confirmation."""
 
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from threading import Event
+from typing import Optional
 
 from providers.base import Provider
 from pending import create_pending
@@ -129,7 +131,15 @@ def _is_successful_write_result(result: dict) -> bool:
     )
 
 
-def run_agent_loop(provider: Provider, contents: list):
+def _cancelled_event():
+    return {"type": "cancelled"}
+
+
+def run_agent_loop(
+    provider: Provider,
+    contents: list,
+    cancel_event: Optional[Event] = None,
+):
     """Run the provider and explicitly execute requested tools.
 
     Lifecycle (visible via progress events):
@@ -143,6 +153,13 @@ def run_agent_loop(provider: Provider, contents: list):
 
     Progress events are provider-agnostic and intended for frontend and
     screen-reader consumption.
+
+    `cancel_event`, when provided, is checked before each provider call
+    and before each tool call. This is cooperative cancellation: a call
+    already in flight (a slow provider.generate() or a running tool)
+    still runs to completion, but the loop stops taking further action
+    as soon as it next checks the event, instead of continuing to spend
+    rounds, tool calls, and provider time after the user asked to stop.
     """
 
     last_call_signature = None
@@ -158,6 +175,16 @@ def run_agent_loop(provider: Provider, contents: list):
 
     for round_index in range(MAX_TOOL_ROUNDS):
         round_number = round_index + 1
+
+        if cancel_event is not None and cancel_event.is_set():
+            yield _progress(
+                "cancelled",
+                "Stopped: cancelled by user",
+                round=round_number,
+                max_rounds=MAX_TOOL_ROUNDS,
+            )
+            yield _cancelled_event()
+            return
 
         try:
             response = provider.generate(contents)
@@ -201,6 +228,16 @@ def run_agent_loop(provider: Provider, contents: list):
         tool_results = []
 
         for call in response.tool_calls:
+            if cancel_event is not None and cancel_event.is_set():
+                yield _progress(
+                    "cancelled",
+                    "Stopped: cancelled by user",
+                    round=round_number,
+                    max_rounds=MAX_TOOL_ROUNDS,
+                )
+                yield _cancelled_event()
+                return
+
             function_name = call.name
             function_args = dict(call.args or {})
 

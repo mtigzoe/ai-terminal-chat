@@ -9,12 +9,16 @@
 """Flask HTTP layer for the provider-agnostic terminal agent."""
 
 import os
+import uuid
 
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from threading import Lock
+
 from dotenv import load_dotenv
 from flask import Flask, Response, request, stream_with_context
 from flask_cors import CORS
 
+import cancellation
 from agent import run_agent_loop
 from pending import get_pending, pop_pending
 from providers import SUPPORTED_PROVIDERS, get_provider
@@ -32,6 +36,7 @@ from tools import (
 
 load_dotenv()
 provider = get_provider()
+_provider_lock = Lock()
 
 app = Flask(__name__)
 CORS(app)
@@ -43,14 +48,169 @@ def handle_unexpected_error(exc):
     return {"text": "", "error": f"Unexpected server error: {exc}"}, 500
 
 
-@app.route("/providers", methods=["GET"])
-def providers():
-    """Report the active provider and supported provider names."""
+def _provider_status(target=None, probe: bool = True) -> dict:
+    """Build the status payload for one provider instance.
+
+    Never includes an api_key — ProviderConfig.to_public_dict() omits
+    it entirely, and nothing below reads provider.api_key either, so
+    this can't accidentally leak a Kilo/Gemini credential to the
+    browser (see "Don't expose API keys to React" in the README).
+    """
+
+    target = target or provider
+    config = getattr(target, "config", None)
+    status = {
+        "name": getattr(target, "name", None),
+        "model": getattr(target, "model", None),
+        "capabilities": target.capabilities.to_dict(),
+    }
+    if config is not None:
+        status["base_url"] = config.to_public_dict().get("base_url")
+
+    if probe:
+        probe_result = target.probe()
+        status["available"] = probe_result["available"]
+        status["error"] = probe_result["error"]
+        if not probe_result["available"]:
+            status["diagnostics"] = _diagnostics(target, probe_result["error"])
+
+    return status
+
+
+def _diagnostics(target, error: str) -> dict:
+    """Structured, actionable detail for an unreachable provider.
+
+    Turns "Could not reach Ollama." into something a user can act on
+    without inspecting server logs — useful for screen-reader users in
+    particular, where a wall of log text is much harder to scan than a
+    short list of concrete next steps.
+    """
+
+    config = getattr(target, "config", None)
+    causes = [f"{getattr(target, 'display_name', target.name)} is not running"]
+
+    is_local = bool(target.capabilities.local)
+    if is_local:
+        causes.append("The host running it is unreachable from this machine")
+        causes.append("The port is blocked by a firewall")
+        causes.append(
+            "The configured server URL/host environment variable is incorrect"
+        )
+    else:
+        causes.append("The API key is missing, revoked, or incorrect")
+        causes.append("The network connection is down")
 
     return {
-        "current": getattr(provider, "name", None),
-        "providers": SUPPORTED_PROVIDERS,
+        "provider": getattr(target, "display_name", getattr(target, "name", None)),
+        "server": getattr(config, "base_url", None),
+        "model": getattr(target, "model", None),
+        "possible_causes": causes,
+        "detail": error,
     }
+
+
+@app.route("/providers", methods=["GET"])
+def providers():
+    """Report the active provider's status and the supported provider names.
+
+    Pass `?probe=0` to skip the network probe (faster, but `available`
+    will be omitted) — useful for a UI that just wants to know what
+    provider/model is currently selected.
+    """
+
+    probe = request.args.get("probe", "1") != "0"
+    status = _provider_status(probe=probe)
+    status["current"] = status["name"]
+    status["providers"] = SUPPORTED_PROVIDERS
+    return status
+
+
+@app.route("/providers/<name>/models", methods=["GET"])
+def provider_models(name):
+    """List installed/available models for a provider, without switching to it.
+
+    Builds a throwaway provider instance from the same environment
+    configuration /providers/select would use, so the model list
+    reflects the server the user would actually get if they switched.
+    Returns an empty list (not an error) when the provider can't be
+    reached or doesn't support listing — see Provider.list_models().
+    """
+
+    name = (name or "").lower()
+    if name not in SUPPORTED_PROVIDERS:
+        return {
+            "error": (
+                f"Unknown provider '{name}'. Expected one of: "
+                f"{', '.join(SUPPORTED_PROVIDERS)}."
+            )
+        }, 404
+
+    try:
+        candidate = get_provider(name)
+    except Exception as exc:
+        return {"provider": name, "models": [], "error": str(exc)}, 200
+
+    return {
+        "provider": name,
+        "supports_listing": candidate.capabilities.model_listing,
+        "models": candidate.list_models(),
+    }
+
+
+@app.route("/providers/select", methods=["POST"])
+def select_provider():
+    """Switch the active provider and/or model.
+
+    The browser can only *request* a provider by name; this endpoint
+    is what actually validates and constructs it. A request for an
+    unsupported name, or one whose credentials/config are missing
+    (e.g. no KILO_API_KEY), is rejected with the current provider left
+    running rather than leaving the app without any provider at all.
+    """
+
+    global provider
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("provider", "")).strip().lower()
+    model = data.get("model")
+    model = str(model).strip() if model else None
+
+    if not name:
+        return {"error": "provider is required."}, 400
+
+    if name not in SUPPORTED_PROVIDERS:
+        return {
+            "error": (
+                f"Unknown provider '{name}'. Expected one of: "
+                f"{', '.join(SUPPORTED_PROVIDERS)}."
+            )
+        }, 400
+
+    try:
+        candidate = get_provider(name, model=model)
+    except Exception as exc:
+        return {"error": f"Could not switch to '{name}': {exc}"}, 400
+
+    with _provider_lock:
+        provider = candidate
+
+    return _provider_status(probe=True)
+
+
+@app.route("/cancel/<request_id>", methods=["POST"])
+def cancel_request(request_id):
+    """Cooperatively cancel an in-flight /chat or /stream request.
+
+    See cancellation.py: this sets the request's cancellation event,
+    which run_agent_loop checks between rounds and tool calls. A
+    request the server never registered (already finished, or the
+    client never sent a request_id) returns cancelled=False rather
+    than an error — the client's own abort of the HTTP connection is
+    still effective either way.
+    """
+
+    cancelled = cancellation.cancel(request_id)
+    return {"request_id": request_id, "cancelled": cancelled}
 
 
 @app.route("/confirm", methods=["POST"])
@@ -131,6 +291,7 @@ def chat():
     data = request.get_json(silent=True) or {}
     msg = data.get("chat", "")
     history = data.get("history", [])
+    request_id = str(data.get("request_id") or uuid.uuid4().hex)
 
     if not msg or not str(msg).strip():
         return {"text": "", "error": "Message must not be empty."}, 400
@@ -146,9 +307,11 @@ def chat():
     tool_activity = []
     final_text = ""
     error_message = None
+    cancelled = False
+    cancel_event = cancellation.register(request_id)
 
     try:
-        for event in run_agent_loop(provider, contents):
+        for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
             if event["type"] == "progress":
                 tool_activity.append({
                     "type": "progress",
@@ -175,17 +338,34 @@ def chat():
                 final_text = event["text"]
             elif event["type"] == "error":
                 error_message = event["message"]
+            elif event["type"] == "cancelled":
+                cancelled = True
     except Exception as exc:
         error_message = f"Unexpected server error: {exc}"
+    finally:
+        cancellation.release(request_id)
+
+    if cancelled:
+        return {
+            "text": final_text,
+            "tool_activity": tool_activity,
+            "cancelled": True,
+            "request_id": request_id,
+        }
 
     if error_message and not final_text:
         return {
             "text": "",
             "error": error_message,
             "tool_activity": tool_activity,
+            "request_id": request_id,
         }, 502
 
-    return {"text": final_text, "tool_activity": tool_activity}
+    return {
+        "text": final_text,
+        "tool_activity": tool_activity,
+        "request_id": request_id,
+    }
 
 
 @app.route("/stream", methods=["POST"])
@@ -199,6 +379,7 @@ def stream():
         data = request.get_json(silent=True) or {}
         msg = data.get("chat", "")
         history = data.get("history", [])
+        request_id = str(data.get("request_id") or uuid.uuid4().hex)
 
         if not msg or not str(msg).strip():
             yield "Please enter a message."
@@ -210,8 +391,10 @@ def stream():
             yield f"[Error building request: {exc}]"
             return
 
+        cancel_event = cancellation.register(request_id)
+
         try:
-            for event in run_agent_loop(provider, contents):
+            for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
                 if event["type"] == "progress":
                     # Plain-text progress for screen readers and terminals.
                     yield f"\n[{event.get('phase', 'progress')}] {event.get('message', '')}\n"
@@ -231,8 +414,12 @@ def stream():
                     yield event["text"]
                 elif event["type"] == "error":
                     yield f"\n[Error: {event['message']}]"
+                elif event["type"] == "cancelled":
+                    yield "\n[cancelled] Cancelled by user request.\n"
         except Exception as exc:
             yield f"\n[Error: {exc}]"
+        finally:
+            cancellation.release(request_id)
 
     return Response(stream_with_context(generate()), mimetype="text/plain")
 

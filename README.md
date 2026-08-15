@@ -47,9 +47,12 @@ ai-terminal-chat/
 
 - React chat interface
 - Keyboard-friendly and screen-reader-oriented interface
-- Gemini-powered conversations
-- Provider abstraction for AI backends
-- Gemini function/tool calling
+- Gemini-, Ollama-, and Kilo-powered conversations
+- Provider abstraction for AI backends, with a single `ProviderConfig` model for provider configuration
+- Provider capability detection (`tools`, `streaming`, `model_listing`, `local`, `requires_api_key`)
+- Backend-controlled provider and model selection from the UI (`/providers`, `/providers/select`, `/providers/<name>/models`)
+- Actionable connection diagnostics when a provider is unreachable
+- Gemini, Ollama, and Kilo function/tool calling
 - Local project directory listing
 - Local text-file reading
 - Text-file searching
@@ -57,8 +60,9 @@ ai-terminal-chat/
 - Git status, diff, log, and branch inspection
 - Git staging through a confirmation-required `git_add` operation
 - Streaming responses
+- Cooperative request cancellation (`/cancel/<request_id>`), stopping the agent loop between rounds/tool calls rather than only dropping the client connection
 - Tool-activity reporting
-- Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, and completion
+- Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, completion, and cancellation
 - Accessible frontend agent-status announcements
 - Confirmation-required file creation, modification, patching, deletion, and Git staging
 - Filesystem access restricted to the project directory
@@ -204,7 +208,7 @@ The Flask backend provides these main endpoints:
 POST /chat
 ```
 
-Runs a conversation to completion and returns the final model response together with tool activity.
+Runs a conversation to completion and returns the final model response together with tool activity. Accepts an optional `request_id` in the JSON body; pass one if you want to be able to cancel the request via `POST /cancel/<request_id>` while it's in flight.
 
 ### Streaming chat
 
@@ -212,7 +216,7 @@ Runs a conversation to completion and returns the final model response together 
 POST /stream
 ```
 
-Streams tool activity and the model's response as plain text for compatibility with the React client.
+Streams tool activity and the model's response as plain text for compatibility with the React client. Also accepts an optional `request_id` for cancellation.
 
 ### Confirm a pending action
 
@@ -221,6 +225,38 @@ POST /confirm
 ```
 
 Explicitly authorizes a previously previewed mutating operation. The backend retrieves the exact pending operation by its opaque action ID rather than trusting model-supplied tool names or arguments.
+
+### Cancel an in-flight request
+
+```text
+POST /cancel/<request_id>
+```
+
+Cooperatively cancels a `/chat` or `/stream` request that was started with a matching `request_id`. The agent loop checks for cancellation between rounds and between individual tool calls and stops cleanly, rather than the client only dropping the HTTP connection while the backend keeps working — this matters most for local models, where a single round can take much longer than a cloud model. Returns `{"cancelled": false}` for an unknown or already-finished request id rather than an error.
+
+### Provider status
+
+```text
+GET /providers
+```
+
+Reports the active provider's name, model, capabilities (`tools`, `streaming`, `model_listing`, `local`, `requires_api_key`), and live availability, plus the list of supported provider names. Add `?probe=0` to skip the network reachability check (faster, but `available`/`error`/`diagnostics` are omitted). When a provider is unavailable, the response includes a `diagnostics` object (`provider`, `server`, `model`, `possible_causes`, `detail`) with actionable next steps instead of just a raw error string — useful for troubleshooting and for screen-reader users, since it doesn't depend on visually scanning logs. This endpoint never returns an API key.
+
+### List a provider's models
+
+```text
+GET /providers/<name>/models
+```
+
+Lists installed/available models for `name` (`gemini`, `ollama`, or `kilo`) without switching the active provider — used to populate the model-selection dropdown before committing to a switch. Returns an empty list, not an error, when the provider can't be reached or doesn't support listing models.
+
+### Switch the active provider
+
+```text
+POST /providers/select
+```
+
+Body: `{"provider": "ollama", "model": "qwen3.5:9b"}` (`model` is optional). The browser can only *request* a provider/model; this endpoint is what actually validates and constructs it. Selection is backend-controlled by design — see "Don't expose API keys to React" below. A request naming an unsupported provider, or one whose configuration is invalid (e.g. Kilo with no `KILO_API_KEY`), is rejected with a 400 and the previously active provider is left running rather than leaving the app without any provider at all.
 
 ## Tool calling
 
@@ -287,7 +323,7 @@ The terminal `run_command` tool remains restricted to its existing read-only/low
 
 ## Provider architecture
 
-The Python backend is being organized around a provider abstraction so the application does not need to duplicate its agent logic for every model vendor.
+The Python backend is organized around a provider abstraction so the application does not need to duplicate its agent logic for every model vendor.
 
 The intended separation is:
 
@@ -299,14 +335,34 @@ Agent/tool loop
    |
    v
 Provider interface
-   |----------------|
-   v                v
-Gemini            Ollama
+   |----------------|----------------|
+   v                v                v
+Gemini            Ollama            Kilo
 ```
 
 A provider is responsible for communicating with an AI model, while the agent/tool layer remains responsible for executing local tools and enforcing the application's safety rules.
 
+`ProviderConfig` (in `providers.py`) is the single place that reads provider environment variables (`GOOGLE_API_KEY`, `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `KILO_API_KEY`, and so on) into a plain `provider`/`model`/`base_url`/`api_key`/`timeout` structure. `get_provider()` resolves one of these and constructs the matching provider class, so `GeminiProvider`, `OllamaProvider`, and `KiloProvider` stay focused on talking to their backend rather than on `os.getenv()` calls. Adding a new provider means adding one branch to `load_provider_config()` and `get_provider()` rather than touching unrelated code.
+
+Every provider also declares `ProviderCapabilities` (`tools`, `streaming`, `model_listing`, `local`, `requires_api_key`) so the backend and frontend can ask "what can this provider/model actually do?" instead of assuming every provider supports tool calling and streaming — this matters in particular for Ollama, where not every locally installed model supports tool calling.
+
 This makes it possible to add or change providers without moving filesystem, terminal, Git, or confirmation logic into each provider implementation.
+
+### Don't expose API keys to React
+
+API keys (`GOOGLE_API_KEY`, `KILO_API_KEY`) live exclusively in the Python backend's environment and are read only by `ProviderConfig`/the provider classes:
+
+```text
+React → Flask → Kilo/Gemini
+```
+
+never
+
+```text
+React → Kilo/Gemini API directly
+```
+
+`GET /providers` and `POST /providers/select` return provider status (name, model, capabilities, availability) but never the key itself — `ProviderConfig.to_public_dict()` omits `api_key` entirely rather than masking it, so there's no code path in those endpoints that can leak a credential to the browser.
 
 ## Accessibility
 
@@ -378,7 +434,8 @@ The core Agent Capabilities milestone is implemented. It adds multi-step agent b
 Implemented capabilities include:
 
 - Multi-step task execution with explicit planning and progress reporting
-- Lifecycle progress phases for planning, inspection, execution, confirmation, verification, recovery, completion, and errors
+- Lifecycle progress phases for planning, inspection, execution, confirmation, verification, recovery, completion, cancellation, and errors
+- Cooperative cancellation of an in-flight request (`POST /cancel/<request_id>`), checked between rounds and between individual tool calls
 - Post-change verification guidance and support; verification remains model-driven with tool support rather than an unconditional automatic command runner
 - Recovery and retry guidance for failed tools, including recovery hints after consecutive errors
 - Detection and protection against repeated or stuck agent actions
@@ -435,24 +492,93 @@ The following remain future work rather than requirements of the completed miles
 
 ### Local and offline AI
 
-- Complete Ollama provider support
-- Support for additional OpenAI-compatible local providers
-- Local-only/offline operation without a cloud API dependency
-- Model selection and provider configuration from the application
-- Provider capability detection so unsupported tool or streaming features are handled cleanly
+The long-term goal is to support running AI Terminal Chat with a local AI model instead of requiring a cloud API.
+
+The primary local-AI target is [Ollama](https://ollama.com/). The application supports a split-machine development setup in which the React frontend and Flask backend run on Windows while Ollama runs on a separate Linux machine with the GPU.
+
+A possible deployment is:
+
+```text
+Windows
+  React/Vite client (:3000)
+          |
+          v
+  Flask/Python backend (:9000)
+          |
+          | Local network HTTP
+          v
+Linux
+  Ollama (:11434)
+          |
+          v
+  Local AI model
+```
+
+This allows the Linux machine to handle model inference while the Windows machine runs the application and provides the user interface. The model itself does not need to communicate with a cloud AI service.
+
+The core Ollama provider implementation is complete. Implemented capabilities include:
+
+- A dedicated `OllamaProvider`, configured through `OLLAMA_BASE_URL`/`OLLAMA_HOST` and `OLLAMA_MODEL`, so Ollama can run on the same computer or on another machine on the local network
+- Detection of whether the configured Ollama server is reachable, with a clear, actionable error (including possible causes) when it is unavailable — surfaced through `GET /providers`
+- Listing of installed Ollama models through the native `/api/tags` endpoint, exposed via `GET /providers/ollama/models` and selectable from the React UI without restarting the server
+- Local-only operation without a Gemini or other cloud API key
+- The existing backend-controlled tool execution and security model is preserved when using local models — local AI changes the model provider, not the tool/permission boundary
+- Capability detection (`ProviderCapabilities`) so a model without tool-calling support degrades to chat-only instead of sending a `tools` array the server would reject
+- An additional OpenAI-compatible local provider path (`OpenAICompatibleProvider`, shared with Kilo) that Ollama, LM Studio, llama.cpp, and similar local servers can all use
+- A real, opt-in end-to-end integration test (`server-python/tests/test_ollama_integration.py`) that exercises a live Ollama server, including a full tool-call round trip through the real agent loop — not just mocked HTTP responses. Skipped by default; enable with `OLLAMA_INTEGRATION_TEST=1` (or by setting `OLLAMA_BASE_URL`/`OLLAMA_HOST`) against a running `ollama serve`
+- Cooperative cancellation for long-running local-model generations, since local inference can take considerably longer than a cloud model — see `POST /cancel/<request_id>`
+
+The existing `accessible-terminal-app` project uses a similar approach, with its Windows startup script allowing the Ollama host to be configured separately from the application host.
+
+Future work includes:
+
+- Provide Windows and Linux startup scripts for common local-AI configurations
+- Support additional OpenAI-compatible local providers beyond Ollama and Kilo (e.g. LM Studio, llama.cpp, LocalAI) as first-class, dedicated provider entries rather than manual configuration
+- Richer per-model capability metadata (e.g. context window size, quantization) surfaced in the model-selection UI
+
+The intended local-AI workflow is:
+
+```text
+User
+  |
+  v
+React client
+  |
+  v
+Flask backend
+  |
+  v
+Ollama provider
+  |
+  | HTTP
+  v
+Linux Ollama server
+  |
+  v
+Local model
+  |
+  v
+Tool call / response
+  |
+  v
+Flask backend validates and executes tools
+```
+
+The local model should not receive unrestricted access to the Windows or Linux filesystem or shell. Local AI changes the model provider; it does not bypass the application's existing tool validation, filesystem restrictions, command allowlist, or confirmation requirements.
 
 ### Provider ecosystem
 
 - Complete provider/agent test coverage
-- Additional cloud and local AI providers
+- Additional cloud and local AI providers beyond Gemini, Ollama, and Kilo
 - Consistent tool-calling and streaming behavior across providers
 - Provider compatibility tests to reduce regressions when adding models
 
 ### Reliability and testing
 
-- End-to-end tests covering the frontend, backend, provider, and tool loop
+- End-to-end tests covering the frontend, backend, provider, and tool loop, including the frontend's provider/model selector
 - Automated security and accessibility regression tests
-- Better error, timeout, cancellation, and recovery handling
+- A frontend test runner that supports Vite's `import.meta.env` (the current CRA/Jest-based `react-scripts test` setup predates the move to Vite and cannot parse it — see `client-react/src/App.test.js`)
+- Cancellation coverage for the non-Ollama providers under real network conditions, beyond the existing agent-loop unit tests
 - More robust testing of multi-step agent workflows
 
 ### Desktop application
