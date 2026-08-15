@@ -1,4 +1,4 @@
-"""Provider factory for Gemini, Ollama, Kilo, OpenAI, and xAI."""
+"""Provider factory for Gemini, Ollama, Kilo, OpenAI, xAI, and OpenRouter."""
 
 import os
 import sys
@@ -27,7 +27,7 @@ __all__ = [
 # Single source of truth for which PROVIDER values are valid — used
 # both by get_provider()'s dispatch below and by app.py's /providers
 # endpoint, so the two can never drift out of sync.
-SUPPORTED_PROVIDERS = ["gemini", "ollama", "kilo", "openai", "xai"]
+SUPPORTED_PROVIDERS = ["gemini", "ollama", "kilo", "openai", "xai", "openrouter"]
 
 
 @dataclass
@@ -123,6 +123,18 @@ def load_provider_config(name: str) -> ProviderConfig:
             timeout=int(os.getenv("XAI_TIMEOUT", "120")),
         )
 
+    if name == "openrouter":
+        return ProviderConfig(
+            provider="openrouter",
+            # Model slug is opaque (e.g. openai/gpt-4o, anthropic/claude-sonnet-4).
+            model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+            base_url=os.getenv(
+                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+            ),
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            timeout=int(os.getenv("OPENROUTER_TIMEOUT", "120")),
+        )
+
     raise RuntimeError(
         f"Unknown PROVIDER '{name}'. Expected one of: "
         f"{', '.join(SUPPORTED_PROVIDERS)}."
@@ -179,6 +191,17 @@ def get_provider(name: str = None, model: str = None) -> Provider:
             model=config.model,
             api_key=config.api_key,
             timeout=config.timeout,
+        )
+
+    elif config.provider == "openrouter":
+        from openrouter import OpenRouterProvider
+        provider = OpenRouterProvider(
+            base_url=config.base_url,
+            model=config.model,
+            api_key=config.api_key,
+            timeout=config.timeout,
+            http_referer=os.getenv("OPENROUTER_HTTP_REFERER"),
+            app_title=os.getenv("OPENROUTER_APP_TITLE"),
         )
 
     else:

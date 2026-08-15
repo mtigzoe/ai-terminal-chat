@@ -11,6 +11,7 @@ from kilo import KiloProvider  # noqa: E402
 from ollama import OllamaProvider, native_and_openai_urls  # noqa: E402
 from openai_compatible import OpenAICompatibleProvider  # noqa: E402
 from openai_provider import OpenAIProvider  # noqa: E402
+from openrouter import OpenRouterProvider  # noqa: E402
 from providers import SUPPORTED_PROVIDERS, get_provider  # noqa: E402
 from xai import XAIProvider  # noqa: E402
 
@@ -991,3 +992,253 @@ def test_xai_public_config_never_includes_api_key(monkeypatch):
     assert "secret" not in str(public).lower()
     assert public["provider"] == "xai"
     assert public["base_url"] == "https://api.x.ai/v1"
+
+
+# --- OpenRouter (gateway) ---
+
+
+def test_openrouter_is_in_supported_providers():
+    assert "openrouter" in SUPPORTED_PROVIDERS
+
+
+def test_openrouter_provider_requires_api_key():
+    try:
+        OpenRouterProvider(api_key=None)
+    except RuntimeError as exc:
+        assert "OPENROUTER_API_KEY" in str(exc)
+    else:
+        raise AssertionError("OpenRouterProvider should require an API key")
+
+
+def test_openrouter_provider_configuration():
+    provider = OpenRouterProvider(
+        base_url="https://openrouter.ai/api/v1",
+        model="openai/gpt-4o-mini",
+        api_key="test-key",
+    )
+
+    assert provider.base_url == "https://openrouter.ai/api/v1"
+    assert provider.model == "openai/gpt-4o-mini"
+    assert provider.api_key == "test-key"
+    assert provider.display_name == "OpenRouter"
+    assert provider.capabilities.local is False
+    assert provider.capabilities.requires_api_key is True
+    assert provider.capabilities.tools is True
+    assert provider.capabilities.model_listing is True
+    assert isinstance(provider, OpenAICompatibleProvider)
+
+
+def test_openrouter_provider_default_base_url_and_model():
+    provider = OpenRouterProvider(api_key="test-key")
+    assert provider.base_url == "https://openrouter.ai/api/v1"
+    assert provider.model == "openai/gpt-4o-mini"
+
+
+def test_openrouter_passes_model_slug_unchanged():
+    """Gateway must not rewrite provider/model slugs."""
+    slug = "anthropic/claude-sonnet-4"
+    provider = OpenRouterProvider(api_key="test-key", model=slug)
+    assert provider.model == slug
+
+    mock_response = Mock(status_code=200)
+    mock_response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}]
+    }
+    mock_response.raise_for_status = Mock()
+
+    with patch(
+        "openai_compatible.requests.post", return_value=mock_response
+    ) as post:
+        provider.generate([{"role": "user", "content": "hi"}])
+
+    assert post.call_args.kwargs["json"]["model"] == slug
+
+
+def test_openrouter_model_override_preserves_slug(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+
+    provider = get_provider("openrouter", model="meta-llama/llama-3.1-70b-instruct")
+    assert isinstance(provider, OpenRouterProvider)
+    assert provider.model == "meta-llama/llama-3.1-70b-instruct"
+    assert provider.config.model == "meta-llama/llama-3.1-70b-instruct"
+
+
+def test_openrouter_optional_attribution_headers():
+    provider = OpenRouterProvider(
+        api_key="test-key",
+        http_referer="https://example.com",
+        app_title="AI Terminal Chat",
+    )
+    headers = provider._headers()
+    assert headers["Authorization"] == "Bearer test-key"
+    assert headers["HTTP-Referer"] == "https://example.com"
+    assert headers["X-Title"] == "AI Terminal Chat"
+
+
+def test_openrouter_omits_attribution_headers_when_unset():
+    provider = OpenRouterProvider(api_key="test-key")
+    headers = provider._headers()
+    assert "HTTP-Referer" not in headers
+    assert "X-Title" not in headers
+
+
+def test_openrouter_provider_sends_bearer_auth():
+    provider = OpenRouterProvider(
+        base_url="https://openrouter.ai/api/v1",
+        model="openai/gpt-4o-mini",
+        api_key="or-test-key",
+    )
+    response = Mock(status_code=200)
+    response.json.return_value = {
+        "data": [{"id": "openai/gpt-4o-mini"}, {"id": "anthropic/claude-sonnet-4"}]
+    }
+
+    with patch("openai_compatible.requests.request", return_value=response) as request:
+        models = provider.list_models()
+
+    assert models == [
+        {"id": "openai/gpt-4o-mini"},
+        {"id": "anthropic/claude-sonnet-4"},
+    ]
+    assert request.call_args.kwargs["headers"]["Authorization"] == "Bearer or-test-key"
+    assert request.call_args.args[:2] == (
+        "GET",
+        "https://openrouter.ai/api/v1/models",
+    )
+
+
+def test_openrouter_provider_parses_tool_calls_with_ids():
+    provider = OpenRouterProvider(api_key="test-key")
+
+    response = provider._parse_completion(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_or_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "list_files",
+                                    "arguments": '{"path": "."}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+    )
+
+    assert response.tool_calls[0].name == "list_files"
+    assert response.tool_calls[0].id == "call_or_1"
+
+
+def test_openrouter_provider_tool_result_round_trip():
+    provider = OpenRouterProvider(api_key="test-key")
+    contents = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_or_rt",
+                    "function": {"name": "list_files", "arguments": "{}"},
+                }
+            ],
+        }
+    ]
+    updated = provider.append_tool_results(
+        contents,
+        [{"name": "list_files", "result": {"ok": True}}],
+    )
+    assert updated[-1]["tool_call_id"] == "call_or_rt"
+
+
+def test_openrouter_provider_generate_posts_chat_completions():
+    provider = OpenRouterProvider(
+        base_url="https://openrouter.ai/api/v1",
+        model="openai/gpt-4o",
+        api_key="or-key",
+        http_referer="https://example.com/app",
+        app_title="Terminal",
+    )
+    mock_response = Mock(status_code=200)
+    mock_response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}]
+    }
+    mock_response.raise_for_status = Mock()
+
+    with patch(
+        "openai_compatible.requests.post", return_value=mock_response
+    ) as post:
+        result = provider.generate([{"role": "user", "content": "hi"}])
+
+    assert result.text == "ok"
+    assert post.call_args.args[0] == "https://openrouter.ai/api/v1/chat/completions"
+    headers = post.call_args.kwargs["headers"]
+    assert headers["Authorization"] == "Bearer or-key"
+    assert headers["HTTP-Referer"] == "https://example.com/app"
+    assert headers["X-Title"] == "Terminal"
+    assert post.call_args.kwargs["json"]["model"] == "openai/gpt-4o"
+    assert "tools" in post.call_args.kwargs["json"]
+
+
+def test_openrouter_provider_unreachable_probe():
+    provider = OpenRouterProvider(api_key="test-key")
+
+    with patch(
+        "openai_compatible.requests.request",
+        side_effect=ConnectionError("connection refused"),
+    ):
+        result = provider.probe()
+
+    assert result["available"] is False
+    assert "Could not reach OpenRouter" in result["error"]
+
+
+def test_provider_factory_uses_dedicated_openrouter_provider(monkeypatch):
+    monkeypatch.setenv("PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "factory-or-key")
+    monkeypatch.setenv("OPENROUTER_MODEL", "google/gemini-2.0-flash")
+    monkeypatch.setenv("OPENROUTER_HTTP_REFERER", "https://localhost")
+    monkeypatch.setenv("OPENROUTER_APP_TITLE", "AI Terminal Chat")
+
+    provider = get_provider()
+
+    assert isinstance(provider, OpenRouterProvider)
+    assert provider.name == "openrouter"
+    assert provider.model == "google/gemini-2.0-flash"
+    assert provider.api_key == "factory-or-key"
+    assert provider.http_referer == "https://localhost"
+    assert provider.app_title == "AI Terminal Chat"
+    assert "api_key" not in provider.config.to_public_dict()
+
+
+def test_provider_factory_openrouter_missing_key_raises(monkeypatch):
+    monkeypatch.setenv("PROVIDER", "openrouter")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    try:
+        get_provider("openrouter")
+    except RuntimeError as exc:
+        assert "OPENROUTER_API_KEY" in str(exc)
+    else:
+        raise AssertionError(
+            "get_provider('openrouter') should require OPENROUTER_API_KEY"
+        )
+
+
+def test_openrouter_public_config_never_includes_api_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret-or-key-should-not-leak")
+    monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+
+    provider = get_provider("openrouter")
+    public = provider.config.to_public_dict()
+    assert "api_key" not in public
+    assert "secret" not in str(public).lower()
+    assert public["provider"] == "openrouter"
+    assert public["base_url"] == "https://openrouter.ai/api/v1"
