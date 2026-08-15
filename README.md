@@ -410,6 +410,29 @@ The following remain future work rather than completed features:
 - Broader confirmation of terminal commands, subject to a separate security review
 - Additional Git mutations such as commit, checkout, reset, and push, with appropriate confirmation and permission controls
 
+### Terminal and Git integration
+
+The core Terminal and Git Integration milestone is implemented. The backend now provides controlled terminal execution and dedicated Git inspection/staging tools while preserving the existing security and confirmation model.
+
+Implemented capabilities include:
+
+- Allowlisted development command execution through the backend-controlled `run_command` tool
+- Shell chaining, piping, redirection, and substitution blocked at the command boundary
+- Destructive/system commands and credential-oriented commands denied by defense-in-depth checks
+- Bounded command execution with timeouts and output-size limits
+- Git status, diff, log, and branch inspection through dedicated tools
+- Project-path validation for Git diff requests
+- Bounded Git output with explicit truncation reporting
+- Git staging through the backend-enforced, confirmation-required `git_add` operation
+- Regression tests covering command security, Git inspection, path validation, output limits, and staging confirmation
+
+The following remain future work rather than requirements of the completed milestone:
+
+- Better screen-reader presentation of terminal output and Git changes
+- More explicit user-facing presentation of long-running command state and timeout results
+- Additional terminal commands with explicit permissions
+- Additional Git mutations such as commit, checkout, reset, and push, each requiring a separate security review and appropriate confirmation
+
 ### Local and offline AI
 
 - Complete Ollama provider support
@@ -417,17 +440,6 @@ The following remain future work rather than completed features:
 - Local-only/offline operation without a cloud API dependency
 - Model selection and provider configuration from the application
 - Provider capability detection so unsupported tool or streaming features are handled cleanly
-
-### Terminal and Git integration
-
-The existing read-only terminal and Git inspection foundation is implemented. The remaining work focuses on usability, accessibility, testing, and carefully reviewed expansion rather than bypassing the current security model.
-
-- Better presentation of command output and Git changes to screen-reader users
-- Explicit truncation reporting for long terminal and Git results
-- Improved handling of long-running commands and timeouts
-- Expanded terminal and Git regression tests
-- Additional terminal commands with explicit permissions
-- More Git operations with appropriate confirmation requirements, coordinated with the Security and Permissions architecture
 
 ### Provider ecosystem
 
