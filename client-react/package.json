@@ -11,7 +11,9 @@
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "axe-core": "^4.10.2",
     "axios": "^1.7.4",
+    "jest-axe": "^10.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -38,7 +40,7 @@
     "production": [
       ">0.2%",
       "not dead",
-      "not op_mini all"
+      "not op_mini all
     ],
     "development": [
       "last 1 chrome version",
