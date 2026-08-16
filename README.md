@@ -72,6 +72,8 @@ ai-terminal-chat/
 - Tool-activity reporting
 - Agent lifecycle progress reporting for planning, inspection, execution, confirmation, verification, recovery, completion, and cancellation
 - Accessible frontend agent-status announcements
+- Integrated accessible project/file browser (directory navigation, file open/read, live announcements)
+- Integrated accessible terminal panel for allowlisted development commands (separate from AI tool execution UI)
 - Confirmation-required file creation, modification, patching, deletion, and Git staging
 - Filesystem access restricted to the project directory
 - Sensitive-file protection for files such as `.env`, credentials, keys, and `.git`
@@ -466,6 +468,36 @@ GET /providers/<name>/models
 
 Lists available models for a provider without switching the active provider. Model-listing support varies by provider, so an empty list can be returned when the provider cannot be reached or does not support model discovery.
 
+### Project directory listing
+
+```text
+GET /project/list?path=.
+```
+
+Lists files and directories under a path relative to the configured project root. Reuses the `list_files` tool.
+
+### Read a project file
+
+```text
+GET /project/read?path=relative/path.txt
+```
+
+Reads a UTF-8 text file inside the project root. Reuses the `read_file` tool.
+
+### Run a terminal command
+
+```text
+POST /terminal/run
+```
+
+Example body:
+
+```json
+{"command":"git status"}
+```
+
+Runs an allowlisted development command via `run_command` (same allowlist as AI tools).
+
 ### Switch the active provider
 
 ```text
@@ -800,7 +832,7 @@ Current Electron work includes:
 Future desktop work includes:
 
 - Production packaging and installers
-- Integrated project and terminal views
+- Integrated project and terminal views (implemented in React UI via `/project/*` and `/terminal/run`)
 - Native local-project selection and configuration
 - Accessible desktop workflows that do not depend on browser navigation
 

@@ -7,6 +7,8 @@ import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import ProviderSelector from './components/ProviderSelector.jsx';
+import ProjectExplorer from './components/ProjectExplorer.jsx';
+import TerminalPanel from './components/TerminalPanel.jsx';
 import {
   statusFromProgressEvent,
   statusFromPendingConfirmation,
@@ -270,24 +272,30 @@ function App() {
 
   return (
     <center>
-      <div className="chat-app">
-        <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
-        <ProviderSelector host={host} waiting={waiting} />
-        <section className="current-project" aria-labelledby="current-project-heading">
-          <div>
-            <h2 id="current-project-heading">Current project</h2>
-            {projectRootError ? (
-              <p role="status" aria-live="polite">Unable to determine current project.</p>
-            ) : (
-              <p>{projectRoot || 'Loading current project…'}</p>
-            )}
-          </div>
-          <a href="/settings.html#settings-project-root">Change project</a>
-        </section>
-        <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
-        {waiting && <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>}
-        <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
-        <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
+      <div className="app-shell">
+        <div className="chat-app">
+          <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
+          <ProviderSelector host={host} waiting={waiting} />
+          <section className="current-project" aria-labelledby="current-project-heading">
+            <div>
+              <h2 id="current-project-heading">Current project</h2>
+              {projectRootError ? (
+                <p role="status" aria-live="polite">Unable to determine current project.</p>
+              ) : (
+                <p>{projectRoot || 'Loading current project…'}</p>
+              )}
+            </div>
+            <a href="/settings.html#settings-project-root">Change project</a>
+          </section>
+          <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
+          {waiting && <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>}
+          <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
+          <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
+        </div>
+        <aside className="workspace-panels" aria-label="Project and terminal">
+          <ProjectExplorer host={host} />
+          <TerminalPanel host={host} />
+        </aside>
       </div>
     </center>
   );
