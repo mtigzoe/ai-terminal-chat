@@ -60,6 +60,7 @@ class MutableProjectRoot:
 
 _CONFIG_DIR = Path.home() / ".ai-terminal-chat"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
+CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__"
 
 
 def _load_saved_root() -> Path:
@@ -115,13 +116,49 @@ def _persist_project_root(root: Path) -> None:
             pass
 
 
+def _choose_project_root() -> Path:
+    """Open the local operating-system folder picker and return its selection."""
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise OSError("The native folder picker is unavailable on this system.") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    try:
+        selected = filedialog.askdirectory(
+            parent=root,
+            title="Choose project folder",
+            mustexist=True,
+        )
+    finally:
+        root.destroy()
+
+    if not selected:
+        raise ValueError("Folder selection was cancelled.")
+
+    return Path(selected).expanduser().resolve()
+
+
 def set_project_root(path: str) -> Path:
-    """Validate, persist, and activate a new project root."""
+    """Validate, persist, and activate a new project root.
 
-    if not path or not str(path).strip():
-        raise ValueError("A project path is required.")
+    Passing CHOOSE_PROJECT_ROOT opens the native operating-system folder
+    picker. The selected path is returned but is not persisted until this
+    function completes its normal validation/persistence flow.
+    """
 
-    candidate = Path(str(path).strip()).expanduser().resolve()
+    if str(path).strip() == CHOOSE_PROJECT_ROOT:
+        candidate = _choose_project_root()
+    else:
+        if not path or not str(path).strip():
+            raise ValueError("A project path is required.")
+        candidate = Path(str(path).strip()).expanduser().resolve()
+
     if not candidate.exists():
         raise ValueError("Project path does not exist.")
     if not candidate.is_dir():
@@ -162,10 +199,6 @@ def safe_path(path: str) -> Path:
     return requested
 
 
-# Filenames/extensions that must never be read, searched, created,
-# overwritten, or deleted by the model, even though they live inside
-# PROJECT_ROOT. This is what keeps GOOGLE_API_KEY and other secrets out
-# of the model's context.
 SENSITIVE_EXACT_NAMES = {
     ".git-credentials",
     "credentials.json",

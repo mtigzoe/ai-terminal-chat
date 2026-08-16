@@ -11,6 +11,7 @@ const SettingsPage = ({ host }) => {
   const [loading, setLoading] = useState(true);
   const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [choosingFolder, setChoosingFolder] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
@@ -75,6 +76,31 @@ const SettingsPage = ({ host }) => {
     await loadModels(nextProvider);
   };
 
+  const handleChooseFolder = async () => {
+    setChoosingFolder(true);
+    setStatusMessage('Opening the folder picker.');
+    setStatusIsError(false);
+
+    try {
+      const response = await axios.post(`${host}/project-root`, {
+        path: '__CHOOSE_PROJECT_ROOT__',
+      });
+      const selectedPath = response.data.path || '';
+      if (!selectedPath) {
+        throw new Error('The folder picker did not return a path.');
+      }
+      setProjectRoot(selectedPath);
+      setStatusMessage(`Folder selected: ${selectedPath}`);
+    } catch (error) {
+      setStatusIsError(true);
+      setStatusMessage(
+        error?.response?.data?.error || error?.message || 'Could not choose a folder.'
+      );
+    } finally {
+      setChoosingFolder(false);
+    }
+  };
+
   const handleSave = async (event) => {
     event.preventDefault();
     if (!provider || !projectRoot.trim()) return;
@@ -137,13 +163,22 @@ const SettingsPage = ({ host }) => {
             type="text"
             value={projectRoot}
             onChange={(event) => setProjectRoot(event.target.value)}
-            disabled={saving}
+            disabled={saving || choosingFolder}
             autoComplete="off"
             spellCheck="false"
             aria-describedby="settings-project-root-help"
           />
+          <button
+            type="button"
+            className="settings-folder-button"
+            onClick={handleChooseFolder}
+            disabled={saving || choosingFolder}
+            aria-describedby="settings-project-root-help"
+          >
+            {choosingFolder ? 'Choosing folder…' : 'Choose a folder'}
+          </button>
           <p id="settings-project-root-help" className="settings-help">
-            The backend uses this directory as the root for file, search, terminal, and Git tools. It must already exist and is persisted outside the project.
+            The backend uses this directory as the root for file, search, terminal, and Git tools. Choose a folder to open the native operating-system folder picker, or enter the full path manually. The selected path is shown here before you save it.
           </p>
         </div>
 
@@ -153,7 +188,7 @@ const SettingsPage = ({ host }) => {
             id="settings-provider"
             value={provider}
             onChange={handleProviderChange}
-            disabled={saving}
+            disabled={saving || choosingFolder}
           >
             <option value="" disabled>Select a provider</option>
             {providerNames.map((name) => (
@@ -169,7 +204,7 @@ const SettingsPage = ({ host }) => {
               id="settings-model"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              disabled={saving || loadingModels}
+              disabled={saving || choosingFolder || loadingModels}
             >
               {models.map((item) => (
                 <option key={item.id} value={item.id}>{item.id}</option>
@@ -181,7 +216,7 @@ const SettingsPage = ({ host }) => {
               type="text"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              disabled={saving}
+              disabled={saving || choosingFolder}
               placeholder={loadingModels ? 'Loading models…' : 'Enter model name'}
             />
           )}
@@ -194,7 +229,7 @@ const SettingsPage = ({ host }) => {
             type="password"
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            disabled={saving}
+            disabled={saving || choosingFolder}
             autoComplete="new-password"
             placeholder="Enter API key (optional for Ollama)"
             aria-describedby="settings-api-key-help"
@@ -204,7 +239,7 @@ const SettingsPage = ({ host }) => {
           </p>
         </div>
 
-        <button type="submit" className="settings-save" disabled={saving || !provider || !projectRoot.trim()}>
+        <button type="submit" className="settings-save" disabled={saving || choosingFolder || !provider || !projectRoot.trim()}>
           {saving ? 'Saving…' : 'Save'}
         </button>
 
