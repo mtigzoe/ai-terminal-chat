@@ -37,6 +37,8 @@ from tools import (
     GIT_CONFIRM_TOOL_NAMES,
     WRITE_TOOL_NAMES,
     is_command_allowed,
+    list_files,
+    read_file,
     run_command,
 )  # noqa: F401
 
@@ -73,7 +75,7 @@ def _provider_status(target=None, probe: bool = True) -> dict:
     """
 
     target = target or provider
-    config = getattr(target, "config", None)
+    config = getattr(target, "provider_config", None)
     status = {
         "name": getattr(target, "name", None),
         "model": getattr(target, "model", None),
@@ -470,6 +472,65 @@ def stream():
             cancellation.release(request_id)
 
     return Response(stream_with_context(generate()), mimetype="text/plain")
+
+
+
+@app.route("/project/list", methods=["GET"])
+def project_list():
+    """List directory entries inside the configured project root.
+
+    Reuses tools.list_files so the same path containment and sensitive-path
+    rules apply as for AI tool calls. Query param `path` is relative to the
+    project root (default ".").
+    """
+
+    path = request.args.get("path", ".") or "."
+    result = list_files(path)
+    if isinstance(result, dict) and result.get("error"):
+        return result, 400
+    return result
+
+
+@app.route("/project/read", methods=["GET"])
+def project_read():
+    """Read a UTF-8 text file inside the configured project root.
+
+    Reuses tools.read_file (size limits, sensitive-file blocking, path
+    containment). Query param `path` is required and relative to the project.
+    """
+
+    path = request.args.get("path", "") or ""
+    if not str(path).strip():
+        return {"error": "path is required."}, 400
+    result = read_file(path)
+    if isinstance(result, dict) and result.get("error"):
+        status = 400
+        err = str(result["error"]).lower()
+        if "does not exist" in err:
+            status = 404
+        elif "refusing" in err or "outside" in err or "absolute" in err:
+            status = 403
+        return result, status
+    return result
+
+
+@app.route("/terminal/run", methods=["POST"])
+def terminal_run():
+    """Run an allowlisted development command in the project directory.
+
+    Reuses tools.run_command so the terminal UI is subject to the same
+    allowlist, dangerous-character blocking, and timeouts as AI-requested
+    run_command calls. This endpoint does not expand permissions.
+    """
+
+    data = request.get_json(silent=True) or {}
+    command = str(data.get("command", "")).strip()
+    if not command:
+        return {"error": "command is required."}, 400
+    result = run_command(command)
+    if isinstance(result, dict) and result.get("error"):
+        return result, 400
+    return result
 
 
 if __name__ == "__main__":

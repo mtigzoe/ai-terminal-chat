@@ -72,7 +72,7 @@ A minimal Electron shell is provided so the same React frontend can run as a des
 3. In a second terminal, launch Electron:
 
    ```bash
-   npm run electron
+   npm run electron:dev
    ```
 
 In development (unpackaged) Electron always loads `http://localhost:3000`. The browser-based workflow (`npm run dev` alone) remains unchanged.

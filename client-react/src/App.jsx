@@ -7,6 +7,9 @@ import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import ProviderSelector from './components/ProviderSelector.jsx';
+import ProjectExplorer from './components/ProjectExplorer.jsx';
+import TerminalPanel from './components/TerminalPanel.jsx';
+import WorkspaceTabs from './components/WorkspaceTabs.jsx';
 import {
   statusFromProgressEvent,
   statusFromPendingConfirmation,
@@ -23,7 +26,6 @@ function generateRequestId() {
 
 function ConfirmationDialog({ pending, onResolve, resolving }) {
   const cancelRef = useRef(null);
-
   useEffect(() => {
     if (!pending) return undefined;
     cancelRef.current?.focus();
@@ -36,35 +38,20 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [pending, resolving, onResolve]);
-
   if (!pending) return null;
-
   const path = pending.args?.path || pending.preview?.path || '';
   const action = pending.name || 'tool operation';
   const previewText = pending.preview?.message || pending.preview?.description || '';
-
   return (
     <div className="confirmation-backdrop" role="presentation">
-      <section
-        className="confirmation-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirmation-dialog-title"
-        aria-describedby="confirmation-dialog-description"
-      >
+      <section className="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmation-dialog-title" aria-describedby="confirmation-dialog-description">
         <h2 id="confirmation-dialog-title">Confirmation required</h2>
-        <p id="confirmation-dialog-description">
-          The assistant wants to perform <strong>{action}</strong>{path ? <> on <code>{path}</code></> : ''}.
-        </p>
+        <p id="confirmation-dialog-description">The assistant wants to perform <strong>{action}</strong>{path ? <> on <code>{path}</code></> : ''}.</p>
         {previewText && <p>{previewText}</p>}
         <p>Nothing will be changed unless you choose Allow.</p>
         <div className="confirmation-dialog-actions">
-          <button ref={cancelRef} type="button" onClick={() => onResolve(false)} disabled={resolving}>
-            Deny
-          </button>
-          <button type="button" onClick={() => onResolve(true)} disabled={resolving}>
-            {resolving ? 'Processing…' : 'Allow'}
-          </button>
+          <button ref={cancelRef} type="button" onClick={() => onResolve(false)} disabled={resolving}>Deny</button>
+          <button type="button" onClick={() => onResolve(true)} disabled={resolving}>{resolving ? 'Processing…' : 'Allow'}</button>
         </div>
       </section>
     </div>
@@ -93,17 +80,15 @@ function App() {
 
   useEffect(() => {
     let active = true;
-    axios.get(`${host}/project-root`)
-      .then((response) => {
-        if (!active) return;
-        setProjectRoot(response.data.path || '');
-        setProjectRootError(false);
-      })
-      .catch(() => {
-        if (!active) return;
-        setProjectRoot('');
-        setProjectRootError(true);
-      });
+    axios.get(`${host}/project-root`).then((response) => {
+      if (!active) return;
+      setProjectRoot(response.data.path || '');
+      setProjectRootError(false);
+    }).catch(() => {
+      if (!active) return;
+      setProjectRoot('');
+      setProjectRootError(true);
+    });
     return () => { active = false; };
   }, [host]);
 
@@ -111,64 +96,39 @@ function App() {
     const element = document.getElementById('checkpoint');
     if (element) element.scrollIntoView({ behavior: 'smooth' });
   }
-
   function validationCheck(str) { return str === null || str.match(/^\s*$/) !== null; }
   function getErrorMessage(error, fallback = "Request failed.") {
     const serverMessage = error?.response?.data?.error;
     if (serverMessage) return serverMessage;
-
-    // Axios network failures (no HTTP response) are otherwise just "Network Error".
     if (error?.response == null && (error?.message === "Network Error" || error?.code === "ERR_NETWORK" || error?.code === "ECONNABORTED")) {
       const base = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/$/, "");
       const code = error?.code ? ` (${error.code})` : "";
       const detail = error?.message && error.message !== "Network Error" ? ` ${error.message}` : "";
-      return (
-        `Cannot reach the backend at ${base}${code}.${detail} ` +
-        `Confirm the Flask server is running (for example: python app.py in server-python) ` +
-        `and that VITE_API_URL matches its address if you changed the default.`
-      ).replace(/\s+/g, " ").trim();
+      return (`Cannot reach the backend at ${base}${code}.${detail} Confirm the Flask server is running (for example: python app.py in server-python) and that VITE_API_URL matches its address if you changed the default.`).replace(/\s+/g, " ").trim();
     }
-
     if (error?.message) return error.message;
     return fallback;
   }
-
   const cancelBackendRequest = () => {
     const requestId = requestIdRef.current;
     if (!requestId) return;
     fetch(`${host}/cancel/${requestId}`, { method: "POST" }).catch(() => {});
   };
-
   const stopCurrentRequest = () => {
     cancelBackendRequest();
     abortControllerRef.current?.abort();
     setAgentStatus({ phase: 'cancelled', message: 'Cancelling response.', assertive: false });
   };
-
   const resolveConfirmation = async (confirmed) => {
     if (!pendingConfirmation || confirmationResolving) return;
     const action = pendingConfirmation;
     setConfirmationResolving(true);
     try {
-      const response = await axios.post(`${host}/confirm`, {
-        action_id: action.action_id,
-        confirmed,
-      });
-      const resultEvent = {
-        type: 'tool_result',
-        name: action.name,
-        result: confirmed ? response.data.result : { cancelled: true, message: 'Action denied by user.' },
-      };
+      const response = await axios.post(`${host}/confirm`, { action_id: action.action_id, confirmed });
+      const resultEvent = { type: 'tool_result', name: action.name, result: confirmed ? response.data.result : { cancelled: true, message: 'Action denied by user.' } };
       setStreamToolActivity((current) => [...current, resultEvent]);
-      setData((current) => current.map((message) => {
-        if (message.role !== 'model') return message;
-        return { ...message, toolActivity: [...(message.toolActivity || []), resultEvent] };
-      }));
-      setAgentStatus({
-        phase: confirmed ? 'complete' : 'cancelled',
-        message: confirmed ? 'Action approved and completed.' : 'Action denied by user.',
-        assertive: false,
-      });
+      setData((current) => current.map((message) => message.role !== 'model' ? message : { ...message, toolActivity: [...(message.toolActivity || []), resultEvent] }));
+      setAgentStatus({ phase: confirmed ? 'complete' : 'cancelled', message: confirmed ? 'Action approved and completed.' : 'Action denied by user.', assertive: false });
       setPendingConfirmation(null);
     } catch (error) {
       setAgentStatus({ phase: 'error', message: getErrorMessage(error, 'Could not resolve confirmation.'), assertive: true });
@@ -177,13 +137,17 @@ function App() {
       window.setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
-
   const handleClick = (message) => {
     if (validationCheck(message)) return;
     if (!is_stream) handleNonStreamingChat(message);
     else handleStreamingChat(message);
   };
-
+  const handleSelectedFiles = (files) => {
+    if (!Array.isArray(files) || files.length === 0) return;
+    const fileContext = files.map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`).join('\n');
+    const message = `I explicitly selected these project files for you to inspect. Use the supplied contents as context for your next response.\n${fileContext}`;
+    handleClick(message);
+  };
   const handleNonStreamingChat = async (message) => {
     const requestId = generateRequestId();
     requestIdRef.current = requestId;
@@ -200,21 +164,12 @@ function App() {
         const response = await axios.post(url, chatData, headerConfig);
         modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled);
         const pending = toolActivity.find((item) => item.type === 'pending_confirmation');
-        if (pending) {
-          setPendingConfirmation(pending);
-          setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false });
-        } else if (cancelled) {
-          if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]";
-          setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false });
-        } else {
-          const status = statusFromToolActivity(toolActivity);
-          if (status) setAgentStatus(status);
-          else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false });
-        }
+        if (pending) { setPendingConfirmation(pending); setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false }); }
+        else if (cancelled) { if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false }); }
+        else { const status = statusFromToolActivity(toolActivity); if (status) setAgentStatus(status); else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); }
       } catch (error) {
-        if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") {
-          cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false });
-        } else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); }
+        if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") { cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); }
+        else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); }
       } finally {
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
         requestIdRef.current = null;
@@ -226,7 +181,6 @@ function App() {
     };
     fetchData();
   };
-
   const handleStreamingChat = async (message) => {
     const chatData = { chat: message, history: data };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
@@ -270,24 +224,28 @@ function App() {
 
   return (
     <center>
-      <div className="chat-app">
-        <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
-        <ProviderSelector host={host} waiting={waiting} />
-        <section className="current-project" aria-labelledby="current-project-heading">
-          <div>
-            <h2 id="current-project-heading">Current project</h2>
-            {projectRootError ? (
-              <p role="status" aria-live="polite">Unable to determine current project.</p>
-            ) : (
-              <p>{projectRoot || 'Loading current project…'}</p>
-            )}
-          </div>
-          <a href="/settings.html#settings-project-root">Change project</a>
-        </section>
-        <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
-        {waiting && <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>}
-        <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
-        <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
+      <div className="app-shell">
+        <div className="chat-app">
+          <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
+          <ProviderSelector host={host} waiting={waiting} />
+          <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
+          {waiting && <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>}
+          <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
+          <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
+        </div>
+        <aside className="workspace-panels" aria-label="Project and terminal">
+          <section className="current-project" aria-labelledby="current-project-heading">
+            <div><h2 id="current-project-heading">Current project</h2>{projectRootError ? <p role="status" aria-live="polite">Unable to determine current project.</p> : <p>{projectRoot || 'Loading current project…'}</p>}</div>
+            <a href="/settings.html#settings-project-root">Change project</a>
+          </section>
+          <WorkspaceTabs
+            ariaLabel="Project and terminal"
+            panels={[
+              { id: 'project', label: 'Project', content: <ProjectExplorer host={host} onUseSelectedFiles={handleSelectedFiles} /> },
+              { id: 'terminal', label: 'Terminal', content: <TerminalPanel host={host} onSendToChat={handleClick} /> },
+            ]}
+          />
+        </aside>
       </div>
     </center>
   );

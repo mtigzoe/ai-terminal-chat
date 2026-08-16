@@ -100,7 +100,7 @@ try {
 
   Write-Host "Launching Electron..."
   Push-Location $clientDir
-  try { npm run electron } finally { Pop-Location }
+  try { npm run electron:dev } finally { Pop-Location }
   if ($LASTEXITCODE -ne 0) { throw "Electron exited with code $LASTEXITCODE." }
 }
 finally {

@@ -131,6 +131,26 @@ body {
 .confirmation-dialog-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; }
 .confirmation-dialog-actions button { min-width: 90px; padding: 8px 14px; cursor: pointer; }
 
+.file-preview-dialog { width: min(760px, 100%); }
+.file-preview-dialog h3 { margin-top: 0; overflow-wrap: anywhere; }
+.file-preview-dialog pre { max-height: 60vh; overflow: auto; padding: 12px; background: #f7f6f3; border: 1px solid #9a9caa; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+
+.workspace-tablist { display: flex; gap: 4px; border-bottom: 1px solid #9a9caa; margin-bottom: 12px; }
+.workspace-tab {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: #333;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px 8px 0 0;
+}
+.workspace-tab:hover { background: #ece9e5; }
+.workspace-tab.active { background: #f7f6f3; border-color: #9a9caa; color: #111; position: relative; top: 1px; }
+.workspace-tabpanel .project-explorer,
+.workspace-tabpanel .terminal-panel { border: none; padding: 0; background: transparent; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
@@ -146,3 +166,246 @@ body {
 .provider-selector-status--error { color: #a33; font-weight: 600; }
 .provider-diagnostics { margin-top: 6px; padding: 6px 10px; border-radius: 6px; border: 1px solid #a33; background: #fdecec; color: #6b1f1f; }
 .provider-diagnostics ul { margin: 4px 0 0; padding-left: 1.2em; }
+
+/* Integrated project + terminal layout */
+.app-shell {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: center;
+  gap: 16px;
+  width: min(1400px, 98vw);
+  height: 100vh;
+  text-align: left;
+}
+
+.app-shell .chat-app {
+  width: min(45vw, 640px);
+  flex-shrink: 0;
+}
+
+.workspace-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-width: 280px;
+  max-width: 560px;
+  overflow: auto;
+  padding: 8px 0;
+}
+
+.project-explorer,
+.terminal-panel {
+  text-align: left;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #9a9caa;
+  background: #f7f6f3;
+}
+
+.project-explorer h2,
+.terminal-panel h2 {
+  font-size: 1.05em;
+  margin: 0 0 6px;
+}
+
+.project-explorer-path {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.project-explorer-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.project-explorer-toolbar button,
+.terminal-input-row button,
+.project-file-view button {
+  min-height: 36px;
+  padding: 4px 12px;
+  border: 1px solid #505261;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  cursor: pointer;
+}
+
+.project-explorer-toolbar button:disabled,
+.terminal-input-row button:disabled,
+.project-file-view button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.project-explorer-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid #9a9caa;
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px;
+}
+
+.project-explorer-list:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
+.project-explorer-entry {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.project-explorer-entry.is-selected,
+.project-explorer-entry:hover {
+  background: #e4ebf5;
+}
+
+.project-entry-kind {
+  color: #555;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.project-explorer-error {
+  color: #a33;
+  font-weight: 600;
+}
+
+.project-file-view {
+  margin-top: 10px;
+}
+
+.project-file-view h3 {
+  font-size: 0.95em;
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+
+.project-file-contents {
+  max-height: 200px;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 8px;
+  border: 1px solid #9a9caa;
+  border-radius: 6px;
+  background: #fff;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+}
+
+.terminal-panel-help,
+.terminal-command-help {
+  margin: 0 0 8px;
+  font-size: 0.9em;
+  color: #333;
+}
+
+.terminal-status-visible {
+  margin: 0 0 8px;
+  font-size: 0.9em;
+  color: #222;
+}
+
+.terminal-output {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid #9a9caa;
+  border-radius: 6px;
+  background: #1e1e1e;
+  color: #f0f0f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.terminal-output:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
+.terminal-empty {
+  margin: 0;
+  color: #bbb;
+}
+
+.terminal-entry {
+  margin-bottom: 12px;
+}
+
+.terminal-command {
+  margin: 0 0 4px;
+  color: #9cdcfe;
+}
+
+.terminal-stdout,
+.terminal-stderr {
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.terminal-stderr {
+  color: #f48771;
+}
+
+.terminal-error {
+  color: #f48771;
+  font-weight: 600;
+}
+
+.terminal-exit {
+  margin: 0;
+  color: #ce9178;
+}
+
+.terminal-form {
+  display: grid;
+  gap: 6px;
+}
+
+.terminal-input-label {
+  font-weight: 700;
+}
+
+.terminal-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.terminal-command-input {
+  flex: 1 1 160px;
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid #505261;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .app-shell .chat-app {
+    width: 100%;
+  }
+
+  .workspace-panels {
+    max-width: none;
+  }
+}
