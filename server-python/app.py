@@ -22,7 +22,13 @@ import cancellation
 from agent import run_agent_loop
 from pending import get_pending, pop_pending
 from providers import SUPPORTED_PROVIDERS, get_provider
-from security import PROJECT_ROOT, is_sensitive_filename, safe_path  # noqa: F401
+from security import (
+    PROJECT_ROOT,
+    get_project_root,
+    is_sensitive_filename,
+    safe_path,
+    set_project_root,
+)  # noqa: F401
 from tools import (
     TOOL_EXECUTOR,
     TOOL_FUNCTIONS,
@@ -132,6 +138,25 @@ def providers():
     status["current"] = status["name"]
     status["providers"] = SUPPORTED_PROVIDERS
     return status
+
+
+@app.route("/project-root", methods=["GET", "POST"])
+def project_root():
+    """Read or change the default project root used by all tools."""
+
+    if request.method == "GET":
+        return {"path": str(get_project_root())}
+
+    data = request.get_json(silent=True) or {}
+    path = str(data.get("path", "")).strip()
+    try:
+        root = set_project_root(path)
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+    except OSError as exc:
+        return {"error": f"Could not save project path: {exc}"}, 500
+
+    return {"path": str(root)}
 
 
 @app.route("/providers/<name>/models", methods=["GET"])
