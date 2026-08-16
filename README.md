@@ -37,9 +37,9 @@ The repository currently contains one React frontend directory, `client-react/`;
 
 ```text
 ai-terminal-chat/
-├── client-react/       # React/Vite chat frontend
+├── client-react/       # React/Vite chat frontend (+ Electron Stage 1 shell)
 ├── server-python/      # Flask backend, providers, and local tools
-├── scripts/            # Local/offline startup helpers
+├── scripts/            # Local/offline and Electron startup helpers
 ├── LICENSE             # Apache License 2.0
 └── README.md
 ```
@@ -178,6 +178,44 @@ http://localhost:3000
 ```
 
 If the frontend needs a different backend URL, set `VITE_API_URL` in the frontend environment configuration. The frontend defaults to `http://localhost:9000`.
+
+### 3. Run as a desktop app (Electron — Stage 1)
+
+A minimal Electron shell is available so the same React frontend can run in a desktop window. The Flask backend must still be started separately (step 1). The browser workflow above remains fully supported.
+
+**Manual development workflow**
+
+1. Start the Flask backend (step 1).
+2. In a second terminal start the Vite development server:
+
+   ```powershell
+   cd client-react
+   npm install
+   npm run dev
+   ```
+
+3. In a third terminal launch Electron:
+
+   ```powershell
+   cd client-react
+   npm run electron
+   ```
+
+In development (unpackaged) Electron always loads `http://localhost:3000` so a leftover `dist/` folder cannot override the Vite server. When the application is packaged, it loads `dist/index.html` from the application resources.
+
+**Helper scripts (Windows)**
+
+From the repository root you can use the convenience scripts in `scripts/`:
+
+```powershell
+# Starts Vite (if needed) and launches Electron. Assumes the backend is already running.
+.\scripts\start-electron.ps1
+
+# Starts Vite and Electron only (backend must already be running).
+.\scripts\start-electron-dev.ps1
+```
+
+On non-Windows systems the equivalent commands are the `npm run` steps shown above. Automatic Flask process management and packaging are deferred to later stages.
 
 ## Provider configuration and `.env.example`
 

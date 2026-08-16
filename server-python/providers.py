@@ -197,5 +197,9 @@ def get_provider(name: str = None, model: str = None) -> Provider:
         set_project_root(str(pending_project_path))
 
     provider.name = name
-    provider.config = config
+    # Store factory metadata under a distinct name. GeminiProvider (and
+    # possibly others) already use ``.config`` for the native SDK
+    # GenerateContentConfig; overwriting it with ProviderConfig caused
+    # "'ProviderConfig' object has no attribute 'tools'" at generate time.
+    provider.provider_config = config
     return provider

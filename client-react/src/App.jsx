@@ -116,6 +116,19 @@ function App() {
   function getErrorMessage(error, fallback = "Request failed.") {
     const serverMessage = error?.response?.data?.error;
     if (serverMessage) return serverMessage;
+
+    // Axios network failures (no HTTP response) are otherwise just "Network Error".
+    if (error?.response == null && (error?.message === "Network Error" || error?.code === "ERR_NETWORK" || error?.code === "ECONNABORTED")) {
+      const base = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/$/, "");
+      const code = error?.code ? ` (${error.code})` : "";
+      const detail = error?.message && error.message !== "Network Error" ? ` ${error.message}` : "";
+      return (
+        `Cannot reach the backend at ${base}${code}.${detail} ` +
+        `Confirm the Flask server is running (for example: python app.py in server-python) ` +
+        `and that VITE_API_URL matches its address if you changed the default.`
+      ).replace(/\s+/g, " ").trim();
+    }
+
     if (error?.message) return error.message;
     return fallback;
   }
@@ -243,7 +256,7 @@ function App() {
         buffer += txtdecoder.decode(); if (buffer.trim()) { try { handleEvent(JSON.parse(buffer.trim())); } catch { handlePlainLine(buffer); } }
       } catch (err) {
         if (err?.name === "AbortError") { cancelled = true; modelResponse += modelResponse.trim() ? "\n[Streaming stopped by user.]" : "[Streaming stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); }
-        else { const errorMessage = err?.message || "Streaming request failed."; modelResponse = modelResponse ? `${modelResponse}\n[Error: ${errorMessage}]` : `Error: ${errorMessage}`; setAgentStatus({ phase: 'error', message: errorMessage, assertive: true }); }
+        else { const errorMessage = getErrorMessage(err, "Streaming request failed."); modelResponse = modelResponse ? `${modelResponse}\n[Error: ${errorMessage}]` : `Error: ${errorMessage}`; setAgentStatus({ phase: 'error', message: errorMessage, assertive: true }); }
       } finally {
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
         if (requestIdRef.current === requestId) requestIdRef.current = null;
