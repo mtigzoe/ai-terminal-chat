@@ -363,8 +363,8 @@ def run_command(command: str) -> dict:
         # `ls` is a PowerShell alias on Windows, not an executable.
 +       # Use the native cmd.exe directory command while preserving
 +       # `ls` as the cross-platform command exposed to the agent.
-+       if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
-+           args = ["cmd", "/c", "dir", *args[1:]]
+        if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
+            args = ["cmd", "/c", "dir", *args[1:]]
 
         result = subprocess.run(
             args,
