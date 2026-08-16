@@ -1,2 +1,9 @@
 # Patch files generated during development
 *.patch
+
+# Build output
+/dist/*
+/client-react/dist/
+
+# Frontend dependencies
+/client-react/node_modules/
