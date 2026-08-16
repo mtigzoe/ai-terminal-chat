@@ -119,9 +119,10 @@ const ChatArea = ({
   answer,
   streamToolActivity = [],
   agentStatus = null,
+  waiting = false,
 }) => {
   return (
-    <main className="chat-area" aria-label="Conversation">
+    <main className="chat-area" aria-label="Conversation" aria-busy={waiting}>
       <AgentStatusRegion status={agentStatus} />
 
       {data?.length <= 0 ? (

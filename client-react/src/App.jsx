@@ -463,6 +463,7 @@ function App() {
           answer={answer}
           streamToolActivity={streamToolActivity}
           agentStatus={agentStatus}
+          waiting={waiting}
         />
         {waiting && (
           <button
