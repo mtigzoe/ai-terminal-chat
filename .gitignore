@@ -1,6 +1,9 @@
 # Patch files generated during development
 *.patch
 
+# Environment files and secrets
+/server-python/.env
+
 # Build output
 /dist/*
 /client-react/dist/
