@@ -1,10 +1,11 @@
 /**
- * Basic accessibility smoke test.
+ * Basic accessibility smoke tests.
  * Note: this project uses Vite; full RTL tests require a configured test runner.
  */
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
+import { AgentStatusRegion } from './components/ConversationDisplayArea.jsx';
 
 test('renders core keyboard and screen-reader targets', () => {
   render(<App />);
@@ -31,4 +32,37 @@ test('opens an accessible clear-conversation confirmation dialog', () => {
 
   fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+
+test('announces response lifecycle states through one accessible status region', () => {
+  const { rerender } = render(
+    <AgentStatusRegion status={{ phase: 'plan', message: 'Planning next step', assertive: false }} />
+  );
+
+  const status = screen.getByRole('status');
+  expect(status).toHaveAttribute('aria-live', 'polite');
+  expect(status).toHaveTextContent('Planning next step');
+
+  rerender(
+    <AgentStatusRegion status={{ phase: 'complete', message: 'Response complete.', assertive: false }} />
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Response complete.');
+
+  rerender(
+    <AgentStatusRegion status={{ phase: 'cancelled', message: 'Response cancelled.', assertive: false }} />
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Response cancelled.');
+});
+
+test('uses assertive announcements only for error states', () => {
+  const { rerender } = render(
+    <AgentStatusRegion status={{ phase: 'plan', message: 'Planning next step', assertive: false }} />
+  );
+  expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'polite');
+
+  rerender(
+    <AgentStatusRegion status={{ phase: 'error', message: 'Request failed.', assertive: true }} />
+  );
+  expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'assertive');
+  expect(screen.getByRole('status')).toHaveTextContent('Request failed.');
 });
