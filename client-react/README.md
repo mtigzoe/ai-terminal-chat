@@ -75,15 +75,11 @@ A minimal Electron shell is provided so the same React frontend can run as a des
    npm run electron
    ```
 
-Electron loads `http://localhost:3000`. The browser-based workflow (`npm run dev` alone) remains unchanged.
+In development (unpackaged) Electron always loads `http://localhost:3000`. The browser-based workflow (`npm run dev` alone) remains unchanged.
 
-### Using the production build
+### Packaged / production builds
 
-After running `npm run build`, Electron will prefer the local `dist/index.html` when it is present. Start the Flask backend, then run:
-
-```bash
-npm run electron
-```
+When the application is packaged, Electron loads `dist/index.html` from the application resources. A leftover `dist/` directory on disk does not affect unpackaged development runs.
 
 ### Notes
 

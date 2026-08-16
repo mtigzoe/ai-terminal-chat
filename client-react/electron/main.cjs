@@ -1,9 +1,12 @@
 /**
  * Electron main process — Stage 1
  *
- * Loads the existing React/Vite frontend. In development the Vite
- * dev server (http://localhost:3000) is used; when the built assets
- * are present the local dist/ folder is loaded instead.
+ * Loads the existing React/Vite frontend.
+ *
+ * - Development (unpackaged): always loads the Vite dev server at
+ *   http://localhost:3000 so a leftover dist/ folder cannot override it.
+ * - Packaged / production: loads dist/index.html from the application
+ *   resources.
  *
  * The Flask backend is expected to be started separately (as in the
  * browser workflow). No automatic process management is performed here.
@@ -16,19 +19,24 @@ const fs = require('node:fs');
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 
-const isDev = !app.isPackaged;
-
 /**
  * Resolve the URL or file path that the renderer should load.
- * Preference order:
- *   1. Built assets (dist/index.html) when present
- *   2. Vite development server (http://localhost:3000)
+ *
+ * Development (not packaged) always uses the Vite dev server.
+ * Packaged builds load the production assets from dist/.
  */
 function getRendererEntry() {
+  // Unpackaged runs are development: never prefer a stale dist/.
+  if (!app.isPackaged) {
+    return { type: 'url', target: 'http://localhost:3000' };
+  }
+
   const distIndex = path.join(__dirname, '..', 'dist', 'index.html');
   if (fs.existsSync(distIndex)) {
     return { type: 'file', target: distIndex };
   }
+
+  // Fallback for unexpected packaging layouts.
   return { type: 'url', target: 'http://localhost:3000' };
 }
 

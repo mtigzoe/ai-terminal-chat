@@ -201,7 +201,7 @@ A minimal Electron shell is available so the same React frontend can run in a de
    npm run electron
    ```
 
-Electron loads `http://localhost:3000`. After a production frontend build (`npm run build`), Electron prefers the local `dist/index.html` when it is present.
+In development (unpackaged) Electron always loads `http://localhost:3000` so a leftover `dist/` folder cannot override the Vite server. When the application is packaged, it loads `dist/index.html` from the application resources.
 
 **Helper scripts (Windows)**
 
