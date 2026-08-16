@@ -19,9 +19,117 @@ Nothing here talks to any AI provider — it's pure path/filename logic,
 so it doesn't move when providers change.
 """
 
+import json
+import os
+import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-PROJECT_ROOT = Path.cwd().resolve()
+
+class MutableProjectRoot:
+    """Path-like holder whose value can change without stale imports.
+
+    tools.py imports PROJECT_ROOT directly, so mutating this object lets the
+    selected project root take effect everywhere without requiring every
+    consumer to be rewritten to import the security module itself.
+    """
+
+    def __init__(self, value: Path):
+        self._path = Path(value).resolve()
+
+    def set(self, value: Path):
+        self._path = Path(value).resolve()
+
+    def __fspath__(self):
+        return os.fspath(self._path)
+
+    def __str__(self):
+        return str(self._path)
+
+    def __truediv__(self, other):
+        return self._path / other
+
+    def __getattr__(self, name):
+        return getattr(self._path, name)
+
+    def __eq__(self, other):
+        return self._path == Path(other)
+
+    def __hash__(self):
+        return hash(self._path)
+
+
+_CONFIG_DIR = Path.home() / ".ai-terminal-chat"
+_CONFIG_FILE = _CONFIG_DIR / "config.json"
+
+
+def _load_saved_root() -> Path:
+    """Load a saved project root, falling back safely to the cwd."""
+
+    configured = os.environ.get("AI_TERMINAL_PROJECT_ROOT", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if candidate.is_dir():
+            return candidate
+
+    try:
+        data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+        configured = str(data.get("project_root", "")).strip()
+        if configured:
+            candidate = Path(configured).expanduser().resolve()
+            if candidate.is_dir():
+                return candidate
+    except (OSError, ValueError, TypeError):
+        pass
+
+    return Path.cwd().resolve()
+
+
+PROJECT_ROOT = MutableProjectRoot(_load_saved_root())
+
+
+def get_project_root() -> Path:
+    """Return the currently selected project root."""
+
+    return Path(os.fspath(PROJECT_ROOT)).resolve()
+
+
+def _persist_project_root(root: Path) -> None:
+    """Persist the selected project root atomically outside the project."""
+
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix="config-",
+        suffix=".tmp",
+        dir=_CONFIG_DIR,
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"project_root": str(root)}, handle, indent=2)
+            handle.write("\n")
+        Path(temp_name).replace(_CONFIG_FILE)
+    finally:
+        try:
+            Path(temp_name).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def set_project_root(path: str) -> Path:
+    """Validate, persist, and activate a new project root."""
+
+    if not path or not str(path).strip():
+        raise ValueError("A project path is required.")
+
+    candidate = Path(str(path).strip()).expanduser().resolve()
+    if not candidate.exists():
+        raise ValueError("Project path does not exist.")
+    if not candidate.is_dir():
+        raise ValueError("Project path must be a directory.")
+
+    PROJECT_ROOT.set(candidate)
+    _persist_project_root(candidate)
+    return candidate
 
 
 def safe_path(path: str) -> Path:
@@ -29,10 +137,7 @@ def safe_path(path: str) -> Path:
 
     Rejects absolute paths (POSIX or Windows-style, e.g. "/etc/passwd" or
     "C:\\Users\\...") and any traversal (e.g. "../../") that would escape
-    PROJECT_ROOT. Joining an absolute path onto PROJECT_ROOT would normally
-    just replace it outright in pathlib, so we check for that explicitly
-    before ever resolving the path, in addition to the containment check
-    below which catches "../" traversal.
+    PROJECT_ROOT.
     """
 
     if not path or not str(path).strip():
@@ -44,10 +149,11 @@ def safe_path(path: str) -> Path:
             "project root."
         )
 
-    requested = (PROJECT_ROOT / path).resolve()
+    root = get_project_root()
+    requested = (root / path).resolve()
 
     try:
-        requested.relative_to(PROJECT_ROOT)
+        requested.relative_to(root)
     except ValueError:
         raise ValueError(
             "Access outside the project directory is not allowed."
@@ -92,7 +198,7 @@ def is_sensitive_path(file_path: Path) -> bool:
     """True if a resolved path is a secret file or lives inside .git."""
 
     try:
-        rel_parts = file_path.relative_to(PROJECT_ROOT).parts
+        rel_parts = file_path.relative_to(get_project_root()).parts
     except ValueError:
         return True
 
