@@ -82,16 +82,45 @@ const SettingsPage = ({ host }) => {
     setStatusIsError(false);
 
     try {
-      const response = await axios.post(`${host}/project-root`, {
-        path: '__CHOOSE_PROJECT_ROOT__',
-      });
-      const selectedPath = response.data.path || '';
-      if (!selectedPath) {
-        throw new Error('The folder picker did not return a path.');
+      let selectedPath = '';
+
+      // Prefer the native Electron directory dialog when available.
+      if (window.electronAPI?.chooseFolder) {
+        const chosen = await window.electronAPI.chooseFolder(projectRoot || undefined);
+        if (!chosen) {
+          setStatusMessage('Folder selection cancelled.');
+          return;
+        }
+        selectedPath = chosen;
+      } else if (typeof window.showDirectoryPicker === 'function') {
+        // Browser File System Access API (Chrome/Edge). Path is often not
+        // a real filesystem path, so we still prefer Electron for desktop.
+        const handle = await window.showDirectoryPicker({ mode: 'read' });
+        selectedPath = handle?.name || '';
+        if (!selectedPath) {
+          throw new Error('The folder picker did not return a path.');
+        }
+        setStatusIsError(true);
+        setStatusMessage(
+          `Browser selected folder name "${selectedPath}". ` +
+          `For a full filesystem path, run the desktop (Electron) app or type the path manually.`
+        );
+        // Do not overwrite projectRoot with a bare folder name only.
+        return;
+      } else {
+        throw new Error(
+          'No folder picker is available in this environment. ' +
+          'Type the full project path in the field, or use the Electron desktop app.'
+        );
       }
+
       setProjectRoot(selectedPath);
       setStatusMessage(`Folder selected: ${selectedPath}`);
     } catch (error) {
+      if (error?.name === 'AbortError') {
+        setStatusMessage('Folder selection cancelled.');
+        return;
+      }
       setStatusIsError(true);
       setStatusMessage(
         error?.response?.data?.error || error?.message || 'Could not choose a folder.'

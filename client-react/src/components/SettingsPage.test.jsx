@@ -147,32 +147,49 @@ describe('saving settings', () => {
 });
 
 describe('folder picker', () => {
+  afterEach(() => {
+    delete window.electronAPI;
+  });
+
   test('a folder-picker failure surfaces an error and resets the button label', async () => {
     await renderLoaded();
-    axios.post.mockRejectedValue({
-      response: { data: { error: 'The native folder picker is unavailable on this system.' } },
-    });
+    // No electronAPI and no showDirectoryPicker → explicit unavailable message.
+    delete window.electronAPI;
+    delete window.showDirectoryPicker;
 
     const chooseButton = screen.getByRole('button', { name: /choose a folder/i });
     fireEvent.click(chooseButton);
 
-    await screen.findByText(/native folder picker is unavailable/i);
+    await screen.findByText(/no folder picker is available/i);
     expect(screen.getByRole('button', { name: /choose a folder/i })).not.toBeDisabled();
   });
 
-  test('a successful folder pick updates the project path field', async () => {
+  test('a successful Electron folder pick updates the project path field', async () => {
     await renderLoaded();
-    axios.post.mockImplementation((url, payload) => {
-      if (url === `${HOST}/project-root` && payload.path === '__CHOOSE_PROJECT_ROOT__') {
-        return Promise.resolve({ data: { path: '/tmp/chosen-project' } });
-      }
-      return Promise.reject(new Error(`unexpected POST ${url}`));
-    });
+    window.electronAPI = {
+      isElectron: true,
+      chooseFolder: vi.fn().mockResolvedValue('/tmp/chosen-project'),
+    };
 
     fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
 
     await waitFor(() =>
       expect(screen.getByLabelText(/default project path/i)).toHaveValue('/tmp/chosen-project')
     );
+    expect(window.electronAPI.chooseFolder).toHaveBeenCalled();
+  });
+
+  test('cancelling the Electron folder pick leaves the path unchanged', async () => {
+    await renderLoaded();
+    const previous = screen.getByLabelText(/default project path/i).value;
+    window.electronAPI = {
+      isElectron: true,
+      chooseFolder: vi.fn().mockResolvedValue(null),
+    };
+
+    fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
+
+    await screen.findByText(/folder selection cancelled/i);
+    expect(screen.getByLabelText(/default project path/i)).toHaveValue(previous);
   });
 });

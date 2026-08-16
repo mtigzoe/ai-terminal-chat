@@ -12,7 +12,7 @@
  * browser workflow). No automatic process management is performed here.
  */
 
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -81,6 +81,30 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+/**
+ * Native directory picker for the Settings "Choose a folder" button.
+ * Returns the selected absolute path, or null if the user cancelled.
+ */
+ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
+  const browserWindow = BrowserWindow.fromWebContents(event.sender);
+  const options = {
+    title: 'Choose project folder',
+    properties: ['openDirectory', 'createDirectory'],
+  };
+  if (defaultPath && typeof defaultPath === 'string' && defaultPath.trim()) {
+    options.defaultPath = defaultPath.trim();
+  }
+
+  const result = browserWindow
+    ? await dialog.showOpenDialog(browserWindow, options)
+    : await dialog.showOpenDialog(options);
+
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0];
+});
 
 app.whenReady().then(() => {
   createWindow();

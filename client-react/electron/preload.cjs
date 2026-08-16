@@ -2,15 +2,18 @@
  * Preload script — Stage 1
  *
  * Runs in an isolated context before the renderer loads.
- * At this stage no privileged APIs are exposed to the page.
- * The bridge can be extended later (e.g. native dialogs, app info)
- * without changing the React codebase.
+ * Exposes a minimal, privilege-limited bridge to the React UI.
  */
 
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose a minimal, read-only marker so the React app can detect
-// that it is running inside Electron if needed in the future.
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
+  /**
+   * Open a native directory picker and return the selected path,
+   * or null if the user cancelled.
+   * @param {string} [defaultPath]
+   * @returns {Promise<string|null>}
+   */
+  chooseFolder: (defaultPath) => ipcRenderer.invoke('dialog:chooseFolder', defaultPath),
 });

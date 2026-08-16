@@ -413,8 +413,8 @@ def test_get_provider_passes_resolved_config_to_gemini(monkeypatch):
     client_ctor.assert_called_once_with(api_key="factory-key")
     assert provider.model == "factory-model"
     assert provider.name == "gemini"
-    assert provider.config.api_key == "factory-key"
-    assert "api_key" not in provider.config.to_public_dict()
+    assert provider.provider_config.api_key == "factory-key"
+    assert "api_key" not in provider.provider_config.to_public_dict()
 
 
 def test_get_provider_model_override(monkeypatch):
@@ -425,7 +425,7 @@ def test_get_provider_model_override(monkeypatch):
     provider = get_provider("ollama", model="override-model")
     assert isinstance(provider, OllamaProvider)
     assert provider.model == "override-model"
-    assert provider.config.model == "override-model"
+    assert provider.provider_config.model == "override-model"
 
 
 # --- OpenAI ---
@@ -667,8 +667,8 @@ def test_provider_factory_uses_dedicated_openai_provider(monkeypatch):
     assert provider.model == "gpt-4o"
     assert provider.api_key == "factory-openai-key"
     assert provider.base_url == "https://api.openai.com/v1"
-    assert provider.config.api_key == "factory-openai-key"
-    assert "api_key" not in provider.config.to_public_dict()
+    assert provider.provider_config.api_key == "factory-openai-key"
+    assert "api_key" not in provider.provider_config.to_public_dict()
 
 
 def test_provider_factory_openai_model_override(monkeypatch):
@@ -679,7 +679,7 @@ def test_provider_factory_openai_model_override(monkeypatch):
     provider = get_provider("openai", model="gpt-4o")
     assert isinstance(provider, OpenAIProvider)
     assert provider.model == "gpt-4o"
-    assert provider.config.model == "gpt-4o"
+    assert provider.provider_config.model == "gpt-4o"
 
 
 def test_provider_factory_openai_missing_key_raises(monkeypatch):
@@ -699,7 +699,7 @@ def test_openai_public_config_never_includes_api_key(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
 
     provider = get_provider("openai")
-    public = provider.config.to_public_dict()
+    public = provider.provider_config.to_public_dict()
     assert "api_key" not in public
     assert "secret" not in str(public).lower()
     assert public["provider"] == "openai"
@@ -957,8 +957,8 @@ def test_provider_factory_uses_dedicated_xai_provider(monkeypatch):
     assert provider.model == "grok-4.6"
     assert provider.api_key == "factory-xai-key"
     assert provider.base_url == "https://api.x.ai/v1"
-    assert provider.config.api_key == "factory-xai-key"
-    assert "api_key" not in provider.config.to_public_dict()
+    assert provider.provider_config.api_key == "factory-xai-key"
+    assert "api_key" not in provider.provider_config.to_public_dict()
 
 
 def test_provider_factory_xai_model_override(monkeypatch):
@@ -969,7 +969,7 @@ def test_provider_factory_xai_model_override(monkeypatch):
     provider = get_provider("xai", model="grok-4.5")
     assert isinstance(provider, XAIProvider)
     assert provider.model == "grok-4.5"
-    assert provider.config.model == "grok-4.5"
+    assert provider.provider_config.model == "grok-4.5"
 
 
 def test_provider_factory_xai_missing_key_raises(monkeypatch):
@@ -989,7 +989,7 @@ def test_xai_public_config_never_includes_api_key(monkeypatch):
     monkeypatch.setenv("XAI_MODEL", "grok-4.6")
 
     provider = get_provider("xai")
-    public = provider.config.to_public_dict()
+    public = provider.provider_config.to_public_dict()
     assert "api_key" not in public
     assert "secret" not in str(public).lower()
     assert public["provider"] == "xai"
@@ -1063,7 +1063,7 @@ def test_openrouter_model_override_preserves_slug(monkeypatch):
     provider = get_provider("openrouter", model="meta-llama/llama-3.1-70b-instruct")
     assert isinstance(provider, OpenRouterProvider)
     assert provider.model == "meta-llama/llama-3.1-70b-instruct"
-    assert provider.config.model == "meta-llama/llama-3.1-70b-instruct"
+    assert provider.provider_config.model == "meta-llama/llama-3.1-70b-instruct"
 
 
 def test_openrouter_optional_attribution_headers():
@@ -1217,7 +1217,7 @@ def test_provider_factory_uses_dedicated_openrouter_provider(monkeypatch):
     assert provider.api_key == "factory-or-key"
     assert provider.http_referer == "https://localhost"
     assert provider.app_title == "AI Terminal Chat"
-    assert "api_key" not in provider.config.to_public_dict()
+    assert "api_key" not in provider.provider_config.to_public_dict()
 
 
 def test_provider_factory_openrouter_missing_key_raises(monkeypatch):
@@ -1239,7 +1239,7 @@ def test_openrouter_public_config_never_includes_api_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
     provider = get_provider("openrouter")
-    public = provider.config.to_public_dict()
+    public = provider.provider_config.to_public_dict()
     assert "api_key" not in public
     assert "secret" not in str(public).lower()
     assert public["provider"] == "openrouter"
@@ -1437,7 +1437,7 @@ def test_provider_factory_uses_anthropic_provider(monkeypatch):
     assert provider.name == "anthropic"
     assert provider.model == "claude-sonnet-4-5"
     assert provider.api_key == "factory-ant-key"
-    assert "api_key" not in provider.config.to_public_dict()
+    assert "api_key" not in provider.provider_config.to_public_dict()
 
 
 def test_provider_factory_anthropic_missing_key_raises(monkeypatch):
@@ -1459,7 +1459,7 @@ def test_anthropic_public_config_never_includes_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
     provider = get_provider("anthropic")
-    public = provider.config.to_public_dict()
+    public = provider.provider_config.to_public_dict()
     assert "api_key" not in public
     assert "secret" not in str(public).lower()
     assert public["provider"] == "anthropic"
