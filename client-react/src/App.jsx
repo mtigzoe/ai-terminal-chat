@@ -21,6 +21,56 @@ function generateRequestId() {
   return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function ConfirmationDialog({ pending, onResolve, resolving }) {
+  const cancelRef = useRef(null);
+
+  useEffect(() => {
+    if (!pending) return undefined;
+    cancelRef.current?.focus();
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !resolving) {
+        event.preventDefault();
+        onResolve(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [pending, resolving, onResolve]);
+
+  if (!pending) return null;
+
+  const path = pending.args?.path || pending.preview?.path || '';
+  const action = pending.name || 'tool operation';
+  const previewText = pending.preview?.message || pending.preview?.description || '';
+
+  return (
+    <div className="confirmation-backdrop" role="presentation">
+      <section
+        className="confirmation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirmation-dialog-title"
+        aria-describedby="confirmation-dialog-description"
+      >
+        <h2 id="confirmation-dialog-title">Confirmation required</h2>
+        <p id="confirmation-dialog-description">
+          The assistant wants to perform <strong>{action}</strong>{path ? <> on <code>{path}</code></> : ''}.
+        </p>
+        {previewText && <p>{previewText}</p>}
+        <p>Nothing will be changed unless you choose Allow.</p>
+        <div className="confirmation-dialog-actions">
+          <button ref={cancelRef} type="button" onClick={() => onResolve(false)} disabled={resolving}>
+            Deny
+          </button>
+          <button type="button" onClick={() => onResolve(true)} disabled={resolving}>
+            {resolving ? 'Processing…' : 'Allow'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const inputRef = useRef();
   const abortControllerRef = useRef(null);
@@ -37,6 +87,8 @@ function App() {
   const [agentStatus, setAgentStatus] = useState(null);
   const [projectRoot, setProjectRoot] = useState('');
   const [projectRootError, setProjectRootError] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState(null);
+  const [confirmationResolving, setConfirmationResolving] = useState(false);
   const is_stream = toggled;
 
   useEffect(() => {
@@ -80,6 +132,39 @@ function App() {
     setAgentStatus({ phase: 'cancelled', message: 'Cancelling response.', assertive: false });
   };
 
+  const resolveConfirmation = async (confirmed) => {
+    if (!pendingConfirmation || confirmationResolving) return;
+    const action = pendingConfirmation;
+    setConfirmationResolving(true);
+    try {
+      const response = await axios.post(`${host}/confirm`, {
+        action_id: action.action_id,
+        confirmed,
+      });
+      const resultEvent = {
+        type: 'tool_result',
+        name: action.name,
+        result: confirmed ? response.data.result : { cancelled: true, message: 'Action denied by user.' },
+      };
+      setStreamToolActivity((current) => [...current, resultEvent]);
+      setData((current) => current.map((message) => {
+        if (message.role !== 'model') return message;
+        return { ...message, toolActivity: [...(message.toolActivity || []), resultEvent] };
+      }));
+      setAgentStatus({
+        phase: confirmed ? 'complete' : 'cancelled',
+        message: confirmed ? 'Action approved and completed.' : 'Action denied by user.',
+        assertive: false,
+      });
+      setPendingConfirmation(null);
+    } catch (error) {
+      setAgentStatus({ phase: 'error', message: getErrorMessage(error, 'Could not resolve confirmation.'), assertive: true });
+    } finally {
+      setConfirmationResolving(false);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  };
+
   const handleClick = (message) => {
     if (validationCheck(message)) return;
     if (!is_stream) handleNonStreamingChat(message);
@@ -101,7 +186,11 @@ function App() {
       try {
         const response = await axios.post(url, chatData, headerConfig);
         modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled);
-        if (cancelled) {
+        const pending = toolActivity.find((item) => item.type === 'pending_confirmation');
+        if (pending) {
+          setPendingConfirmation(pending);
+          setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false });
+        } else if (cancelled) {
           if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]";
           setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false });
         } else {
@@ -119,6 +208,7 @@ function App() {
         const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }];
         flushSync(() => { setData(updatedData); setWaiting(false); });
         executeScroll();
+        window.setTimeout(() => inputRef.current?.focus(), 0);
       }
     };
     fetchData();
@@ -137,7 +227,7 @@ function App() {
       const handleEvent = (event) => {
         if (!event || typeof event !== "object") return;
         if (event.type === "progress") { const status = statusFromProgressEvent(event); if (status) setAgentStatus(status); toolActivity.push({ type: "progress", phase: event.phase, message: event.message }); setStreamToolActivity([...toolActivity]); return; }
-        if (event.type === "pending_confirmation") { const status = statusFromPendingConfirmation(event); if (status) setAgentStatus(status); toolActivity.push(event); setStreamToolActivity([...toolActivity]); return; }
+        if (event.type === "pending_confirmation") { const status = statusFromPendingConfirmation(event); if (status) setAgentStatus(status); toolActivity.push(event); setStreamToolActivity([...toolActivity]); setPendingConfirmation(event); return; }
         if (event.type === "text" || event.type === "final") { const text = event.text || ""; modelResponse += text; setAnswer((currentAnswer) => currentAnswer + text); if (event.type === "final") setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); }
         else if (event.type === "tool_call" || event.type === "tool_result") { const activity = { type: event.type, name: event.name }; if (event.type === "tool_call") activity.args = event.args || {}; else activity.result = event.result || {}; toolActivity.push(activity); setStreamToolActivity([...toolActivity]); }
         else if (event.type === "error") { const status = statusFromErrorEvent(event); if (status) setAgentStatus(status); const message = event.message || "Streaming request failed."; modelResponse += `\n[Error: ${message}]`; setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`); }
@@ -159,6 +249,7 @@ function App() {
         if (requestIdRef.current === requestId) requestIdRef.current = null;
         setAnswer(""); const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }];
         flushSync(() => { setData(updatedData); setWaiting(false); }); showStreamdiv(false); setStreamToolActivity([]); executeScroll();
+        window.setTimeout(() => inputRef.current?.focus(), 0);
       }
     };
     fetchStreamData();
@@ -183,6 +274,7 @@ function App() {
         <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
         {waiting && <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>}
         <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
+        <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
       </div>
     </center>
   );
