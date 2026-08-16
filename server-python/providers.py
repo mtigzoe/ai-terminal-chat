@@ -3,6 +3,7 @@
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import base as _base
@@ -10,9 +11,6 @@ import base as _base
 from base import Provider, ProviderResponse, ToolCall
 from security import set_project_root
 
-# Keep the existing provider modules compatible with their
-# `from providers.base import ...` imports while providers.py is a
-# module rather than a package.
 sys.modules.setdefault("providers.base", _base)
 
 __all__ = [
@@ -66,20 +64,14 @@ def load_provider_config(name: str) -> ProviderConfig:
             model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
             api_key=os.getenv("GOOGLE_API_KEY"),
         )
-
     if name == "ollama":
-        base_url = (
-            os.getenv("OLLAMA_BASE_URL")
-            or os.getenv("OLLAMA_HOST")
-            or "http://localhost:11434/v1"
-        )
+        base_url = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST") or "http://localhost:11434/v1"
         return ProviderConfig(
             provider="ollama",
             model=os.getenv("OLLAMA_MODEL", "llama3.1"),
             base_url=base_url,
             timeout=int(os.getenv("OLLAMA_TIMEOUT", "120")),
         )
-
     if name == "kilo":
         return ProviderConfig(
             provider="kilo",
@@ -88,7 +80,6 @@ def load_provider_config(name: str) -> ProviderConfig:
             api_key=os.getenv("KILO_API_KEY"),
             timeout=int(os.getenv("KILO_TIMEOUT", "120")),
         )
-
     if name == "openai":
         return ProviderConfig(
             provider="openai",
@@ -97,7 +88,6 @@ def load_provider_config(name: str) -> ProviderConfig:
             api_key=os.getenv("OPENAI_API_KEY"),
             timeout=int(os.getenv("OPENAI_TIMEOUT", "120")),
         )
-
     if name == "xai":
         return ProviderConfig(
             provider="xai",
@@ -106,18 +96,14 @@ def load_provider_config(name: str) -> ProviderConfig:
             api_key=os.getenv("XAI_API_KEY"),
             timeout=int(os.getenv("XAI_TIMEOUT", "120")),
         )
-
     if name == "openrouter":
         return ProviderConfig(
             provider="openrouter",
             model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
-            base_url=os.getenv(
-                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-            ),
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             api_key=os.getenv("OPENROUTER_API_KEY"),
             timeout=int(os.getenv("OPENROUTER_TIMEOUT", "120")),
         )
-
     if name == "anthropic":
         return ProviderConfig(
             provider="anthropic",
@@ -136,16 +122,14 @@ def load_provider_config(name: str) -> ProviderConfig:
 def get_provider(name: str = None, model: str = None) -> Provider:
     """Build a Provider from environment configuration.
 
-    When called during the Settings Save request, an optional
-    ``project_path`` JSON field is validated, persisted, and activated
-    before the provider is constructed. This lets the existing backend
-    configuration endpoint control both provider credentials and the
-    filesystem root without exposing a separate mutating endpoint.
+    A Settings Save request may include ``project_path``. The path is
+    validated first, and only persisted after the requested provider is
+    successfully constructed, so a failed provider change cannot leave
+    the filesystem root partially updated.
     """
 
-    # Flask is optional here so provider unit tests can import this module
-    # without requiring a request context. During the Settings Save request
-    # we inspect the JSON payload and activate a validated project path.
+    pending_project_path = None
+
     try:
         from flask import has_request_context, request
 
@@ -153,11 +137,14 @@ def get_provider(name: str = None, model: str = None) -> Provider:
             payload = request.get_json(silent=True) or {}
             project_path = payload.get("project_path")
             if project_path is not None:
-                set_project_root(str(project_path))
+                if not str(project_path).strip():
+                    raise ValueError("A project path is required.")
+                pending_project_path = Path(project_path).expanduser().resolve()
+                if not pending_project_path.exists():
+                    raise ValueError(f"Project path does not exist: {pending_project_path}")
+                if not pending_project_path.is_dir():
+                    raise ValueError(f"Project path is not a directory: {pending_project_path}")
     except Exception as exc:
-        # Invalid project paths should abort the provider selection rather
-        # than silently changing to an unexpected root. No request context
-        # simply means there is nothing to configure here.
         if exc.__class__.__name__ not in {"RuntimeError", "ImportError"}:
             raise
 
@@ -171,35 +158,16 @@ def get_provider(name: str = None, model: str = None) -> Provider:
         provider = GeminiProvider(api_key=config.api_key, model=config.model)
     elif config.provider == "ollama":
         from ollama import OllamaProvider
-        provider = OllamaProvider(
-            base_url=config.base_url,
-            model=config.model,
-            timeout=config.timeout,
-        )
+        provider = OllamaProvider(base_url=config.base_url, model=config.model, timeout=config.timeout)
     elif config.provider == "kilo":
         from kilo import KiloProvider
-        provider = KiloProvider(
-            base_url=config.base_url,
-            model=config.model,
-            api_key=config.api_key,
-            timeout=config.timeout,
-        )
+        provider = KiloProvider(base_url=config.base_url, model=config.model, api_key=config.api_key, timeout=config.timeout)
     elif config.provider == "openai":
         from openai_provider import OpenAIProvider
-        provider = OpenAIProvider(
-            base_url=config.base_url,
-            model=config.model,
-            api_key=config.api_key,
-            timeout=config.timeout,
-        )
+        provider = OpenAIProvider(base_url=config.base_url, model=config.model, api_key=config.api_key, timeout=config.timeout)
     elif config.provider == "xai":
         from xai import XAIProvider
-        provider = XAIProvider(
-            base_url=config.base_url,
-            model=config.model,
-            api_key=config.api_key,
-            timeout=config.timeout,
-        )
+        provider = XAIProvider(base_url=config.base_url, model=config.model, api_key=config.api_key, timeout=config.timeout)
     elif config.provider == "openrouter":
         from openrouter import OpenRouterProvider
         provider = OpenRouterProvider(
@@ -224,6 +192,9 @@ def get_provider(name: str = None, model: str = None) -> Provider:
             f"Unknown PROVIDER '{config.provider}'. Expected one of: "
             f"{', '.join(SUPPORTED_PROVIDERS)}."
         )
+
+    if pending_project_path is not None:
+        set_project_root(str(pending_project_path))
 
     provider.name = name
     provider.config = config
