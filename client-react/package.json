@@ -17,13 +17,16 @@
     "react-markdown": "^9.0.1",
     "react-scripts": "^5.0.1",
     "vite": "^5.4.6",
+    "vitest": "^2.1.8",
     "web-vitals": "^2.1.4"
   },
   "scripts": {
     "start": "vite --port 3000",
     "build": "vite build",
     "serve": "vite --port 3000",
-    "dev": "vite --port 3000"
+    "dev": "vite --port 3000",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "eslintConfig": {
     "extends": [
