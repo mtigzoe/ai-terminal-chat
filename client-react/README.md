@@ -55,3 +55,38 @@ VITE_API_URL=http://localhost:9000
 ```
 
 If `VITE_API_URL` is not set, the client defaults to `http://localhost:9000`.
+
+## Electron (Stage 1)
+
+A minimal Electron shell is provided so the same React frontend can run as a desktop window while continuing to talk to the existing Flask backend.
+
+### Development workflow
+
+1. Start the Flask backend (from `server-python`) as usual.
+2. In one terminal, start the Vite development server:
+
+   ```bash
+   npm run dev
+   ```
+
+3. In a second terminal, launch Electron:
+
+   ```bash
+   npm run electron
+   ```
+
+Electron loads `http://localhost:3000`. The browser-based workflow (`npm run dev` alone) remains unchanged.
+
+### Using the production build
+
+After running `npm run build`, Electron will prefer the local `dist/index.html` when it is present. Start the Flask backend, then run:
+
+```bash
+npm run electron
+```
+
+### Notes
+
+- No automatic Flask process management is performed in Stage 1.
+- The preload script exposes only a read-only `window.electronAPI.isElectron` flag.
+- Context isolation and sandboxing are enabled; Node integration is disabled in the renderer.
