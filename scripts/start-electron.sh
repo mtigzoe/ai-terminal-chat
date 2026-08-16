@@ -6,6 +6,9 @@ set -euo pipefail
 #
 # Usage (from repository root):
 #   ./scripts/start-electron.sh
+#
+# If this file is invoked with `bash scripts/start-electron.sh`, ensure the
+# executable bit is restored for future direct invocations.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -14,8 +17,11 @@ CLIENT_DIR="$REPO_ROOT/client-react"
 VENV_DIR="$SERVER_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 
+# Restore executable permission when the script is run through bash.
+chmod +x "$SCRIPT_DIR/start-electron.sh" 2>/dev/null || true
+
 if ! command -v uv >/dev/null 2>&1; then
-    printf 'Error: uv is required but was not found in PATH.\n' >&2
+    printf 'Error: uv is required but was not found in PATH. Install uv and run this script again.\n' >&2
     exit 1
 fi
 if ! command -v npm >/dev/null 2>&1; then
@@ -61,7 +67,7 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     (cd "$SERVER_DIR" && uv venv .venv)
 fi
 
-printf 'Installing/updating Python dependencies...\n'
+printf 'Installing/updating Python dependencies with uv...\n'
 (cd "$SERVER_DIR" && uv pip install --python "$VENV_PYTHON" -r requirements.txt)
 
 if [[ ! -x "$CLIENT_DIR/node_modules/.bin/electron" ]]; then
@@ -85,9 +91,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if ! port_in_use 9000; then
-    printf 'Starting Flask backend...\n'
-    (cd "$SERVER_DIR" && exec "$VENV_PYTHON" app.py) &
-    BACKEND_PID=$!
+    printf 'Starting Flask backend with the project virtual environment...\n'
+    BACKEND_PID=$(
+        bash -c 'cd "$1" && source .venv/bin/activate && exec uv run app.py' _ "$SERVER_DIR" &
+        echo $!
+    )
     BACKEND_STARTED=1
     wait_for_url "http://127.0.0.1:9000/providers?probe=0" "Flask backend"
 else
