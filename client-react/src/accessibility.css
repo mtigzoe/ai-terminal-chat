@@ -44,7 +44,10 @@ summary:focus-visible {
 .chat_msg_btn:disabled,
 .chat_msg_input:disabled,
 .provider-selector select:disabled,
-.provider-selector input:disabled {
+.provider-selector input:disabled,
+.settings-form select:disabled,
+.settings-form input:disabled,
+.settings-save:disabled {
   cursor: not-allowed;
 }
 
@@ -55,6 +58,84 @@ summary:focus-visible {
 .agent-status--cancelled,
 .agent-status--recover {
   border-width: 2px;
+}
+
+.settings-page {
+  box-sizing: border-box;
+  width: min(720px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 24px;
+  text-align: left;
+}
+
+.settings-page h1 {
+  margin: 24px 0;
+}
+
+.back-link,
+.settings-link {
+  font-weight: 600;
+}
+
+.settings-form {
+  display: grid;
+  gap: 20px;
+  max-width: 560px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-field label {
+  font-weight: 700;
+}
+
+.settings-field select,
+.settings-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #505261;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  font-size: 1rem;
+}
+
+.settings-help {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.settings-save {
+  width: fit-content;
+  min-width: 110px;
+  min-height: 44px;
+  padding: 8px 18px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.settings-status {
+  min-height: 1.5em;
+}
+
+.settings-status--error {
+  font-weight: 700;
+}
+
+@media (max-width: 700px) {
+  .settings-page {
+    padding: 16px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
