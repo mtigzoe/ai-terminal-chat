@@ -17,8 +17,13 @@ let mainWindow = null;
 
 function getRendererEntry() {
   const production = app.isPackaged || process.argv.includes('--production');
+  const development = process.argv.includes('--dev');
 
-  if (!production) {
+  if (!production && development) {
+    return { type: 'url', target: 'http://localhost:3000' };
+  }
+
+  if (!production && !development) {
     return { type: 'url', target: 'http://localhost:3000' };
   }
 

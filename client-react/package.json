@@ -29,7 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "electron": "npm run build && electron . --production",
-    "electron:dev": "electron ."
+    "electron:dev": "electron . --dev"
   },
   "eslintConfig": {
     "extends": [
