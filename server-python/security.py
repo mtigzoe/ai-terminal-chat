@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 _CONFIG_DIR = Path.home() / ".ai-terminal-chat"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
+CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__"
 
 
 def _default_project_root() -> Path:
@@ -20,11 +21,17 @@ def _default_project_root() -> Path:
 
 
 def _load_project_root() -> Path:
-    """Load the persisted project root, falling back to the server cwd."""
+    """Load a saved project root, falling back safely to the cwd."""
+
+    configured = os.environ.get("AI_TERMINAL_PROJECT_ROOT", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if candidate.exists() and candidate.is_dir():
+            return candidate
 
     try:
         data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
-        configured = data.get("project_root")
+        configured = str(data.get("project_root", "")).strip()
         if configured:
             candidate = Path(configured).expanduser().resolve()
             if candidate.exists() and candidate.is_dir():
@@ -44,10 +51,10 @@ class _ProjectRootProxy:
     """
 
     def __init__(self, path: Path):
-        self._path = path.resolve()
+        self._path = Path(path).resolve()
 
     def set(self, path: Path) -> None:
-        self._path = path.resolve()
+        self._path = Path(path).resolve()
 
     def resolve(self) -> Path:
         return self._path.resolve()
@@ -71,6 +78,12 @@ class _ProjectRootProxy:
     def __getattr__(self, name):
         return getattr(self._path, name)
 
+    def __eq__(self, other):
+        return self._path == Path(other)
+
+    def __hash__(self):
+        return hash(self._path)
+
 
 PROJECT_ROOT = _ProjectRootProxy(_load_project_root())
 
@@ -81,27 +94,11 @@ def get_project_root() -> Path:
     return PROJECT_ROOT.resolve()
 
 
-def set_project_root(path: str) -> Path:
-    """Validate, persist, and activate a new project root.
-
-    The selected path must exist and be a directory. The configuration
-    file is stored under the user's home directory, outside the project,
-    so the AI's filesystem tools cannot expose it.
-    """
-
-    if not path or not str(path).strip():
-        raise ValueError("A project path is required.")
-
-    candidate = Path(path).expanduser().resolve()
-
-    if not candidate.exists():
-        raise ValueError(f"Project path does not exist: {candidate}")
-
-    if not candidate.is_dir():
-        raise ValueError(f"Project path is not a directory: {candidate}")
+def _persist_project_root(root: Path) -> None:
+    """Persist the selected project root atomically outside the project."""
 
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"project_root": str(candidate)}
+    payload = {"project_root": str(root)}
 
     fd, temp_name = tempfile.mkstemp(
         prefix="config-",
@@ -121,6 +118,57 @@ def set_project_root(path: str) -> Path:
             pass
         raise
 
+
+def _choose_project_root() -> Path:
+    """Open the local operating-system folder picker and return its selection."""
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise OSError("The native folder picker is unavailable on this system.") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    try:
+        selected = filedialog.askdirectory(
+            parent=root,
+            title="Choose project folder",
+            mustexist=True,
+        )
+    finally:
+        root.destroy()
+
+    if not selected:
+        raise ValueError("Folder selection was cancelled.")
+
+    return Path(selected).expanduser().resolve()
+
+
+def set_project_root(path: str) -> Path:
+    """Validate, persist, and activate a new project root.
+
+    Passing CHOOSE_PROJECT_ROOT opens the native operating-system folder
+    picker. The selected path must exist and be a directory. The
+    configuration file is stored under the user's home directory, outside
+    the project, so the AI's filesystem tools cannot expose it.
+    """
+
+    if str(path).strip() == CHOOSE_PROJECT_ROOT:
+        candidate = _choose_project_root()
+    else:
+        if not path or not str(path).strip():
+            raise ValueError("A project path is required.")
+        candidate = Path(str(path).strip()).expanduser().resolve()
+
+    if not candidate.exists():
+        raise ValueError(f"Project path does not exist: {candidate}")
+    if not candidate.is_dir():
+        raise ValueError(f"Project path is not a directory: {candidate}")
+
+    _persist_project_root(candidate)
     PROJECT_ROOT.set(candidate)
     return candidate
 
@@ -145,7 +193,7 @@ def safe_path(path: str) -> Path:
             "project root."
         )
 
-    root = PROJECT_ROOT.resolve()
+    root = get_project_root()
     requested = (root / path).resolve()
 
     try:
@@ -188,7 +236,7 @@ def is_sensitive_path(file_path: Path) -> bool:
     """True if a resolved path is a secret file or lives inside .git."""
 
     try:
-        rel_parts = file_path.relative_to(PROJECT_ROOT.resolve()).parts
+        rel_parts = file_path.relative_to(get_project_root()).parts
     except ValueError:
         return True
 

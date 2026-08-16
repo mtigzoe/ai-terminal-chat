@@ -1,50 +1,59 @@
-/**
- * @license
- * Copyright 2024 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/** Import necessary modules. */
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPaperPlane } from '@fortawesome/free-solid-svg-icons';
 
-/** Submission using the Enter key or button. */
+/** Submission using Enter or the Send button. Shift+Enter inserts a new line. */
 const MessageInput = ({ inputRef, waiting, handleClick }) => {
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!waiting) {
+      inputRef.current?.focus();
+    }
+  }, [waiting, inputRef]);
+
+  const submitMessage = () => {
+    if (waiting || !message.trim()) return;
+
+    const submittedMessage = message;
+    setMessage('');
+    handleClick(submittedMessage);
+  };
+
   return (
     <div className="message-input">
       <label htmlFor="chat-message-input" className="sr-only">
-        Chat message
+        message
       </label>
-      <input
+      <textarea
         id="chat-message-input"
         className="chat_msg_input"
-        type="text"
         name="chat"
-        placeholder="Enter a message."
+        rows={3}
+        placeholder={waiting ? "Waiting for model's response" : "Enter a message."}
         ref={inputRef}
-        disabled={waiting}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") handleClick();
+        value={message}
+        aria-describedby="message-input-help"
+        aria-disabled="false"
+        onChange={(event) => setMessage(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            submitMessage();
+          }
         }}
       />
+      <p id="message-input-help" className="sr-only">
+        Press Enter to send. Press Shift plus Enter to add a new line.
+        While a response is in progress, you can prepare your next message;
+        cancel the current response before sending it.
+      </p>
       <button
         type="button"
         className="chat_msg_btn"
-        onClick={handleClick}
+        onClick={submitMessage}
         aria-label="Send message"
-        disabled={waiting}
+        disabled={waiting || !message.trim()}
       >
         <span className="fa-span-send" aria-hidden="true">
           <FontAwesomeIcon icon={faPaperPlane} />

@@ -1,9 +1,4 @@
-/**
- * Lightweight tests for agent status helpers.
- * Run with: node --experimental-vm-modules src/agentStatus.test.js
- * (or any ESM-capable runner). Does not claim screen-reader coverage.
- */
-
+import { describe, expect, it } from 'vitest';
 import {
   phaseLabel,
   statusFromProgressEvent,
@@ -15,75 +10,71 @@ import {
   ASSERTIVE_PHASES,
 } from './agentStatus.js';
 
-let passed = 0;
-let failed = 0;
+describe('agentStatus helpers', () => {
+  it('maps phases and progress events', () => {
+    expect(phaseLabel('plan')).toBe('Planning');
+    expect(phaseLabel('confirm')).toBe('Waiting for confirmation');
 
-function assert(condition, message) {
-  if (condition) {
-    passed += 1;
-  } else {
-    failed += 1;
-    console.error('FAIL:', message);
-  }
-}
+    const progress = statusFromProgressEvent({
+      type: 'progress',
+      phase: 'inspect',
+      message: 'Inspecting app.py',
+    });
+    expect(progress?.phase).toBe('inspect');
+    expect(progress?.message).toBe('Inspecting app.py');
+    expect(progress?.assertive).toBe(false);
 
-assert(phaseLabel('plan') === 'Planning', 'phaseLabel plan');
-assert(phaseLabel('confirm') === 'Waiting for confirmation', 'phaseLabel confirm');
+    const confirmProgress = statusFromProgressEvent({
+      type: 'progress',
+      phase: 'confirm',
+      message: 'Waiting for confirmation to modify app.py',
+    });
+    expect(confirmProgress?.assertive).toBe(true);
+    expect(ASSERTIVE_PHASES.has('error')).toBe(true);
+  });
 
-const progress = statusFromProgressEvent({
-  type: 'progress',
-  phase: 'inspect',
-  message: 'Inspecting app.py',
+  it('creates an assertive status for pending confirmation', () => {
+    const pending = statusFromPendingConfirmation({
+      type: 'pending_confirmation',
+      name: 'write_file',
+      action_id: 'abc',
+      args: { path: 'app.py' },
+      preview: { path: 'app.py' },
+    });
+    expect(pending?.phase).toBe('confirm');
+    expect(pending?.assertive).toBe(true);
+    expect(pending?.message).toContain('write_file');
+    expect(pending?.message).toContain('app.py');
+    expect(pending?.message.toLowerCase()).toContain('approve');
+  });
+
+  it('creates error and tool-activity statuses', () => {
+    const err = statusFromErrorEvent({
+      type: 'error',
+      message: 'Provider failed',
+    });
+    expect(err?.phase).toBe('error');
+    expect(err?.assertive).toBe(true);
+
+    const activityStatus = statusFromToolActivity([
+      { type: 'progress', phase: 'plan', message: 'Planning next step' },
+      { type: 'progress', phase: 'inspect', message: 'Inspecting app.py' },
+      {
+        type: 'pending_confirmation',
+        name: 'apply_patch',
+        args: { path: 'x.py' },
+        preview: { path: 'x.py' },
+      },
+    ]);
+    expect(activityStatus?.phase).toBe('confirm');
+  });
+
+  it('parses status lines from the stream', () => {
+    const streamStatus = statusFromStreamLine('[inspect] Inspecting app.py');
+    expect(streamStatus?.phase).toBe('inspect');
+    expect(streamStatus?.message).toBe('Inspecting app.py');
+    expect(isAgentStatusStreamLine('[plan] Planning next step')).toBe(true);
+    expect(isAgentStatusStreamLine('Hello from the model')).toBe(false);
+    expect(isAgentStatusStreamLine('[Confirmation required: write_file action_id=xyz]')).toBe(true);
+  });
 });
-assert(progress?.phase === 'inspect', 'progress phase');
-assert(progress?.message === 'Inspecting app.py', 'progress message');
-assert(progress?.assertive === false, 'inspect is polite');
-
-const confirmProgress = statusFromProgressEvent({
-  type: 'progress',
-  phase: 'confirm',
-  message: 'Waiting for confirmation to modify app.py',
-});
-assert(confirmProgress?.assertive === true, 'confirm progress assertive');
-assert(ASSERTIVE_PHASES.has('error'), 'error is assertive');
-
-const pending = statusFromPendingConfirmation({
-  type: 'pending_confirmation',
-  name: 'write_file',
-  action_id: 'abc',
-  args: { path: 'app.py' },
-  preview: { path: 'app.py' },
-});
-assert(pending?.phase === 'confirm', 'pending phase');
-assert(pending?.assertive === true, 'pending assertive');
-assert(pending?.message.includes('write_file'), 'pending mentions tool');
-assert(pending?.message.includes('app.py'), 'pending mentions path');
-assert(pending?.message.toLowerCase().includes('approve'), 'pending asks approval');
-
-const err = statusFromErrorEvent({
-  type: 'error',
-  message: 'Provider failed',
-});
-assert(err?.phase === 'error' && err.assertive, 'error status');
-
-const activityStatus = statusFromToolActivity([
-  { type: 'progress', phase: 'plan', message: 'Planning next step' },
-  { type: 'progress', phase: 'inspect', message: 'Inspecting app.py' },
-  {
-    type: 'pending_confirmation',
-    name: 'apply_patch',
-    args: { path: 'x.py' },
-    preview: { path: 'x.py' },
-  },
-]);
-assert(activityStatus?.phase === 'confirm', 'activity prefers pending');
-
-const streamStatus = statusFromStreamLine('[inspect] Inspecting app.py');
-assert(streamStatus?.phase === 'inspect', 'stream line phase');
-assert(streamStatus?.message === 'Inspecting app.py', 'stream line message');
-assert(isAgentStatusStreamLine('[plan] Planning next step'), 'status line detected');
-assert(!isAgentStatusStreamLine('Hello from the model'), 'chat text not status');
-assert(isAgentStatusStreamLine('[Confirmation required: write_file action_id=xyz]'), 'confirm line');
-
-console.log(`agentStatus tests: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);

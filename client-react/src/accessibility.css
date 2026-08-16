@@ -1,0 +1,164 @@
+/* Accessibility overrides for keyboard and screen-reader users. */
+
+/* Never remove the browser focus indicator. */
+button:focus,
+select:focus,
+input:focus,
+summary:focus {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+summary:focus:not(:focus-visible) {
+  outline: none;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
+/* Keep the conversation structure readable when Markdown creates headings/lists. */
+.message-content > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* Make the streaming control a predictable keyboard target. */
+.stream-response-control {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.chat-header {
+  position: relative;
+}
+
+.settings-link {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+}
+
+.chat-header h1 {
+  margin-left: 80px;
+}
+
+.toggle-btn:disabled,
+.chat_msg_btn:disabled,
+.chat_msg_input:disabled,
+.provider-selector select:disabled,
+.provider-selector input:disabled,
+.settings-form select:disabled,
+.settings-form input:disabled,
+.settings-save:disabled {
+  cursor: not-allowed;
+}
+
+/* Status is already conveyed by text; these borders are supplemental visual cues. */
+.agent-status--confirm,
+.agent-status--error,
+.agent-status--complete,
+.agent-status--cancelled,
+.agent-status--recover {
+  border-width: 2px;
+}
+
+.settings-page {
+  box-sizing: border-box;
+  width: min(720px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 24px;
+  text-align: left;
+}
+
+.settings-page h1 {
+  margin: 24px 0;
+}
+
+.back-link,
+.settings-link {
+  font-weight: 600;
+}
+
+.settings-form {
+  display: grid;
+  gap: 20px;
+  max-width: 560px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-field label {
+  font-weight: 700;
+}
+
+.settings-field select,
+.settings-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #505261;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  font-size: 1rem;
+}
+
+.settings-help {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.settings-save {
+  width: fit-content;
+  min-width: 110px;
+  min-height: 44px;
+  padding: 8px 18px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.settings-status {
+  min-height: 1.5em;
+}
+
+.settings-status--error {
+  font-weight: 700;
+}
+
+@media (max-width: 700px) {
+  .settings-page {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

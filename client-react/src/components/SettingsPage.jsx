@@ -1,18 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 
-const PROJECT_PATH_STORAGE_KEY = 'ai-terminal-chat.projectPath';
-
 const SettingsPage = ({ host }) => {
   const [providerNames, setProviderNames] = useState([]);
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
   const [models, setModels] = useState([]);
   const [modelsSupported, setModelsSupported] = useState(false);
-  const [projectPath, setProjectPath] = useState('');
+  const [projectRoot, setProjectRoot] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [choosingFolder, setChoosingFolder] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
@@ -43,18 +42,21 @@ const SettingsPage = ({ host }) => {
 
     const loadSettings = async () => {
       try {
-        const response = await axios.get(`${host}/providers?probe=0`);
+        const [providerResponse, projectRootResponse] = await Promise.all([
+          axios.get(`${host}/providers?probe=0`),
+          axios.get(`${host}/project-root`),
+        ]);
         if (!active) return;
-        setProviderNames(response.data.providers || []);
-        setProvider(response.data.name || '');
-        setModel(response.data.model || '');
-        setProjectPath(localStorage.getItem(PROJECT_PATH_STORAGE_KEY) || '');
+        setProviderNames(providerResponse.data.providers || []);
+        setProvider(providerResponse.data.name || '');
+        setModel(providerResponse.data.model || '');
+        setProjectRoot(projectRootResponse.data.path || '');
         setStatusMessage('');
-        await loadModels(response.data.name, response.data.model || '');
+        await loadModels(providerResponse.data.name, providerResponse.data.model || '');
       } catch {
         if (active) {
           setStatusIsError(true);
-          setStatusMessage('Could not load provider settings from the backend.');
+          setStatusMessage('Could not load settings from the backend.');
         }
       } finally {
         if (active) setLoading(false);
@@ -74,9 +76,34 @@ const SettingsPage = ({ host }) => {
     await loadModels(nextProvider);
   };
 
+  const handleChooseFolder = async () => {
+    setChoosingFolder(true);
+    setStatusMessage('Opening the folder picker.');
+    setStatusIsError(false);
+
+    try {
+      const response = await axios.post(`${host}/project-root`, {
+        path: '__CHOOSE_PROJECT_ROOT__',
+      });
+      const selectedPath = response.data.path || '';
+      if (!selectedPath) {
+        throw new Error('The folder picker did not return a path.');
+      }
+      setProjectRoot(selectedPath);
+      setStatusMessage(`Folder selected: ${selectedPath}`);
+    } catch (error) {
+      setStatusIsError(true);
+      setStatusMessage(
+        error?.response?.data?.error || error?.message || 'Could not choose a folder.'
+      );
+    } finally {
+      setChoosingFolder(false);
+    }
+  };
+
   const handleSave = async (event) => {
     event.preventDefault();
-    if (!provider) return;
+    if (!provider || !projectRoot.trim()) return;
 
     setSaving(true);
     setStatusMessage('');
@@ -86,18 +113,24 @@ const SettingsPage = ({ host }) => {
       const payload = {
         provider,
         model: model || undefined,
-        project_path: projectPath.trim(),
+        project_path: projectRoot.trim(),
       };
       if (apiKey.trim()) {
         payload.api_key = apiKey.trim();
       }
 
-      const response = await axios.post(`${host}/providers/select`, payload);
-      setProvider(response.data.name || provider);
-      setModel(response.data.model || model);
-      localStorage.setItem(PROJECT_PATH_STORAGE_KEY, projectPath.trim());
+      const providerResponse = await axios.post(`${host}/providers/select`, payload);
+      const projectRootResponse = await axios.post(`${host}/project-root`, {
+        path: projectRoot.trim(),
+      });
+
+      setProvider(providerResponse.data.name || provider);
+      setModel(providerResponse.data.model || model);
+      setProjectRoot(projectRootResponse.data.path || projectRoot.trim());
       setApiKey('');
-      setStatusMessage(`Settings saved for ${response.data.name || provider}.`);
+      setStatusMessage(
+        `Settings saved for ${providerResponse.data.name || provider}. Project path saved.`
+      );
     } catch (error) {
       setStatusIsError(true);
       setStatusMessage(
@@ -125,19 +158,29 @@ const SettingsPage = ({ host }) => {
 
       <form className="settings-form" onSubmit={handleSave}>
         <div className="settings-field">
-          <label htmlFor="settings-project-path">Default project path</label>
+          <label htmlFor="settings-project-root">Default project path</label>
           <input
-            id="settings-project-path"
+            id="settings-project-root"
             type="text"
-            value={projectPath}
-            onChange={(event) => setProjectPath(event.target.value)}
-            disabled={saving}
+            value={projectRoot}
+            onChange={(event) => setProjectRoot(event.target.value)}
+            disabled={saving || choosingFolder}
             placeholder="C:\\Projects\\my-project"
             autoComplete="off"
-            aria-describedby="settings-project-path-help"
+            spellCheck="false"
+            aria-describedby="settings-project-root-help"
           />
-          <p id="settings-project-path-help" className="settings-help">
-            This directory becomes the project root for file, search, terminal, and Git tools. The directory must already exist.
+          <button
+            type="button"
+            className="settings-folder-button"
+            onClick={handleChooseFolder}
+            disabled={saving || choosingFolder}
+            aria-describedby="settings-project-root-help"
+          >
+            {choosingFolder ? 'Choosing folder…' : 'Choose a folder'}
+          </button>
+          <p id="settings-project-root-help" className="settings-help">
+            The backend uses this directory as the root for file, search, terminal, and Git tools. Choose a folder to open the native operating-system folder picker, or enter the full path manually. The selected path is shown here before you save it.
           </p>
         </div>
 
@@ -147,7 +190,7 @@ const SettingsPage = ({ host }) => {
             id="settings-provider"
             value={provider}
             onChange={handleProviderChange}
-            disabled={saving}
+            disabled={saving || choosingFolder}
           >
             <option value="" disabled>Select a provider</option>
             {providerNames.map((name) => (
@@ -163,7 +206,7 @@ const SettingsPage = ({ host }) => {
               id="settings-model"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              disabled={saving || loadingModels}
+              disabled={saving || choosingFolder || loadingModels}
             >
               {models.map((item) => (
                 <option key={item.id} value={item.id}>{item.id}</option>
@@ -175,7 +218,7 @@ const SettingsPage = ({ host }) => {
               type="text"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              disabled={saving}
+              disabled={saving || choosingFolder}
               placeholder={loadingModels ? 'Loading models…' : 'Enter model name'}
             />
           )}
@@ -188,7 +231,7 @@ const SettingsPage = ({ host }) => {
             type="password"
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            disabled={saving}
+            disabled={saving || choosingFolder}
             autoComplete="new-password"
             placeholder="Enter API key (optional for Ollama)"
             aria-describedby="settings-api-key-help"
@@ -198,7 +241,7 @@ const SettingsPage = ({ host }) => {
           </p>
         </div>
 
-        <button type="submit" className="settings-save" disabled={saving || !provider || !projectPath.trim()}>
+        <button type="submit" className="settings-save" disabled={saving || choosingFolder || !provider || !projectRoot.trim()}>
           {saving ? 'Saving…' : 'Save'}
         </button>
 
@@ -211,6 +254,29 @@ const SettingsPage = ({ host }) => {
           {statusMessage}
         </div>
       </form>
+
+      <section className="keyboard-shortcuts" aria-labelledby="keyboard-shortcuts-heading">
+        <h2 id="keyboard-shortcuts-heading">Keyboard Shortcuts</h2>
+        <table>
+          <caption className="sr-only">Keyboard shortcuts</caption>
+          <thead>
+            <tr>
+              <th scope="col">Shortcut</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Enter</td>
+              <td>Send message</td>
+            </tr>
+            <tr>
+              <td>Shift + Enter</td>
+              <td>Insert a new line in the message</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
     </main>
   );
 };
