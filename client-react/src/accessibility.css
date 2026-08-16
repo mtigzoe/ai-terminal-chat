@@ -40,6 +40,20 @@ summary:focus-visible {
   margin-left: auto;
 }
 
+.chat-header {
+  position: relative;
+}
+
+.settings-link {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+}
+
+.chat-header h1 {
+  margin-left: 80px;
+}
+
 .toggle-btn:disabled,
 .chat_msg_btn:disabled,
 .chat_msg_input:disabled,
