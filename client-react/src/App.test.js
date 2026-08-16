@@ -11,6 +11,7 @@ test('renders core keyboard and screen-reader targets', () => {
 
   expect(screen.getByRole('heading', { name: /example chat app/i })).toBeInTheDocument();
   expect(screen.getByRole('main', { name: /conversation/i })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /settings/i })).toBeInTheDocument();
   expect(screen.getByLabelText(/chat message/i)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /send message/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /stream response off/i })).toBeInTheDocument();
