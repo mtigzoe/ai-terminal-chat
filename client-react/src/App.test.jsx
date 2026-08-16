@@ -1,6 +1,19 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { vi } from 'vitest';
 import App from './App';
 import { AgentStatusRegion } from './components/ConversationDisplayArea.jsx';
+
+// Mock axios so the mount-time GET /project-root call never hits a
+// real socket (previously this produced real ECONNREFUSED noise in
+// every test run and made the suite depend on nothing listening on
+// 127.0.0.1:9000). No existing test assertions change below.
+vi.mock('axios', () => ({
+  default: {
+    get: vi.fn(() => Promise.resolve({ data: { path: '/tmp/project' } })),
+    post: vi.fn(),
+    isCancel: vi.fn(() => false),
+  },
+}));
 
 test('renders core keyboard and screen-reader targets', () => {
   render(<App />);

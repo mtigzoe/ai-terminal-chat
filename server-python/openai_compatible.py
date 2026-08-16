@@ -341,7 +341,15 @@ class OpenAICompatibleProvider(Provider):
                 f"(HTTP {response.status_code}): {detail}"
             ) from exc
 
-        return self._parse_completion(response.json())
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{self.display_name} returned a non-JSON response body: "
+                f"{response.text!r}"
+            ) from exc
+
+        return self._parse_completion(data)
 
     def append_model_turn(self, contents, response):
         message = dict(response.raw) if isinstance(response.raw, dict) else {

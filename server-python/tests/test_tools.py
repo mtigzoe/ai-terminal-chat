@@ -57,14 +57,6 @@ def project_root(tmp_path, monkeypatch):
     return tmp_path
 
 
-
-    with pytest.raises(ValueError):
-        app.safe_path("C:\\Users\\test\\secret.txt")
-
-    with pytest.raises(ValueError):
-        app.safe_path("../../outside.txt")
-
-
 def test_safe_path_accepts_project_relative_path():
     path = app.safe_path("server-python")
     assert path == (app.PROJECT_ROOT / "server-python").resolve()

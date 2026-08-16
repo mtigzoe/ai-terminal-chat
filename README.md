@@ -294,19 +294,17 @@ From `client-react`:
 npm install
 ```
 
+Run the frontend test suite (Vitest — component, accessibility, and chat-flow tests, including `src/agentStatus.test.js`):
+
+```powershell
+npm test
+```
+
 Build the production frontend:
 
 ```powershell
 npm run build
 ```
-
-The agent-status helper has a standalone test script that does not require a test runner:
-
-```powershell
-node src/agentStatus.test.js
-```
-
-The current `package.json` does not define an `npm test` script. React Testing Library dependencies are present, but the React test files require a configured test runner before they can be executed as a standard npm test command.
 
 ## API endpoints
 
