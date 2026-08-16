@@ -102,7 +102,7 @@ function ToolActivity({ activity = [] }) {
   return (
     <details className="tool-activity">
       <summary>Agent activity ({items.length})</summary>
-      <ul>
+      <ul aria-label="Agent activity details">
         {items.map((item) => (
           <li key={item.key} className={`activity-item activity-item--${item.kind}`}>
             <code>{item.text}</code>
@@ -157,7 +157,7 @@ const ChatArea = ({
       })}
 
       {streamdiv && (
-        <article className="tempResponse" aria-label="Assistant response in progress">
+        <article className="tempResponse" aria-label="Assistant response in progress" aria-live="off">
           <img src={chatbotIcon} alt="" aria-hidden="true" />
           <div>
             <ToolActivity activity={streamToolActivity} />

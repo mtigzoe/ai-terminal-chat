@@ -1,6 +1,27 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
-const Header = ({ toggled, setToggled }) => {
+const Header = ({ toggled, setToggled, waiting }) => {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const cancelRef = useRef(null);
+
+  useEffect(() => {
+    if (!confirmOpen) return undefined;
+    cancelRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setConfirmOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [confirmOpen]);
+
+  const clearConversation = () => {
+    setConfirmOpen(false);
+    window.location.assign('/');
+  };
+
   return (
     <header className="chat-header">
       <a className="settings-link" href="/settings.html">
@@ -25,7 +46,47 @@ const Header = ({ toggled, setToggled }) => {
             </span>
           </span>
         </button>
+        <button
+          type="button"
+          className="clear-conversation-btn"
+          onClick={() => setConfirmOpen(true)}
+          disabled={waiting}
+          aria-label="Clear conversation"
+        >
+          Clear conversation
+        </button>
       </div>
+
+      {confirmOpen && (
+        <div
+          className="confirmation-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setConfirmOpen(false);
+          }}
+        >
+          <div
+            className="confirmation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clear-conversation-title"
+            aria-describedby="clear-conversation-description"
+          >
+            <h2 id="clear-conversation-title">Clear conversation?</h2>
+            <p id="clear-conversation-description">
+              This will remove the current conversation from the chat view.
+            </p>
+            <div className="confirmation-actions">
+              <button type="button" ref={cancelRef} onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" onClick={clearConversation}>
+                Clear conversation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };
