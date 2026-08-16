@@ -7,6 +7,7 @@ const SettingsPage = ({ host }) => {
   const [model, setModel] = useState('');
   const [models, setModels] = useState([]);
   const [modelsSupported, setModelsSupported] = useState(false);
+  const [projectRoot, setProjectRoot] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -40,17 +41,21 @@ const SettingsPage = ({ host }) => {
 
     const loadSettings = async () => {
       try {
-        const response = await axios.get(`${host}/providers?probe=0`);
+        const [providerResponse, projectRootResponse] = await Promise.all([
+          axios.get(`${host}/providers?probe=0`),
+          axios.get(`${host}/project-root`),
+        ]);
         if (!active) return;
-        setProviderNames(response.data.providers || []);
-        setProvider(response.data.name || '');
-        setModel(response.data.model || '');
+        setProviderNames(providerResponse.data.providers || []);
+        setProvider(providerResponse.data.name || '');
+        setModel(providerResponse.data.model || '');
+        setProjectRoot(projectRootResponse.data.path || '');
         setStatusMessage('');
-        await loadModels(response.data.name, response.data.model || '');
+        await loadModels(providerResponse.data.name, providerResponse.data.model || '');
       } catch {
         if (active) {
           setStatusIsError(true);
-          setStatusMessage('Could not load provider settings from the backend.');
+          setStatusMessage('Could not load settings from the backend.');
         }
       } finally {
         if (active) setLoading(false);
@@ -72,7 +77,7 @@ const SettingsPage = ({ host }) => {
 
   const handleSave = async (event) => {
     event.preventDefault();
-    if (!provider) return;
+    if (!provider || !projectRoot.trim()) return;
 
     setSaving(true);
     setStatusMessage('');
@@ -87,11 +92,18 @@ const SettingsPage = ({ host }) => {
         payload.api_key = apiKey.trim();
       }
 
-      const response = await axios.post(`${host}/providers/select`, payload);
-      setProvider(response.data.name || provider);
-      setModel(response.data.model || model);
+      const providerResponse = await axios.post(`${host}/providers/select`, payload);
+      const projectRootResponse = await axios.post(`${host}/project-root`, {
+        path: projectRoot.trim(),
+      });
+
+      setProvider(providerResponse.data.name || provider);
+      setModel(providerResponse.data.model || model);
+      setProjectRoot(projectRootResponse.data.path || projectRoot.trim());
       setApiKey('');
-      setStatusMessage(`Settings saved for ${response.data.name || provider}.`);
+      setStatusMessage(
+        `Settings saved for ${providerResponse.data.name || provider}. Project path saved.`
+      );
     } catch (error) {
       setStatusIsError(true);
       setStatusMessage(
@@ -118,6 +130,23 @@ const SettingsPage = ({ host }) => {
       <h1 id="settings-heading">Settings</h1>
 
       <form className="settings-form" onSubmit={handleSave}>
+        <div className="settings-field">
+          <label htmlFor="settings-project-root">Default project path</label>
+          <input
+            id="settings-project-root"
+            type="text"
+            value={projectRoot}
+            onChange={(event) => setProjectRoot(event.target.value)}
+            disabled={saving}
+            autoComplete="off"
+            spellCheck="false"
+            aria-describedby="settings-project-root-help"
+          />
+          <p id="settings-project-root-help" className="settings-help">
+            The backend uses this directory as the root for file, search, terminal, and Git tools. It must already exist and is persisted outside the project.
+          </p>
+        </div>
+
         <div className="settings-field">
           <label htmlFor="settings-provider">AI Provider</label>
           <select
@@ -175,7 +204,7 @@ const SettingsPage = ({ host }) => {
           </p>
         </div>
 
-        <button type="submit" className="settings-save" disabled={saving || !provider}>
+        <button type="submit" className="settings-save" disabled={saving || !provider || !projectRoot.trim()}>
           {saving ? 'Saving…' : 'Save'}
         </button>
 
