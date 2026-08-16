@@ -145,7 +145,7 @@ The recommended Python workflow uses `uv`:
 
 ```powershell
 uv venv .venv
-.\.venv\Scripts\Activate.ps1
+.\\.venv\\Scripts\\Activate.ps1
 uv pip install -r requirements.txt
 uv run app.py
 ```
@@ -231,7 +231,7 @@ The scripts do **not** use `pip install` or silently fall back to pip. If `uv` i
 From the repository root in PowerShell:
 
 ```powershell
-.\scripts\start-electron.ps1
+.\\scripts\\start-electron.ps1
 ```
 
 This is the main one-command Electron development launcher. You do **not** need to manually run `python app.py` or `npm run dev` first unless you prefer to manage those processes yourself.
@@ -247,7 +247,7 @@ uv --version
 From the repository root:
 
 ```powershell
-.\scripts\start-electron-dev.ps1
+.\\scripts\\start-electron-dev.ps1
 ```
 
 This is the development helper for the same backend + Vite + Electron workflow. It also preserves services that were already running and cleans up only processes it started itself.
@@ -770,7 +770,7 @@ From the repository root:
 Windows PowerShell:
 
 ```powershell
-.\scripts\start-offline-ai.ps1
+.\\scripts\\start-offline-ai.ps1
 ```
 
 Linux shell:
@@ -835,6 +835,38 @@ Future desktop work includes:
 - Integrated project and terminal views (implemented in React UI via `/project/*` and `/terminal/run`)
 - Native local-project selection and configuration
 - Accessible desktop workflows that do not depend on browser navigation
+
+### TypeScript support
+
+A future direction is to provide an optional TypeScript backend alongside the existing Python backend.
+
+A possible implementation would add a `server-typescript/` directory containing a TypeScript/Node.js implementation of the backend API, provider layer, agent/tool loop, terminal integration, filesystem operations, Git integration, and security controls.
+
+The existing Python backend will remain the reference implementation while the TypeScript backend is developed and evaluated. This allows the migration to proceed incrementally rather than as a high-risk rewrite.
+
+Potential benefits include:
+
+- A unified TypeScript stack with the existing React/Vite frontend
+- Shared TypeScript types between frontend and backend
+- Easier integration with Node.js and Electron
+- Access to the broader Node.js ecosystem
+- Potentially simpler development and packaging for the Electron desktop application
+- Type-safe API contracts between the frontend and backend
+
+Any TypeScript backend must reproduce the existing backend's security boundaries, including filesystem restrictions, sensitive-file protection, terminal command allowlisting, command-safety checks, confirmation-required mutations, and provider/tool controls before it can replace the Python backend.
+
+Possible migration stages:
+
+1. Create `server-typescript/` alongside `server-python/`.
+2. Establish shared API types and configuration.
+3. Implement health and provider endpoints.
+4. Implement the agent/provider layer.
+5. Implement filesystem and Git tools.
+6. Reproduce terminal security and command restrictions.
+7. Add comprehensive backend tests.
+8. Run the Python and TypeScript backends in parallel for comparison.
+9. Evaluate performance, accessibility, reliability, and security.
+10. Consider making TypeScript the default backend only after feature parity and security validation.
 
 The roadmap is intentionally incremental: safety, accessibility, reliability, and backend-enforced permissions should remain priorities as more agent capabilities are added.
 
