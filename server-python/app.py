@@ -38,6 +38,15 @@ load_dotenv()
 provider = get_provider()
 _provider_lock = Lock()
 
+API_KEY_ENV_VARS = {
+    "gemini": "GOOGLE_API_KEY",
+    "kilo": "KILO_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "xai": "XAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
 app = Flask(__name__)
 CORS(app)
 
@@ -159,13 +168,11 @@ def provider_models(name):
 
 @app.route("/providers/select", methods=["POST"])
 def select_provider():
-    """Switch the active provider and/or model.
+    """Switch the active provider, model, and optional API key.
 
-    The browser can only *request* a provider by name; this endpoint
-    is what actually validates and constructs it. A request for an
-    unsupported name, or one whose credentials/config are missing
-    (e.g. no KILO_API_KEY), is rejected with the current provider left
-    running rather than leaving the app without any provider at all.
+    The browser can only *request* a provider by name. If an API key is
+    supplied, it is applied only to the running local server process and
+    is never returned by this endpoint. The key is not written to disk.
     """
 
     global provider
@@ -174,6 +181,8 @@ def select_provider():
     name = str(data.get("provider", "")).strip().lower()
     model = data.get("model")
     model = str(model).strip() if model else None
+    has_api_key = "api_key" in data
+    api_key = str(data.get("api_key") or "").strip()
 
     if not name:
         return {"error": "provider is required."}, 400
@@ -186,9 +195,23 @@ def select_provider():
             )
         }, 400
 
+    env_name = API_KEY_ENV_VARS.get(name)
+    previous_api_key = os.environ.get(env_name) if env_name else None
+
+    if has_api_key and env_name:
+        if api_key:
+            os.environ[env_name] = api_key
+        else:
+            os.environ.pop(env_name, None)
+
     try:
         candidate = get_provider(name, model=model)
     except Exception as exc:
+        if has_api_key and env_name:
+            if previous_api_key is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_api_key
         return {"error": f"Could not switch to '{name}': {exc}"}, 400
 
     with _provider_lock:
