@@ -71,7 +71,12 @@ def _build_tools() -> list:
 class GeminiProvider(Provider):
 
     def __init__(self, api_key: str = None, model: str = None):
-        api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        # Prefer values supplied by the factory (ProviderConfig). Fall
+        # back to the environment only when the caller omitted an
+        # argument entirely, so direct construction still works without
+        # going through get_provider().
+        if api_key is None:
+            api_key = os.getenv("GOOGLE_API_KEY")
 
         if not api_key:
             raise RuntimeError(
@@ -82,11 +87,12 @@ class GeminiProvider(Provider):
 
         # Gemini 3.6 Flash is Google's current GA Flash model tuned for
         # coding, tool-use, and multi-step agentic workloads, so it's
-        # the default here. Override with GEMINI_MODEL if you want a
-        # different currently supported Gemini model (e.g. a Pro
-        # model for harder tasks).
-        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+        # the default here. Override with GEMINI_MODEL (or pass model=)
+        # if you want a different currently supported Gemini model.
+        if model is None:
+            model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
+        self.model_name = model
         self.model = self.model_name
         self._capabilities = ProviderCapabilities(
             tools=True,

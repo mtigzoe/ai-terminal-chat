@@ -14,10 +14,18 @@ from typing import Any, Optional
 
 @dataclass
 class ToolCall:
-    """One tool invocation the model asked for, already normalized."""
+    """One tool invocation the model asked for, already normalized.
+
+    ``id`` is optional. OpenAI-compatible backends often supply a stable
+    call id used when posting tool results; Gemini does not. The agent
+    loop executes tools by ``name``/``args`` only and never requires an
+    id. Providers that need ids for conversation continuity should
+    populate this field and also keep the id on ``ProviderResponse.raw``.
+    """
 
     name: str
     args: dict
+    id: Optional[str] = None
 
 
 @dataclass

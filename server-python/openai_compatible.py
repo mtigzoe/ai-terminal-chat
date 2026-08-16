@@ -291,7 +291,11 @@ class OpenAICompatibleProvider(Provider):
                     args = {}
 
             tool_calls.append(
-                ToolCall(name=function.get("name", ""), args=args)
+                ToolCall(
+                    name=function.get("name", ""),
+                    args=args,
+                    id=call.get("id"),
+                )
             )
 
         return ProviderResponse(
