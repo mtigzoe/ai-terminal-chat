@@ -193,7 +193,7 @@ A minimal Electron shell is available so the same React frontend can run in a de
 
    ```powershell
    cd client-react
-   npm run electron
+   npm run electron:dev
    ```
 
 In development (unpackaged) Electron always loads `http://localhost:3000` so a leftover `dist/` folder cannot override the Vite server. When the application is packaged, it loads `dist/index.html` from the application resources.

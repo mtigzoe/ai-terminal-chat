@@ -113,4 +113,4 @@ else
 fi
 
 printf '\nLaunching Electron...\n'
-(cd "$CLIENT_DIR" && npm run electron)
+(cd "$CLIENT_DIR" && npm run electron:dev)
