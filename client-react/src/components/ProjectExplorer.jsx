@@ -13,14 +13,6 @@ export default function ProjectExplorer({ host, onFileOpened }) {
   const [error, setError] = useState('');
   const listRef = useRef(null);
 
-  const entryPath = (entry) => {
-    const name = entry?.name || '';
-    if (!name) return currentPath || '.';
-    return currentPath === '.' || !currentPath
-      ? name
-      : `${currentPath.replace(/\\/g, '/').replace(/\/$/, '')}/${name}`;
-  };
-
   const loadDirectory = useCallback(async (path) => {
     setStatus(`Loading ${path}.`);
     setError('');
@@ -48,10 +40,20 @@ export default function ProjectExplorer({ host, onFileOpened }) {
     option?.focus();
   }, [entries, selectedIndex]);
 
+  const entryPath = (entry) => {
+    const name = entry?.name || entry?.path || '';
+    if (!name) return '';
+    if (entry?.path) return entry.path;
+    if (!currentPath || currentPath === '.') return name;
+    return `${currentPath.replace(/[\\/]$/, '')}/${name}`;
+  };
+
   const openEntry = async (entry) => {
     if (!entry) return;
     const path = entryPath(entry);
-    if (entry.type === 'directory' || entry.is_dir) {
+    if (!path) return;
+    const isDirectory = entry.type === 'directory' || entry.is_dir;
+    if (isDirectory) {
       await loadDirectory(path);
       return;
     }
@@ -74,7 +76,8 @@ export default function ProjectExplorer({ host, onFileOpened }) {
       setStatus('Already at the project root.');
       return;
     }
-    const parts = currentPath.replace(/\\/g, '/').split('/').filter(Boolean);
+    const normalized = currentPath.replace(/\\/g, '/').replace(/\/$/, '');
+    const parts = normalized.split('/').filter(Boolean);
     parts.pop();
     await loadDirectory(parts.length ? parts.join('/') : '.');
   };
@@ -118,7 +121,7 @@ export default function ProjectExplorer({ host, onFileOpened }) {
       >
         {entries.map((entry, index) => {
           const isDirectory = entry.type === 'directory' || entry.is_dir;
-          const label = `${entry.name || entryPath(entry)}${isDirectory ? ', directory' : ', file'}`;
+          const label = `${entry.name || entry.path}${isDirectory ? ', directory' : ', file'}`;
           return (
             <div
               key={entry.path || entry.name || index}
@@ -133,7 +136,7 @@ export default function ProjectExplorer({ host, onFileOpened }) {
               className="project-entry"
             >
               <span aria-hidden="true">{isDirectory ? '[DIR]' : '[FILE]'}</span>{' '}
-              {entry.name || entryPath(entry)}
+              {entry.name || entry.path}
             </div>
           );
         })}
