@@ -17,10 +17,17 @@ export default function TerminalPanel({ host, onSendToChat }) {
     const value = command.trim();
     if (!value || running) return;
 
+    // Flask executes commands with shell=False. On Windows, `ls` is a
+    // PowerShell alias rather than an executable, so map the simple
+    // cross-platform `ls` command to the allowlisted `dir` executable.
+    const commandForBackend = value.toLowerCase() === 'ls' && /Win/i.test(navigator.platform)
+      ? 'dir'
+      : value;
+
     setRunning(true);
     setStatus(`Running ${value}.`);
     try {
-      const response = await axios.post(`${host}/terminal/run`, { command: value });
+      const response = await axios.post(`${host}/terminal/run`, { command: commandForBackend });
       const result = response.data || {};
       const exitCode = result.returncode ?? result.exit_code ?? 0;
       const stdout = result.stdout || '';
@@ -55,13 +62,7 @@ export default function TerminalPanel({ host, onSendToChat }) {
   return (
     <section className="terminal-panel" aria-labelledby="terminal-panel-heading">
       <h2 id="terminal-panel-heading">Terminal</h2>
-      <div
-        className="terminal-output"
-        role="log"
-        aria-label="Terminal output"
-        aria-live="polite"
-        aria-relevant="additions"
-      >
+      <div className="terminal-output" role="log" aria-label="Terminal output" aria-live="polite" aria-relevant="additions">
         {output.length === 0 ? (
           <p>No terminal commands have been run.</p>
         ) : (
@@ -82,19 +83,8 @@ export default function TerminalPanel({ host, onSendToChat }) {
       </div>
       <form onSubmit={runCommand} className="terminal-form">
         <label htmlFor="terminal-command">Command</label>
-        <input
-          ref={inputRef}
-          id="terminal-command"
-          type="text"
-          value={command}
-          onChange={(event) => setCommand(event.target.value)}
-          disabled={running}
-          autoComplete="off"
-          spellCheck="false"
-        />
-        <button type="submit" disabled={running || !command.trim()}>
-          {running ? 'Running…' : 'Run command'}
-        </button>
+        <input ref={inputRef} id="terminal-command" type="text" value={command} onChange={(event) => setCommand(event.target.value)} disabled={running} autoComplete="off" spellCheck="false" />
+        <button type="submit" disabled={running || !command.trim()}>{running ? 'Running…' : 'Run command'}</button>
       </form>
       <div role="status" aria-live="polite" className="terminal-status">{status}</div>
     </section>
