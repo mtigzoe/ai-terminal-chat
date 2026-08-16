@@ -16,6 +16,20 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   const [status, setStatus] = useState('Loading project.');
   const [error, setError] = useState('');
   const listRef = useRef(null);
+  const previewCloseRef = useRef(null);
+
+  useEffect(() => {
+    if (!openedFile) return undefined;
+    previewCloseRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpenedFile(null);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [openedFile]);
 
   const loadDirectory = useCallback(async (path) => {
     setStatus(`Loading ${path}.`);
@@ -214,10 +228,28 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       </div>
       {entries.length === 0 && !error && <p className="project-empty" aria-live="polite">No entries.</p>}
       {openedFile && (
-        <section className="project-file-preview" aria-labelledby="project-file-preview-heading">
-          <h3 id="project-file-preview-heading">File: {openedFile.path}</h3>
-          <pre aria-label={`Contents of ${openedFile.path}`}>{openedFile.content}</pre>
-        </section>
+        <div
+          className="confirmation-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpenedFile(null);
+          }}
+        >
+          <section
+            className="confirmation-dialog file-preview-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-file-preview-heading"
+          >
+            <h3 id="project-file-preview-heading">File: {openedFile.path}</h3>
+            <pre aria-label={`Contents of ${openedFile.path}`}>{openedFile.content}</pre>
+            <div className="confirmation-dialog-actions">
+              <button ref={previewCloseRef} type="button" onClick={() => setOpenedFile(null)}>
+                Close
+              </button>
+            </div>
+          </section>
+        </div>
       )}
       <div role="status" aria-live="polite" className="project-status">{status}</div>
       {error && <div role="alert" className="project-error">{error}</div>}

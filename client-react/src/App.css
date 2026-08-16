@@ -131,6 +131,26 @@ body {
 .confirmation-dialog-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; }
 .confirmation-dialog-actions button { min-width: 90px; padding: 8px 14px; cursor: pointer; }
 
+.file-preview-dialog { width: min(760px, 100%); }
+.file-preview-dialog h3 { margin-top: 0; overflow-wrap: anywhere; }
+.file-preview-dialog pre { max-height: 60vh; overflow: auto; padding: 12px; background: #f7f6f3; border: 1px solid #9a9caa; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+
+.workspace-tablist { display: flex; gap: 4px; border-bottom: 1px solid #9a9caa; margin-bottom: 12px; }
+.workspace-tab {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: #333;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px 8px 0 0;
+}
+.workspace-tab:hover { background: #ece9e5; }
+.workspace-tab.active { background: #f7f6f3; border-color: #9a9caa; color: #111; position: relative; top: 1px; }
+.workspace-tabpanel .project-explorer,
+.workspace-tabpanel .terminal-panel { border: none; padding: 0; background: transparent; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
