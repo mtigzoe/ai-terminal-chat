@@ -109,7 +109,7 @@ GitHub Copilot was investigated as a possible provider option, but it is **defer
 - Credentials for whichever cloud provider you choose, if applicable
 - Ollama installed and running if you choose the local/offline workflow
 
-Install `uv` from the official Astral documentation if it is not already installed.
+Install `uv` from the official Astral documentation if it is not already installed. The Electron startup scripts require `uv` to be available on `PATH` and do not fall back to `pip`.
 
 ## Quick start
 
@@ -139,20 +139,13 @@ PORT=9000
 
 Do not commit `.env` or expose API keys in source code.
 
-Install Python dependencies with the repository's supported environment workflow. If the repository has a `pyproject.toml`, use `uv sync`; otherwise use the `requirements.txt` workflow below.
-
-For a standard Python virtual environment on Windows:
+The recommended Python workflow uses `uv`:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-Start the backend:
-
-```powershell
-python app.py
+uv venv .venv
+.\.venv\Scripts\Activate.ps1
+uv pip install -r requirements.txt
+uv run app.py
 ```
 
 The backend normally runs at:
@@ -181,11 +174,11 @@ If the frontend needs a different backend URL, set `VITE_API_URL` in the fronten
 
 ### 3. Run as a desktop app (Electron — Stage 1)
 
-A minimal Electron shell is available so the same React frontend can run in a desktop window. The Flask backend must still be started separately (step 1). The browser workflow above remains fully supported.
+A minimal Electron shell is available so the same React frontend can run in a desktop window. The Flask backend and Vite development server are required for an unpackaged Electron development run.
 
 **Manual development workflow**
 
-1. Start the Flask backend (step 1).
+1. Start the Flask backend using the `uv` workflow above.
 2. In a second terminal start the Vite development server:
 
    ```powershell
@@ -203,19 +196,96 @@ A minimal Electron shell is available so the same React frontend can run in a de
 
 In development (unpackaged) Electron always loads `http://localhost:3000` so a leftover `dist/` folder cannot override the Vite server. When the application is packaged, it loads `dist/index.html` from the application resources.
 
-**Helper scripts (Windows)**
+## Electron startup scripts
 
-From the repository root you can use the convenience scripts in `scripts/`:
+The repository includes one-command Electron development launchers in `scripts/`. They can prepare the Python environment, install dependencies, start the Flask backend, start Vite, wait for both services to become ready, and then launch Electron.
+
+```text
+scripts/
+├── start-electron.ps1       # Windows PowerShell
+├── start-electron-dev.ps1   # Windows PowerShell development helper
+└── start-electron.sh        # Linux/macOS-style shell
+```
+
+### What the Electron scripts do
+
+The scripts are designed for **unpackaged Electron development**. They:
+
+1. Check that `uv` and `npm` are available.
+2. Create `server-python/.venv` with `uv venv` when needed.
+3. Install backend requirements with `uv pip install -r requirements.txt`.
+4. Install frontend dependencies with `npm ci` when needed.
+5. Start Flask with `uv run app.py` on port `9000` if it is not already running.
+6. Wait for the Flask backend to become available.
+7. Start Vite on port `3000` if it is not already running.
+8. Wait for Vite to become available.
+9. Launch Electron.
+10. Clean up only the Flask/Vite processes started by the script when Electron exits; services that were already running are left alone.
+
+The scripts do **not** use `pip install` or silently fall back to pip. If `uv` is not available, they stop with an error instead.
+
+### Windows: `start-electron.ps1`
+
+From the repository root in PowerShell:
 
 ```powershell
-# Starts Vite (if needed) and launches Electron. Assumes the backend is already running.
 .\scripts\start-electron.ps1
+```
 
-# Starts Vite and Electron only (backend must already be running).
+This is the main one-command Electron development launcher. You do **not** need to manually run `python app.py` or `npm run dev` first unless you prefer to manage those processes yourself.
+
+You can verify that `uv` is available with:
+
+```powershell
+uv --version
+```
+
+### Windows: `start-electron-dev.ps1`
+
+From the repository root:
+
+```powershell
 .\scripts\start-electron-dev.ps1
 ```
 
-On non-Windows systems the equivalent commands are the `npm run` steps shown above. Automatic Flask process management and packaging are deferred to later stages.
+This is the development helper for the same backend + Vite + Electron workflow. It also preserves services that were already running and cleans up only processes it started itself.
+
+### Linux/macOS-style shell: `start-electron.sh`
+
+From the repository root:
+
+```bash
+./scripts/start-electron.sh
+```
+
+The shell script uses the same `uv`-based Python workflow and starts Flask, Vite, and Electron as needed.
+
+Check that the required tools are available:
+
+```bash
+uv --version
+npm --version
+```
+
+If the executable permission is missing after a checkout, restore it once with:
+
+```bash
+chmod +x scripts/start-electron.sh
+```
+
+You can also invoke the script through Bash:
+
+```bash
+bash scripts/start-electron.sh
+```
+
+When invoked through Bash, the script attempts to restore its executable permission for subsequent direct invocations.
+
+### Manual versus scripted startup
+
+If you want to control each process separately, use the manual workflow in the Electron section above. If you want one command to prepare the environment and launch the complete development stack, use one of the `start-electron.*` scripts.
+
+The Electron startup scripts are development launchers, not packaging scripts. They do not create an installer or packaged `.exe`, `.AppImage`, or other distributable application.
 
 ## Provider configuration and `.env.example`
 
@@ -298,28 +368,28 @@ API keys are backend-only. They are not sent to the React frontend by the provid
 
 ## Running the Python tests
 
-From `server-python`, using an activated virtual environment with the required dependencies:
+From `server-python`, using the repository's `uv` environment:
 
 ```powershell
-pytest
+uv run pytest
 ```
 
 To run the agent tests specifically:
 
 ```powershell
-pytest tests/test_agent.py -q
+uv run pytest tests/test_agent.py -q
 ```
 
 To run the pending-confirmation tests specifically:
 
 ```powershell
-pytest tests/test_pending.py -q
+uv run pytest tests/test_pending.py -q
 ```
 
 To run a particular test file:
 
 ```powershell
-pytest tests/test_app.py
+uv run pytest tests/test_app.py
 ```
 
 The README intentionally does not publish a fixed total test count because the suite changes as the project evolves.
@@ -567,7 +637,7 @@ When extending the project:
 
 ## Future direction
 
-The long-term goal is to develop AI Terminal Chat into an accessible, security-conscious terminal agent for local software development. The core provider, agent, security, terminal/Git, and local/offline milestones are implemented; future work focuses on refinement, testing, accessibility, and additional integrations.
+The long-term goal is to develop AI Terminal Chat into an accessible, security-conscious terminal agent for local software development. The core provider, agent, security, terminal/Git, local/offline, and initial Electron milestones are implemented; future work focuses on refinement, testing, accessibility, packaging, and additional integrations.
 
 ### Accessibility
 
@@ -716,7 +786,20 @@ Future provider-related work is limited to compatibility improvements, regressio
 
 ### Desktop application
 
-- An Electron-based desktop application for a more integrated terminal experience
+The initial Electron desktop milestone is implemented. Electron provides a desktop shell for the existing React/Vite application, with the Flask backend continuing to provide the application API during development.
+
+Current Electron work includes:
+
+- Electron main and preload processes
+- Secure `contextIsolation` and disabled Node integration in the renderer
+- Development loading through Vite at `http://localhost:3000`
+- Startup scripts for Windows PowerShell and Linux/macOS-style shells
+- Automated `uv` Python environment/dependency setup in the Electron startup scripts
+- Automatic startup and readiness checks for the Flask backend and Vite
+
+Future desktop work includes:
+
+- Production packaging and installers
 - Integrated project and terminal views
 - Native local-project selection and configuration
 - Accessible desktop workflows that do not depend on browser navigation
