@@ -3,7 +3,7 @@ import React from 'react';
 const Header = ({ toggled, setToggled }) => {
   return (
     <header className="chat-header">
-      <a className="settings-link" href="#settings">
+      <a className="settings-link" href="/settings.html">
         Settings
       </a>
       <h1>Example chat app</h1>
