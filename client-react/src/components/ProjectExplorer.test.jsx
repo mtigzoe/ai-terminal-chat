@@ -29,9 +29,9 @@ test('lists directory entries and exposes accessible file checkboxes', async () 
   render(<ProjectExplorer host={host} />);
 
   expect(await screen.findByRole('heading', { name: 'Project' })).toBeInTheDocument();
-  expect(screen.getByRole('checkbox', { name: /select readme\.md for the agent/i })).toBeInTheDocument();
+  expect(await screen.findByRole('checkbox', { name: /select readme\.md for the agent/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /open directory src/i })).toBeInTheDocument();
-  expect(screen.getByRole('listbox', { name: /project files and directories/i })).toBeInTheDocument();
+  expect(screen.getByRole('list', { name: /project files and directories/i })).toBeInTheDocument();
 });
 
 test('opens a file for local preview without supplying it to the agent', async () => {
@@ -102,8 +102,9 @@ test('space toggles the selected file without opening it', async () => {
 
   render(<ProjectExplorer host={host} />);
   const fileButton = await screen.findByRole('button', { name: /open a\.txt/i });
-  fileButton.focus();
-  fireEvent.keyDown(screen.getByRole('option', { name: /a\.txt, file/i }), { key: ' ' });
+  const fileEntry = screen.getByRole('listitem', { name: /a\.txt, file/i });
+  fileEntry.focus();
+  fireEvent.keyDown(fileEntry, { key: ' ' });
 
   expect(screen.getByRole('checkbox', { name: /select a\.txt for the agent/i })).toBeChecked();
   expect(axios.get).toHaveBeenCalledTimes(1);
