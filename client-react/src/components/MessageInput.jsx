@@ -15,13 +15,18 @@
  * limitations under the License.
  */
 
-/** Import necessary modules. */
-import React from 'react';
+import React, { useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPaperPlane } from '@fortawesome/free-solid-svg-icons';
 
 /** Submission using the Enter key or button. */
 const MessageInput = ({ inputRef, waiting, handleClick }) => {
+  useEffect(() => {
+    if (!waiting) {
+      inputRef.current?.focus();
+    }
+  }, [waiting, inputRef]);
+
   return (
     <div className="message-input">
       <label htmlFor="chat-message-input" className="sr-only">
@@ -35,8 +40,9 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
         placeholder="Enter a message."
         ref={inputRef}
         disabled={waiting}
+        aria-disabled={waiting}
         onKeyDown={(e) => {
-          if (e.key === "Enter") handleClick();
+          if (e.key === "Enter" && !waiting) handleClick();
         }}
       />
       <button

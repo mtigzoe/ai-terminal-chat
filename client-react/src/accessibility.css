@@ -1,0 +1,69 @@
+/* Accessibility overrides for keyboard and screen-reader users. */
+
+/* Never remove the browser focus indicator. */
+button:focus,
+select:focus,
+input:focus,
+summary:focus {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+summary:focus:not(:focus-visible) {
+  outline: none;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
+/* Keep the conversation structure readable when Markdown creates headings/lists. */
+.message-content > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* Make the streaming control a predictable keyboard target. */
+.stream-response-control {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.toggle-btn:disabled,
+.chat_msg_btn:disabled,
+.chat_msg_input:disabled,
+.provider-selector select:disabled,
+.provider-selector input:disabled {
+  cursor: not-allowed;
+}
+
+/* Status is already conveyed by text; these borders are supplemental visual cues. */
+.agent-status--confirm,
+.agent-status--error,
+.agent-status--complete,
+.agent-status--cancelled,
+.agent-status--recover {
+  border-width: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

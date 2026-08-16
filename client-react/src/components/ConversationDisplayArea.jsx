@@ -11,8 +11,6 @@ import { phaseLabel } from '../agentStatus.js';
  * Does not take keyboard focus.
  */
 function AgentStatusRegion({ status }) {
-  // Single live region: visible status text is what screen readers announce.
-  // Avoid nested live regions that can cause duplicate speech.
   if (!status) {
     return (
       <div
@@ -123,7 +121,7 @@ const ChatArea = ({
   agentStatus = null,
 }) => {
   return (
-    <div className="chat-area">
+    <main className="chat-area" aria-label="Conversation">
       <AgentStatusRegion status={agentStatus} />
 
       {data?.length <= 0 ? (
@@ -131,44 +129,48 @@ const ChatArea = ({
           <p className="welcome-1">Hi,</p>
           <p className="welcome-2">How can I help you today?</p>
         </div>
-      ) : (
-        <div className="welcome-area" style={{ display: 'none' }}></div>
-      )}
+      ) : null}
 
-      {data.map((element, index) => (
-        <div key={index} className={element.role}>
-          <img
-            src={element.role === 'user' ? userIcon : chatbotIcon}
-            alt=""
-            aria-hidden="true"
-          />
-          <div>
-            {element.role === 'model' && (
-              <ToolActivity activity={element.toolActivity} />
-            )}
-            <p>
-              <Markdown>{element.parts[0].text}</Markdown>
-            </p>
-          </div>
-        </div>
-      ))}
+      {data.map((element, index) => {
+        const isUser = element.role === 'user';
+        const messageLabel = isUser ? 'Your message' : 'Assistant message';
+        return (
+          <article
+            key={index}
+            className={element.role}
+            aria-label={`${messageLabel}, message ${index + 1}`}
+          >
+            <img
+              src={isUser ? userIcon : chatbotIcon}
+              alt=""
+              aria-hidden="true"
+            />
+            <div>
+              {!isUser && <ToolActivity activity={element.toolActivity} />}
+              <div className="message-content">
+                <Markdown>{element.parts[0].text}</Markdown>
+              </div>
+            </div>
+          </article>
+        );
+      })}
 
       {streamdiv && (
-        <div className="tempResponse">
+        <article className="tempResponse" aria-label="Assistant response in progress">
           <img src={chatbotIcon} alt="" aria-hidden="true" />
           <div>
             <ToolActivity activity={streamToolActivity} />
             {answer && (
-              <p>
+              <div className="message-content">
                 <Markdown>{answer}</Markdown>
-              </p>
+              </div>
             )}
           </div>
-        </div>
+        </article>
       )}
 
-      <span id="checkpoint"></span>
-    </div>
+      <span id="checkpoint" aria-hidden="true"></span>
+    </main>
   );
 };
 
