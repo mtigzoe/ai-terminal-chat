@@ -188,6 +188,25 @@ const SettingsPage = ({ host }) => {
           {statusMessage}
         </div>
       </form>
+
+      <section className="keyboard-shortcuts" aria-labelledby="keyboard-shortcuts-heading">
+        <h2 id="keyboard-shortcuts-heading">Keyboard Shortcuts</h2>
+        <table>
+          <caption className="sr-only">Keyboard shortcuts</caption>
+          <thead>
+            <tr>
+              <th scope="col">Shortcut</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Enter</td>
+              <td>Send message</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
     </main>
   );
 };
