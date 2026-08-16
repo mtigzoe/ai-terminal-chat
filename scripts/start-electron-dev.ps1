@@ -1,52 +1,109 @@
-# Development helper: start Vite (if needed) and Electron only.
-# Does not start or manage the Flask backend.
+# Development helper for the Electron desktop app.
+#
+# Starts the Flask backend and Vite automatically when they are not already
+# running, then launches Electron. This keeps the development workflow to one
+# command while preserving any services that were already running.
 #
 # Usage (from repository root):
 #   .\scripts\start-electron-dev.ps1
-#
-# Typical workflow:
-#   1. Start backend:  cd server-python; python app.py
-#   2. Run this script.
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$serverDir = Join-Path $repoRoot "server-python"
 $clientDir = Join-Path $repoRoot "client-react"
+$venvDir = Join-Path $serverDir ".venv"
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
 
+function Test-Port([int]$Port) {
+  try {
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    return [bool]$listener
+  } catch {
+    $test = Test-NetConnection -ComputerName "127.0.0.1" -Port $Port -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    return [bool]($test -and $test.TcpTestSucceeded)
+  }
+}
+
+function Wait-Port([int]$Port, [string]$Name) {
+  for ($i = 0; $i -lt 30; $i++) {
+    if (Test-Port $Port) {
+      Write-Host "$Name is ready on port $Port."
+      return
+    }
+    Start-Sleep -Seconds 1
+  }
+  throw "$Name did not become ready on port $Port within 30 seconds."
+}
+
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+  throw "uv is required but was not found in PATH. Install uv and run this script again."
+}
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
   throw "npm is required but was not found in PATH. Install Node.js/npm and run this script again."
 }
-
+if (-not (Test-Path (Join-Path $serverDir "app.py"))) {
+  throw "server-python/app.py not found."
+}
 if (-not (Test-Path (Join-Path $clientDir "package.json"))) {
   throw "client-react/package.json not found."
 }
 
-Set-Location $clientDir
+if (-not (Test-Path $venvPython)) {
+  Write-Host "Creating Python virtual environment..."
+  Push-Location $serverDir
+  try { uv venv .venv } finally { Pop-Location }
+}
 
-if (-not (Test-Path (Join-Path $clientDir "node_modules\electron"))) {
-  Write-Host "Installing frontend dependencies (including electron)..."
-  npm install
-  if ($LASTEXITCODE -ne 0) {
-    throw "npm install failed."
+Write-Host "Installing/updating Python dependencies..."
+Push-Location $serverDir
+try { uv pip install --python $venvPython -r requirements.txt } finally { Pop-Location }
+
+Push-Location $clientDir
+try {
+  if (-not (Test-Path (Join-Path $clientDir "node_modules\electron"))) {
+    Write-Host "Installing frontend dependencies..."
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
+  }
+} finally { Pop-Location }
+
+$backendStarted = $false
+$frontendStarted = $false
+$backendProcess = $null
+$frontendProcess = $null
+
+try {
+  if (-not (Test-Port 9000)) {
+    Write-Host "Starting Flask backend..."
+    $backendCommand = "Set-Location -LiteralPath '$serverDir'; & '$venvPython' app.py"
+    $backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCommand -PassThru
+    $backendStarted = $true
+    Wait-Port 9000 "Flask backend"
+  } else {
+    Write-Host "Flask backend is already running on port 9000."
+  }
+
+  if (-not (Test-Port 3000)) {
+    Write-Host "Starting Vite development server..."
+    $frontendCommand = "Set-Location -LiteralPath '$clientDir'; npm run dev"
+    $frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCommand -PassThru
+    $frontendStarted = $true
+    Wait-Port 3000 "Vite"
+  } else {
+    Write-Host "Vite is already running on port 3000."
+  }
+
+  Write-Host "Launching Electron..."
+  Push-Location $clientDir
+  try { npm run electron } finally { Pop-Location }
+  if ($LASTEXITCODE -ne 0) { throw "Electron exited with code $LASTEXITCODE." }
+}
+finally {
+  if ($frontendStarted -and $frontendProcess) {
+    taskkill /PID $frontendProcess.Id /T /F 2>$null | Out-Null
+  }
+  if ($backendStarted -and $backendProcess) {
+    taskkill /PID $backendProcess.Id /T /F 2>$null | Out-Null
   }
 }
-
-$portInUse = $false
-try {
-  $listener = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
-  if ($listener) { $portInUse = $true }
-} catch {
-  $test = Test-NetConnection -ComputerName "127.0.0.1" -Port 3000 -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-  if ($test -and $test.TcpTestSucceeded) { $portInUse = $true }
-}
-
-if (-not $portInUse) {
-  Write-Host "Starting Vite development server..."
-  Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$clientDir'; npm run dev"
-  Start-Sleep -Seconds 4
-} else {
-  Write-Host "Vite appears to be already running on port 3000."
-}
-
-Write-Host "Launching Electron (backend must already be running)..."
-npm run electron
