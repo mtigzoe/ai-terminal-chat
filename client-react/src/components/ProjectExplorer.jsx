@@ -13,6 +13,14 @@ export default function ProjectExplorer({ host, onFileOpened }) {
   const [error, setError] = useState('');
   const listRef = useRef(null);
 
+  const entryPath = (entry) => {
+    const name = entry?.name || '';
+    if (!name) return currentPath || '.';
+    return currentPath === '.' || !currentPath
+      ? name
+      : `${currentPath.replace(/\\/g, '/').replace(/\/$/, '')}/${name}`;
+  };
+
   const loadDirectory = useCallback(async (path) => {
     setStatus(`Loading ${path}.`);
     setError('');
@@ -42,17 +50,18 @@ export default function ProjectExplorer({ host, onFileOpened }) {
 
   const openEntry = async (entry) => {
     if (!entry) return;
+    const path = entryPath(entry);
     if (entry.type === 'directory' || entry.is_dir) {
-      await loadDirectory(entry.path);
+      await loadDirectory(path);
       return;
     }
-    setStatus(`Opening ${entry.name || entry.path}.`);
+    setStatus(`Opening ${entry.name || path}.`);
     setError('');
     try {
-      const response = await axios.get(`${host}/project/read`, { params: { path: entry.path } });
-      const content = response.data?.content ?? '';
-      onFileOpened?.({ path: response.data?.path || entry.path, content });
-      setStatus(`Opened ${entry.name || entry.path}.`);
+      const response = await axios.get(`${host}/project/read`, { params: { path } });
+      const content = response.data?.contents ?? response.data?.content ?? '';
+      onFileOpened?.({ path: response.data?.path || path, content });
+      setStatus(`Opened ${entry.name || path}.`);
     } catch (err) {
       const message = err?.response?.data?.error || err?.message || 'Unable to read file.';
       setError(message);
@@ -109,7 +118,7 @@ export default function ProjectExplorer({ host, onFileOpened }) {
       >
         {entries.map((entry, index) => {
           const isDirectory = entry.type === 'directory' || entry.is_dir;
-          const label = `${entry.name || entry.path}${isDirectory ? ', directory' : ', file'}`;
+          const label = `${entry.name || entryPath(entry)}${isDirectory ? ', directory' : ', file'}`;
           return (
             <div
               key={entry.path || entry.name || index}
@@ -124,7 +133,7 @@ export default function ProjectExplorer({ host, onFileOpened }) {
               className="project-entry"
             >
               <span aria-hidden="true">{isDirectory ? '[DIR]' : '[FILE]'}</span>{' '}
-              {entry.name || entry.path}
+              {entry.name || entryPath(entry)}
             </div>
           );
         })}
