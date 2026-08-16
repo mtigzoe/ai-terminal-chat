@@ -4,8 +4,8 @@
  * - Development: loads the Vite dev server at http://localhost:3000.
  * - Production: loads client-react/dist/index.html.
  *
- * Set ELECTRON_PRODUCTION=1 when running the production renderer from an
- * unpackaged checkout. Packaged Electron applications always use dist/.
+ * Packaged Electron applications always use dist/. An unpackaged production
+ * run can be requested with the --production flag.
  */
 
 const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
@@ -16,7 +16,7 @@ const fs = require('node:fs');
 let mainWindow = null;
 
 function getRendererEntry() {
-  const production = app.isPackaged || process.env.ELECTRON_PRODUCTION === '1';
+  const production = app.isPackaged || process.argv.includes('--production');
 
   if (!production) {
     return { type: 'url', target: 'http://localhost:3000' };
