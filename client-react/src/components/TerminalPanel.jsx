@@ -84,7 +84,7 @@ export default function TerminalPanel({ host, onSendToChat }) {
       <form onSubmit={runCommand} className="terminal-form">
         <label htmlFor="terminal-command">Command</label>
         <input ref={inputRef} id="terminal-command" type="text" value={command} onChange={(event) => setCommand(event.target.value)} disabled={running} autoComplete="off" spellCheck="false" />
-        <button type="submit" disabled={running || !command.trim()}>{running ? 'Running…' : 'Run command'}</button>
+        <button type="submit" disabled={running || !command.trim()}>{running ? 'Running…' : 'Run'}</button>
       </form>
       <div role="status" aria-live="polite" className="terminal-status">{status}</div>
     </section>
