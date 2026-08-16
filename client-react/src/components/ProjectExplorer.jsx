@@ -211,8 +211,8 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
             </div>
           );
         })}
-        {entries.length === 0 && !error && <p role="status">No entries.</p>}
       </div>
+      {entries.length === 0 && !error && <p className="project-empty" aria-live="polite">No entries.</p>}
       {openedFile && (
         <section className="project-file-preview" aria-labelledby="project-file-preview-heading">
           <h3 id="project-file-preview-heading">File: {openedFile.path}</h3>
