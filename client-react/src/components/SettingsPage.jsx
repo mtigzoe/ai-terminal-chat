@@ -87,7 +87,7 @@ const SettingsPage = ({ host }) => {
         payload.api_key = apiKey.trim();
       }
 
-      const response = await axios.post(`${host}/providers/configure`, payload);
+      const response = await axios.post(`${host}/providers/select`, payload);
       setProvider(response.data.name || provider);
       setModel(response.data.model || model);
       setApiKey('');
@@ -105,7 +105,7 @@ const SettingsPage = ({ host }) => {
   if (loading) {
     return (
       <main className="settings-page" aria-labelledby="settings-heading">
-        <a className="back-link" href="#chat">Back to chat</a>
+        <a className="back-link" href="/">Back to chat</a>
         <h1 id="settings-heading">Settings</h1>
         <p role="status" aria-live="polite">Loading settings…</p>
       </main>
@@ -114,7 +114,7 @@ const SettingsPage = ({ host }) => {
 
   return (
     <main className="settings-page" aria-labelledby="settings-heading">
-      <a className="back-link" href="#chat">Back to chat</a>
+      <a className="back-link" href="/">Back to chat</a>
       <h1 id="settings-heading">Settings</h1>
 
       <form className="settings-form" onSubmit={handleSave}>
