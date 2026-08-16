@@ -139,7 +139,7 @@ describe('non-streaming chat lifecycle', () => {
     render(<App />);
     await sendMessage('hi');
 
-    await screen.findByText(/Error: Network Error/);
+    await screen.findByText(/Error: Cannot reach the backend at http:\/\/localhost:9000/);
     expect(getTextarea()).not.toBeDisabled();
   });
 
