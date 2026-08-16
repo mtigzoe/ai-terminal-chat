@@ -10,4 +10,12 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      input: {
+        chat: 'index.html',
+        settings: 'settings.html',
+      },
+    },
+  },
 });
