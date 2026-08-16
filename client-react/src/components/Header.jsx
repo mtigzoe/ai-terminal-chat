@@ -3,6 +3,9 @@ import React from 'react';
 const Header = ({ toggled, setToggled }) => {
   return (
     <header className="chat-header">
+      <a className="settings-link" href="#settings">
+        Settings
+      </a>
       <h1>Example chat app</h1>
       <div className="stream-response-control">
         <span className="toggle-text" id="stream-response-label">
