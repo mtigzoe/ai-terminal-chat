@@ -141,6 +141,12 @@ function App() {
     if (!is_stream) handleNonStreamingChat(message);
     else handleStreamingChat(message);
   };
+  const handleSelectedFiles = (files) => {
+    if (!Array.isArray(files) || files.length === 0) return;
+    const fileContext = files.map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`).join('\n');
+    const message = `I explicitly selected these project files for you to inspect. Use the supplied contents as context for your next response.\n${fileContext}`;
+    handleClick(message);
+  };
   const handleNonStreamingChat = async (message) => {
     const requestId = generateRequestId();
     requestIdRef.current = requestId;
@@ -231,7 +237,7 @@ function App() {
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
         <aside className="workspace-panels" aria-label="Project and terminal">
-          <ProjectExplorer host={host} />
+          <ProjectExplorer host={host} onUseSelectedFiles={handleSelectedFiles} />
           <TerminalPanel host={host} onSendToChat={handleClick} />
         </aside>
       </div>
