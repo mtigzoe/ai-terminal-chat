@@ -1,85 +1,114 @@
-# Launch the Electron desktop shell for AI Terminal Chat (Stage 1).
+# Launch the Electron desktop development environment for AI Terminal Chat.
 #
-# Prerequisites:
-#   - Flask backend already running (e.g. python app.py in server-python)
-#   - Node.js / npm available on PATH
-#
-# Behaviour:
-#   1. Ensures frontend dependencies are installed (including electron).
-#   2. Starts the Vite development server in a new PowerShell window if
-#      nothing is already listening on port 3000.
-#   3. Launches Electron, which loads http://localhost:3000.
+# Starts the Flask backend and Vite automatically when they are not already
+# listening, then launches Electron. The Electron renderer uses Vite at
+# http://localhost:3000 while the backend serves the API at port 9000.
 #
 # Usage (from repository root):
 #   .\scripts\start-electron.ps1
-#
-# The browser-based workflow (npm run dev alone) is unaffected.
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$serverDir = Join-Path $repoRoot "server-python"
 $clientDir = Join-Path $repoRoot "client-react"
+$venvDir = Join-Path $serverDir ".venv"
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
 
+function Test-Port([int]$Port) {
+  try {
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    return [bool]$listener
+  } catch {
+    $test = Test-NetConnection -ComputerName "127.0.0.1" -Port $Port -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    return [bool]($test -and $test.TcpTestSucceeded)
+  }
+}
+
+function Wait-Port([int]$Port, [string]$Name) {
+  for ($i = 0; $i -lt 30; $i++) {
+    if (Test-Port $Port) {
+      Write-Host "$Name is ready on port $Port."
+      return
+    }
+    Start-Sleep -Seconds 1
+  }
+  throw "$Name did not become ready on port $Port within 30 seconds."
+}
+
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+  throw "uv is required but was not found in PATH. Install uv and run this script again."
+}
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
   throw "npm is required but was not found in PATH. Install Node.js/npm and run this script again."
 }
-
+if (-not (Test-Path (Join-Path $serverDir "app.py"))) {
+  throw "server-python/app.py not found."
+}
 if (-not (Test-Path (Join-Path $clientDir "package.json"))) {
-  throw "client-react/package.json not found. Run this script from a complete checkout of the repository."
+  throw "client-react/package.json not found."
 }
 
-Write-Host "AI Terminal Chat - Electron (Stage 1)"
-Write-Host "Client directory: $clientDir"
+Write-Host "AI Terminal Chat - Electron"
 Write-Host ""
 
-Set-Location $clientDir
-
-# Install dependencies when node_modules is missing or electron is not present.
-$needsInstall = $false
-if (-not (Test-Path (Join-Path $clientDir "node_modules"))) {
-  $needsInstall = $true
-} elseif (-not (Test-Path (Join-Path $clientDir "node_modules\electron"))) {
-  $needsInstall = $true
+if (-not (Test-Path $venvPython)) {
+  Write-Host "Creating Python virtual environment..."
+  Push-Location $serverDir
+  try { uv venv .venv } finally { Pop-Location }
 }
 
-if ($needsInstall) {
-  Write-Host "Installing frontend dependencies (including electron)..."
-  npm install
-  if ($LASTEXITCODE -ne 0) {
-    throw "npm install failed."
-  }
-  Write-Host ""
-}
+Write-Host "Installing/updating Python dependencies..."
+Push-Location $serverDir
+try { uv pip install --python $venvPython -r requirements.txt } finally { Pop-Location }
 
-# Check whether Vite is already serving on port 3000.
-$portInUse = $false
+Push-Location $clientDir
 try {
-  $listener = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
-  if ($listener) {
-    $portInUse = $true
+  if (-not (Test-Path (Join-Path $clientDir "node_modules\electron"))) {
+    Write-Host "Installing frontend dependencies..."
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
   }
-} catch {
-  # Fallback for environments without Get-NetTCPConnection.
-  $test = Test-NetConnection -ComputerName "127.0.0.1" -Port 3000 -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-  if ($test -and $test.TcpTestSucceeded) {
-    $portInUse = $true
+} finally { Pop-Location }
+
+$backendStarted = $false
+$frontendStarted = $false
+$backendProcess = $null
+$frontendProcess = $null
+
+try {
+  if (-not (Test-Port 9000)) {
+    Write-Host "Starting Flask backend..."
+    $backendCommand = "Set-Location -LiteralPath '$serverDir'; & '$venvPython' app.py"
+    $backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCommand -PassThru
+    $backendStarted = $true
+    Wait-Port 9000 "Flask backend"
+  } else {
+    Write-Host "Flask backend is already running on port 9000."
   }
+
+  if (-not (Test-Port 3000)) {
+    Write-Host "Starting Vite development server..."
+    $frontendCommand = "Set-Location -LiteralPath '$clientDir'; npm run dev"
+    $frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCommand -PassThru
+    $frontendStarted = $true
+    Wait-Port 3000 "Vite"
+  } else {
+    Write-Host "Vite is already running on port 3000."
+  }
+
+  Write-Host ""
+  Write-Host "Launching Electron..."
+  Push-Location $clientDir
+  try { npm run electron } finally { Pop-Location }
+  if ($LASTEXITCODE -ne 0) { throw "Electron exited with code $LASTEXITCODE." }
 }
-
-if (-not $portInUse) {
-  Write-Host "Starting Vite development server on port 3000 in a new window..."
-  Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$clientDir'; npm run dev"
-  Write-Host "Waiting a few seconds for Vite to become ready..."
-  Start-Sleep -Seconds 4
-} else {
-  Write-Host "Port 3000 is already in use; assuming Vite is running."
-}
-
-Write-Host "Launching Electron..."
-Write-Host "(Ensure the Flask backend is running at http://127.0.0.1:9000)"
-Write-Host ""
-
-npm run electron
-if ($LASTEXITCODE -ne 0) {
-  throw "Electron exited with code $LASTEXITCODE."
+finally {
+  # Only stop processes started by this script. Existing services are left alone.
+  if ($frontendStarted -and $frontendProcess) {
+    taskkill /PID $frontendProcess.Id /T /F 2>$null | Out-Null
+  }
+  if ($backendStarted -and $backendProcess) {
+    taskkill /PID $backendProcess.Id /T /F 2>$null | Out-Null
+  }
 }
