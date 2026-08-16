@@ -33,9 +33,8 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
         placeholder={waiting ? "Waiting for model's response" : "Enter a message."}
         ref={inputRef}
         value={message}
-        disabled={waiting}
-        aria-disabled={waiting}
         aria-describedby="message-input-help"
+        aria-disabled="false"
         onChange={(event) => setMessage(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
@@ -46,6 +45,8 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
       />
       <p id="message-input-help" className="sr-only">
         Press Enter to send. Press Shift plus Enter to add a new line.
+        While a response is in progress, you can prepare your next message;
+        cancel the current response before sending it.
       </p>
       <button
         type="button"
