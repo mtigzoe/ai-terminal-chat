@@ -5,7 +5,7 @@ import axios from 'axios';
  * Accessible command panel backed by Flask's terminal API.
  * Commands are still subject to the backend command allowlist and timeout.
  */
-export default function TerminalPanel({ host }) {
+export default function TerminalPanel({ host, onSendToChat }) {
   const [command, setCommand] = useState('');
   const [output, setOutput] = useState([]);
   const [running, setRunning] = useState(false);
@@ -41,6 +41,17 @@ export default function TerminalPanel({ host }) {
     }
   };
 
+  const sendResultToChat = (item) => {
+    const outputText = [
+      item.stdout ? `stdout:\n${item.stdout}` : '',
+      item.stderr ? `stderr:\n${item.stderr}` : '',
+      `exit code: ${item.exitCode == null ? 'failed' : item.exitCode}`,
+    ].filter(Boolean).join('\n\n');
+    const message = `Terminal command: ${item.command}\n\n${outputText}`;
+    onSendToChat?.(message);
+    setStatus(`Sent the result of ${item.command} to chat.`);
+  };
+
   return (
     <section className="terminal-panel" aria-labelledby="terminal-panel-heading">
       <h2 id="terminal-panel-heading">Terminal</h2>
@@ -60,6 +71,11 @@ export default function TerminalPanel({ host }) {
               {item.stdout && <pre>{item.stdout}</pre>}
               {item.stderr && <pre role="alert">{item.stderr}</pre>}
               <p>Exit code: {item.exitCode == null ? 'failed' : item.exitCode}</p>
+              {onSendToChat && (
+                <button type="button" onClick={() => sendResultToChat(item)}>
+                  Send result to chat
+                </button>
+              )}
             </article>
           ))
         )}
