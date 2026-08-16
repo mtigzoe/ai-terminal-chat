@@ -75,7 +75,7 @@ def _provider_status(target=None, probe: bool = True) -> dict:
     """
 
     target = target or provider
-    config = getattr(target, "config", None)
+    config = getattr(target, "provider_config", None)
     status = {
         "name": getattr(target, "name", None),
         "model": getattr(target, "model", None),
