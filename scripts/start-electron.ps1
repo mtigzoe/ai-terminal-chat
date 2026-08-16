@@ -4,6 +4,9 @@
 # listening, then launches Electron. The Electron renderer uses Vite at
 # http://localhost:3000 while the backend serves the API at port 9000.
 #
+# Python setup uses uv only. If uv is not available in PATH, the script stops
+# instead of silently falling back to pip.
+#
 # Usage (from repository root):
 #   .\scripts\start-electron.ps1
 
@@ -14,6 +17,7 @@ $serverDir = Join-Path $repoRoot "server-python"
 $clientDir = Join-Path $repoRoot "client-react"
 $venvDir = Join-Path $serverDir ".venv"
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
+$activateScript = Join-Path $venvDir "Scripts\Activate.ps1"
 
 function Test-Port([int]$Port) {
   try {
@@ -37,7 +41,7 @@ function Wait-Port([int]$Port, [string]$Name) {
 }
 
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-  throw "uv is required but was not found in PATH. Install uv and run this script again."
+  throw "uv is required but was not found in PATH. Install uv and run this script again. No pip fallback is used."
 }
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
   throw "npm is required but was not found in PATH. Install Node.js/npm and run this script again."
@@ -53,12 +57,12 @@ Write-Host "AI Terminal Chat - Electron"
 Write-Host ""
 
 if (-not (Test-Path $venvPython)) {
-  Write-Host "Creating Python virtual environment..."
+  Write-Host "Creating Python virtual environment with uv..."
   Push-Location $serverDir
   try { uv venv .venv } finally { Pop-Location }
 }
 
-Write-Host "Installing/updating Python dependencies..."
+Write-Host "Installing/updating Python dependencies with uv..."
 Push-Location $serverDir
 try { uv pip install --python $venvPython -r requirements.txt } finally { Pop-Location }
 
@@ -78,8 +82,8 @@ $frontendProcess = $null
 
 try {
   if (-not (Test-Port 9000)) {
-    Write-Host "Starting Flask backend..."
-    $backendCommand = "Set-Location -LiteralPath '$serverDir'; & '$venvPython' app.py"
+    Write-Host "Starting Flask backend with uv..."
+    $backendCommand = "Set-Location -LiteralPath '$serverDir'; & '$activateScript'; uv run app.py"
     $backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCommand -PassThru
     $backendStarted = $true
     Wait-Port 9000 "Flask backend"
