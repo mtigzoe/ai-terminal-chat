@@ -95,35 +95,35 @@ function App() {
     abortControllerRef.current?.abort();
   };
 
-  const handleClick = () => {
-    if (validationCheck(inputRef.current.value)) {
-      console.log("Empty or invalid entry");
-    } else if (!is_stream) {
-      handleNonStreamingChat();
+  const handleClick = (message) => {
+    if (validationCheck(message)) {
+      return;
+    }
+
+    if (!is_stream) {
+      handleNonStreamingChat(message);
     } else {
-      handleStreamingChat();
+      handleStreamingChat(message);
     }
   };
 
-  const handleNonStreamingChat = async () => {
+  const handleNonStreamingChat = async (message) => {
     const requestId = generateRequestId();
     requestIdRef.current = requestId;
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     const chatData = {
-      chat: inputRef.current.value,
+      chat: message,
       history: data,
       request_id: requestId,
     };
 
     const ndata = [...data,
-      { role: "user", parts: [{ text: inputRef.current.value }] }];
+      { role: "user", parts: [{ text: message }] }];
 
     flushSync(() => {
       setData(ndata);
-      inputRef.current.value = "";
-      inputRef.current.placeholder = "Waiting for model's response";
       setWaiting(true);
       setAgentStatus({
         phase: 'plan',
@@ -204,7 +204,6 @@ function App() {
 
         flushSync(() => {
           setData(updatedData);
-          inputRef.current.placeholder = "Enter a message.";
           setWaiting(false);
         });
         executeScroll();
@@ -214,19 +213,17 @@ function App() {
     fetchData();
   };
 
-  const handleStreamingChat = async () => {
+  const handleStreamingChat = async (message) => {
     const chatData = {
-      chat: inputRef.current.value,
+      chat: message,
       history: data
     };
 
     const ndata = [...data,
-      { role: "user", parts: [{ text: inputRef.current.value }] }];
+      { role: "user", parts: [{ text: message }] }];
 
     flushSync(() => {
       setData(ndata);
-      inputRef.current.value = "";
-      inputRef.current.placeholder = "Waiting for model's response";
       setWaiting(true);
       setAgentStatus({
         phase: 'plan',
@@ -413,13 +410,13 @@ function App() {
             assertive: false,
           });
         } else {
-          const message = err?.message || "Streaming request failed.";
+          const errorMessage = err?.message || "Streaming request failed.";
           modelResponse = modelResponse
-            ? `${modelResponse}\n[Error: ${message}]`
-            : `Error: ${message}`;
+            ? `${modelResponse}\n[Error: ${errorMessage}]`
+            : `Error: ${errorMessage}`;
           setAgentStatus({
             phase: 'error',
-            message,
+            message: errorMessage,
             assertive: true,
           });
         }
@@ -440,7 +437,6 @@ function App() {
 
         flushSync(() => {
           setData(updatedData);
-          inputRef.current.placeholder = "Enter a message.";
           setWaiting(false);
         });
         showStreamdiv(false);
