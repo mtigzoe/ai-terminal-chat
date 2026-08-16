@@ -40,7 +40,7 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   }, [loadDirectory]);
 
   useEffect(() => {
-    const option = listRef.current?.querySelector('[aria-selected="true"]');
+    const option = listRef.current?.querySelector('[data-project-entry="active"]');
     option?.focus();
   }, [entries, selectedIndex]);
 
@@ -129,6 +129,8 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   };
 
   const handleKeyDown = async (event, index) => {
+    if (event.target !== event.currentTarget) return;
+
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setSelectedIndex(Math.min(index + 1, entries.length - 1));
@@ -168,10 +170,9 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       <p id="project-selection-help">Check files to supply their contents to the agent. Opening a file only previews it.</p>
       <div
         ref={listRef}
-        role="listbox"
+        role="list"
         aria-label="Project files and directories"
         aria-describedby="project-selection-help"
-        aria-activedescendant={entries[selectedIndex] ? `project-entry-${selectedIndex}` : undefined}
         className="project-list"
       >
         {entries.map((entry, index) => {
@@ -182,11 +183,10 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
           return (
             <div
               key={entry.path || entry.name || index}
-              id={`project-entry-${index}`}
-              role="option"
+              role="listitem"
               tabIndex={index === selectedIndex ? 0 : -1}
-              aria-selected={index === selectedIndex}
               aria-label={label}
+              data-project-entry={index === selectedIndex ? 'active' : undefined}
               onKeyDown={(event) => handleKeyDown(event, index)}
               onFocus={() => setSelectedIndex(index)}
               className="project-entry"
