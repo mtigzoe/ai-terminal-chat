@@ -6,7 +6,7 @@ const Header = ({ toggled, setToggled }) => {
       <a className="settings-link" href="/settings.html">
         Settings
       </a>
-      <h1>Example chat app</h1>
+      <h1>Chat</h1>
       <div className="stream-response-control">
         <span className="toggle-text" id="stream-response-label">
           Stream response

@@ -30,7 +30,7 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
   return (
     <div className="message-input">
       <label htmlFor="chat-message-input" className="sr-only">
-        Chat message
+        message
       </label>
       <input
         id="chat-message-input"
