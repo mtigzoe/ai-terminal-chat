@@ -1,17 +1,3 @@
-# Copyright 2024 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Filesystem access control, shared by every tool regardless of which
 AI provider requested it.
 
@@ -25,19 +11,60 @@ import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
-class MutableProjectRoot:
-    """Path-like holder whose value can change without stale imports.
+_CONFIG_DIR = Path.home() / ".ai-terminal-chat"
+_CONFIG_FILE = _CONFIG_DIR / "config.json"
+CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__"
 
-    tools.py imports PROJECT_ROOT directly, so mutating this object lets the
-    selected project root take effect everywhere without requiring every
-    consumer to be rewritten to import the security module itself.
+
+def _default_project_root() -> Path:
+    return Path.cwd().resolve()
+
+
+def _load_project_root() -> Path:
+    """Load a saved project root, falling back safely to the cwd."""
+
+    configured = os.environ.get("AI_TERMINAL_PROJECT_ROOT", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+
+    try:
+        data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+        configured = str(data.get("project_root", "")).strip()
+        if configured:
+            candidate = Path(configured).expanduser().resolve()
+            if candidate.exists() and candidate.is_dir():
+                return candidate
+    except (OSError, ValueError, TypeError):
+        pass
+
+    return _default_project_root()
+
+
+class _ProjectRootProxy:
+    """Mutable Path-like object shared by all imported tool modules.
+
+    Existing modules import ``PROJECT_ROOT`` directly. Keeping one stable
+    object means changing the configured root updates those imports without
+    requiring every module to be reloaded.
     """
 
-    def __init__(self, value: Path):
-        self._path = Path(value).resolve()
+    def __init__(self, path: Path):
+        self._path = Path(path).resolve()
 
-    def set(self, value: Path):
-        self._path = Path(value).resolve()
+    def set(self, path: Path) -> None:
+        self._path = Path(path).resolve()
+
+    def resolve(self) -> Path:
+        return self._path.resolve()
+
+    def relative_to(self, other):
+        other_path = other.resolve() if hasattr(other, "resolve") else Path(other).resolve()
+        return self._path.relative_to(other_path)
+
+    def __truediv__(self, other):
+        return self._path / other
 
     def __fspath__(self):
         return os.fspath(self._path)
@@ -45,8 +72,8 @@ class MutableProjectRoot:
     def __str__(self):
         return str(self._path)
 
-    def __truediv__(self, other):
-        return self._path / other
+    def __repr__(self):
+        return repr(self._path)
 
     def __getattr__(self, name):
         return getattr(self._path, name)
@@ -58,46 +85,21 @@ class MutableProjectRoot:
         return hash(self._path)
 
 
-_CONFIG_DIR = Path.home() / ".ai-terminal-chat"
-_CONFIG_FILE = _CONFIG_DIR / "config.json"
-CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__"
-
-
-def _load_saved_root() -> Path:
-    """Load a saved project root, falling back safely to the cwd."""
-
-    configured = os.environ.get("AI_TERMINAL_PROJECT_ROOT", "").strip()
-    if configured:
-        candidate = Path(configured).expanduser().resolve()
-        if candidate.is_dir():
-            return candidate
-
-    try:
-        data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
-        configured = str(data.get("project_root", "")).strip()
-        if configured:
-            candidate = Path(configured).expanduser().resolve()
-            if candidate.is_dir():
-                return candidate
-    except (OSError, ValueError, TypeError):
-        pass
-
-    return Path.cwd().resolve()
-
-
-PROJECT_ROOT = MutableProjectRoot(_load_saved_root())
+PROJECT_ROOT = _ProjectRootProxy(_load_project_root())
 
 
 def get_project_root() -> Path:
-    """Return the currently selected project root."""
+    """Return the currently configured absolute project root."""
 
-    return Path(os.fspath(PROJECT_ROOT)).resolve()
+    return PROJECT_ROOT.resolve()
 
 
 def _persist_project_root(root: Path) -> None:
     """Persist the selected project root atomically outside the project."""
 
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"project_root": str(root)}
+
     fd, temp_name = tempfile.mkstemp(
         prefix="config-",
         suffix=".tmp",
@@ -106,14 +108,15 @@ def _persist_project_root(root: Path) -> None:
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"project_root": str(root)}, handle, indent=2)
+            json.dump(payload, handle, indent=2)
             handle.write("\n")
-        Path(temp_name).replace(_CONFIG_FILE)
-    finally:
+        os.replace(temp_name, _CONFIG_FILE)
+    except Exception:
         try:
-            Path(temp_name).unlink()
-        except FileNotFoundError:
+            os.unlink(temp_name)
+        except OSError:
             pass
+        raise
 
 
 def _choose_project_root() -> Path:
@@ -148,8 +151,9 @@ def set_project_root(path: str) -> Path:
     """Validate, persist, and activate a new project root.
 
     Passing CHOOSE_PROJECT_ROOT opens the native operating-system folder
-    picker. The selected path is returned but is not persisted until this
-    function completes its normal validation/persistence flow.
+    picker. The selected path must exist and be a directory. The
+    configuration file is stored under the user's home directory, outside
+    the project, so the AI's filesystem tools cannot expose it.
     """
 
     if str(path).strip() == CHOOSE_PROJECT_ROOT:
@@ -160,21 +164,24 @@ def set_project_root(path: str) -> Path:
         candidate = Path(str(path).strip()).expanduser().resolve()
 
     if not candidate.exists():
-        raise ValueError("Project path does not exist.")
+        raise ValueError(f"Project path does not exist: {candidate}")
     if not candidate.is_dir():
-        raise ValueError("Project path must be a directory.")
+        raise ValueError(f"Project path is not a directory: {candidate}")
 
-    PROJECT_ROOT.set(candidate)
     _persist_project_root(candidate)
+    PROJECT_ROOT.set(candidate)
     return candidate
 
 
 def safe_path(path: str) -> Path:
-    """Resolve a path while keeping it inside the application directory.
+    """Resolve a path while keeping it inside the configured project.
 
     Rejects absolute paths (POSIX or Windows-style, e.g. "/etc/passwd" or
     "C:\\Users\\...") and any traversal (e.g. "../../") that would escape
-    PROJECT_ROOT.
+    PROJECT_ROOT. Joining an absolute path onto PROJECT_ROOT would normally
+    just replace it outright in pathlib, so we check for that explicitly
+    before ever resolving the path, in addition to the containment check
+    below which catches "../" traversal.
     """
 
     if not path or not str(path).strip():
@@ -192,9 +199,7 @@ def safe_path(path: str) -> Path:
     try:
         requested.relative_to(root)
     except ValueError:
-        raise ValueError(
-            "Access outside the project directory is not allowed."
-        )
+        raise ValueError("Access outside the project directory is not allowed.")
 
     return requested
 

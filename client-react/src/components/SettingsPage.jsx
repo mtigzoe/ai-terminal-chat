@@ -113,6 +113,7 @@ const SettingsPage = ({ host }) => {
       const payload = {
         provider,
         model: model || undefined,
+        project_path: projectRoot.trim(),
       };
       if (apiKey.trim()) {
         payload.api_key = apiKey.trim();
@@ -164,6 +165,7 @@ const SettingsPage = ({ host }) => {
             value={projectRoot}
             onChange={(event) => setProjectRoot(event.target.value)}
             disabled={saving || choosingFolder}
+            placeholder="C:\\Projects\\my-project"
             autoComplete="off"
             spellCheck="false"
             aria-describedby="settings-project-root-help"
