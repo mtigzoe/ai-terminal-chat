@@ -204,6 +204,10 @@ const SettingsPage = ({ host }) => {
               <td>Enter</td>
               <td>Send message</td>
             </tr>
+            <tr>
+              <td>Shift + Enter</td>
+              <td>Insert a new line in the message</td>
+            </tr>
           </tbody>
         </table>
       </section>

@@ -19,7 +19,7 @@ import React, { useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPaperPlane } from '@fortawesome/free-solid-svg-icons';
 
-/** Submission using the Enter key or button. */
+/** Submission using Enter or the Send button. Shift+Enter inserts a new line. */
 const MessageInput = ({ inputRef, waiting, handleClick }) => {
   useEffect(() => {
     if (!waiting) {
@@ -32,19 +32,26 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
       <label htmlFor="chat-message-input" className="sr-only">
         message
       </label>
-      <input
+      <textarea
         id="chat-message-input"
         className="chat_msg_input"
-        type="text"
         name="chat"
+        rows={3}
         placeholder="Enter a message."
         ref={inputRef}
         disabled={waiting}
         aria-disabled={waiting}
+        aria-describedby="message-input-help"
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !waiting) handleClick();
+          if (e.key === "Enter" && !e.shiftKey && !waiting) {
+            e.preventDefault();
+            handleClick();
+          }
         }}
       />
+      <p id="message-input-help" className="sr-only">
+        Press Enter to send. Press Shift plus Enter to add a new line.
+      </p>
       <button
         type="button"
         className="chat_msg_btn"
