@@ -75,13 +75,6 @@ function App() {
     return fallback;
   }
 
-  /**
-   * Best-effort backend cancellation. Aborting the fetch/axios request
-   * only stops this browser tab from reading the response — the Flask
-   * process keeps running the agent loop unless it's told to stop.
-   * This tells run_agent_loop (via cancellation.py) to check its
-   * cancel_event and stop between rounds/tool calls instead.
-   */
   const cancelBackendRequest = () => {
     const requestId = requestIdRef.current;
     if (!requestId) return;
@@ -93,18 +86,17 @@ function App() {
   const stopCurrentRequest = () => {
     cancelBackendRequest();
     abortControllerRef.current?.abort();
+    setAgentStatus({
+      phase: 'cancelled',
+      message: 'Cancelling response.',
+      assertive: false,
+    });
   };
 
   const handleClick = (message) => {
-    if (validationCheck(message)) {
-      return;
-    }
-
-    if (!is_stream) {
-      handleNonStreamingChat(message);
-    } else {
-      handleStreamingChat(message);
-    }
+    if (validationCheck(message)) return;
+    if (!is_stream) handleNonStreamingChat(message);
+    else handleStreamingChat(message);
   };
 
   const handleNonStreamingChat = async (message) => {
@@ -112,32 +104,18 @@ function App() {
     requestIdRef.current = requestId;
     const controller = new AbortController();
     abortControllerRef.current = controller;
-
-    const chatData = {
-      chat: message,
-      history: data,
-      request_id: requestId,
-    };
-
-    const ndata = [...data,
-      { role: "user", parts: [{ text: message }] }];
+    const chatData = { chat: message, history: data, request_id: requestId };
+    const ndata = [...data, { role: "user", parts: [{ text: message }] }];
 
     flushSync(() => {
       setData(ndata);
       setWaiting(true);
-      setAgentStatus({
-        phase: 'plan',
-        message: 'Planning next step',
-        assertive: false,
-      });
+      setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false });
     });
-
     executeScroll();
 
     const headerConfig = {
-      headers: {
-        'Content-Type': 'application/json;charset=UTF-8',
-      },
+      headers: { 'Content-Type': 'application/json;charset=UTF-8' },
       signal: controller.signal,
     };
 
@@ -145,100 +123,50 @@ function App() {
       let modelResponse = "";
       let toolActivity = [];
       let cancelled = false;
-
       try {
         const response = await axios.post(url, chatData, headerConfig);
         modelResponse = response.data.text || "";
         toolActivity = response.data.tool_activity || [];
         cancelled = Boolean(response.data.cancelled);
-
         if (cancelled) {
-          if (!modelResponse.trim()) {
-            modelResponse = "[Response stopped by user.]";
-          }
-          setAgentStatus({
-            phase: 'complete',
-            message: 'Stopped by user',
-            assertive: false,
-          });
+          if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]";
+          setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false });
         } else {
           const status = statusFromToolActivity(toolActivity);
-          if (status) {
-            setAgentStatus(status);
-          } else if (modelResponse) {
-            setAgentStatus({
-              phase: 'complete',
-              message: 'Task completed',
-              assertive: false,
-            });
-          }
+          if (status) setAgentStatus(status);
+          else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false });
         }
       } catch (error) {
         if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") {
           cancelled = true;
           modelResponse = "[Response stopped by user.]";
-          setAgentStatus({
-            phase: 'complete',
-            message: 'Stopped by user',
-            assertive: false,
-          });
+          setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false });
         } else {
           modelResponse = `Error: ${getErrorMessage(error)}`;
-          setAgentStatus({
-            phase: 'error',
-            message: getErrorMessage(error),
-            assertive: true,
-          });
+          setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true });
         }
       } finally {
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-        }
+        if (abortControllerRef.current === controller) abortControllerRef.current = null;
         requestIdRef.current = null;
-
-        const updatedData = [...ndata, {
-          role: "model",
-          parts: [{ text: modelResponse }],
-          toolActivity
-        }];
-
-        flushSync(() => {
-          setData(updatedData);
-          setWaiting(false);
-        });
+        const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }];
+        flushSync(() => { setData(updatedData); setWaiting(false); });
         executeScroll();
       }
     };
-
     fetchData();
   };
 
   const handleStreamingChat = async (message) => {
-    const chatData = {
-      chat: message,
-      history: data
-    };
-
-    const ndata = [...data,
-      { role: "user", parts: [{ text: message }] }];
-
+    const chatData = { chat: message, history: data };
+    const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => {
       setData(ndata);
       setWaiting(true);
-      setAgentStatus({
-        phase: 'plan',
-        message: 'Planning next step',
-        assertive: false,
-      });
+      setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false });
     });
-
     executeScroll();
 
-    const headerConfig = {
-      Accept: "application/x-ndjson, text/plain",
-      "Content-Type": "application/json",
-    };
-
+    const headerConfig = { Accept: "application/x-ndjson, text/plain", "Content-Type": "application/json" };
     const fetchStreamData = async () => {
       let modelResponse = "";
       let toolActivity = [];
@@ -251,19 +179,13 @@ function App() {
 
       const handleEvent = (event) => {
         if (!event || typeof event !== "object") return;
-
         if (event.type === "progress") {
           const status = statusFromProgressEvent(event);
           if (status) setAgentStatus(status);
-          toolActivity.push({
-            type: "progress",
-            phase: event.phase,
-            message: event.message,
-          });
+          toolActivity.push({ type: "progress", phase: event.phase, message: event.message });
           setStreamToolActivity([...toolActivity]);
           return;
         }
-
         if (event.type === "pending_confirmation") {
           const status = statusFromPendingConfirmation(event);
           if (status) setAgentStatus(status);
@@ -271,28 +193,15 @@ function App() {
           setStreamToolActivity([...toolActivity]);
           return;
         }
-
         if (event.type === "text" || event.type === "final") {
           const text = event.text || "";
           modelResponse += text;
           setAnswer((currentAnswer) => currentAnswer + text);
-          if (event.type === "final") {
-            setAgentStatus({
-              phase: 'complete',
-              message: 'Task completed',
-              assertive: false,
-            });
-          }
+          if (event.type === "final") setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false });
         } else if (event.type === "tool_call" || event.type === "tool_result") {
-          const activity = {
-            type: event.type,
-            name: event.name,
-          };
-          if (event.type === "tool_call") {
-            activity.args = event.args || {};
-          } else {
-            activity.result = event.result || {};
-          }
+          const activity = { type: event.type, name: event.name };
+          if (event.type === "tool_call") activity.args = event.args || {};
+          else activity.result = event.result || {};
           toolActivity.push(activity);
           setStreamToolActivity([...toolActivity]);
         } else if (event.type === "error") {
@@ -303,36 +212,21 @@ function App() {
           setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`);
         } else if (event.type === "cancelled") {
           cancelled = true;
-          setAgentStatus({
-            phase: 'cancelled',
-            message: 'Cancelled by user request.',
-            assertive: false,
-          });
+          setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false });
         }
       };
 
-      /**
-       * Handle a plain-text stream line from the current backend.
-       * Agent status lines update the live region; chat text goes to the answer.
-       */
       const handlePlainLine = (line) => {
         if (isAgentStatusStreamLine(line)) {
           const status = statusFromStreamLine(line);
           if (status) {
             setAgentStatus(status);
-            if (status.phase === 'cancelled') {
-              cancelled = true;
-            }
-            toolActivity.push({
-              type: 'progress',
-              phase: status.phase,
-              message: status.message,
-            });
+            if (status.phase === 'cancelled') cancelled = true;
+            toolActivity.push({ type: 'progress', phase: status.phase, message: status.message });
             setStreamToolActivity([...toolActivity]);
           }
           return;
         }
-
         modelResponse += line;
         setAnswer((currentAnswer) => currentAnswer + line);
       };
@@ -341,110 +235,53 @@ function App() {
         setAnswer("");
         setStreamToolActivity([]);
         showStreamdiv(true);
-
-        const response = await fetch(streamUrl, {
-          method: "POST",
-          headers: headerConfig,
-          body: JSON.stringify(chatData),
-          signal: controller.signal,
-        });
-
+        const response = await fetch(streamUrl, { method: "POST", headers: headerConfig, body: JSON.stringify(chatData), signal: controller.signal });
         if (!response.ok || !response.body) {
           let message = response.statusText || `HTTP ${response.status}`;
-          try {
-            const errorData = await response.json();
-            message = errorData.error || message;
-          } catch {
-            // The server may have returned plain text instead of JSON.
-          }
+          try { const errorData = await response.json(); message = errorData.error || message; } catch { /* plain text response */ }
           throw new Error(message);
         }
-
         const reader = response.body.getReader();
         const txtdecoder = new TextDecoder();
         let buffer = "";
-
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-
           buffer += txtdecoder.decode(value, { stream: true });
           const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() || "";
-
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
-
-            // Prefer structured NDJSON when present; otherwise plain text.
-            try {
-              handleEvent(JSON.parse(trimmed));
-            } catch {
-              handlePlainLine(line);
-            }
+            try { handleEvent(JSON.parse(trimmed)); } catch { handlePlainLine(line); }
           }
-
           executeScroll();
         }
-
         buffer += txtdecoder.decode();
         if (buffer.trim()) {
-          try {
-            handleEvent(JSON.parse(buffer.trim()));
-          } catch {
-            handlePlainLine(buffer);
-          }
+          try { handleEvent(JSON.parse(buffer.trim())); } catch { handlePlainLine(buffer); }
         }
-
       } catch (err) {
         if (err?.name === "AbortError") {
           cancelled = true;
-          if (!modelResponse.trim()) {
-            modelResponse = "[Streaming stopped by user.]";
-          } else {
-            modelResponse += "\n[Streaming stopped by user.]";
-          }
-          setAgentStatus({
-            phase: 'complete',
-            message: 'Streaming stopped by user',
-            assertive: false,
-          });
+          modelResponse += modelResponse.trim() ? "\n[Streaming stopped by user.]" : "[Streaming stopped by user.]";
+          setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false });
         } else {
           const errorMessage = err?.message || "Streaming request failed.";
-          modelResponse = modelResponse
-            ? `${modelResponse}\n[Error: ${errorMessage}]`
-            : `Error: ${errorMessage}`;
-          setAgentStatus({
-            phase: 'error',
-            message: errorMessage,
-            assertive: true,
-          });
+          modelResponse = modelResponse ? `${modelResponse}\n[Error: ${errorMessage}]` : `Error: ${errorMessage}`;
+          setAgentStatus({ phase: 'error', message: errorMessage, assertive: true });
         }
       } finally {
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-        }
-        if (requestIdRef.current === requestId) {
-          requestIdRef.current = null;
-        }
-
+        if (abortControllerRef.current === controller) abortControllerRef.current = null;
+        if (requestIdRef.current === requestId) requestIdRef.current = null;
         setAnswer("");
-        const updatedData = [...ndata, {
-          role: "model",
-          parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }],
-          toolActivity
-        }];
-
-        flushSync(() => {
-          setData(updatedData);
-          setWaiting(false);
-        });
+        const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }];
+        flushSync(() => { setData(updatedData); setWaiting(false); });
         showStreamdiv(false);
         setStreamToolActivity([]);
         executeScroll();
       }
     };
-
     fetchStreamData();
   };
 
@@ -453,22 +290,9 @@ function App() {
       <div className="chat-app">
         <Header toggled={toggled} setToggled={setToggled} />
         <ProviderSelector host={host} waiting={waiting} />
-        <ConversationDisplayArea
-          data={data}
-          streamdiv={streamdiv}
-          answer={answer}
-          streamToolActivity={streamToolActivity}
-          agentStatus={agentStatus}
-          waiting={waiting}
-        />
+        <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
         {waiting && (
-          <button
-            type="button"
-            onClick={stopCurrentRequest}
-            aria-label="Cancel response"
-          >
-            Cancel response
-          </button>
+          <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>
         )}
         <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
       </div>
