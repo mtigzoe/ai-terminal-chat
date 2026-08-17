@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import App from './App';
 import { AgentStatusRegion } from './components/ConversationDisplayArea.jsx';
@@ -40,27 +40,33 @@ test('opens an accessible clear-conversation confirmation dialog', () => {
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
 
-test('announces response lifecycle states through one accessible status region', () => {
+test('announces response lifecycle states through one accessible status region', async () => {
   const { rerender } = render(
     <AgentStatusRegion status={{ phase: 'plan', message: 'Planning next step', assertive: false }} />
   );
 
   const status = screen.getByRole('status');
   expect(status).toHaveAttribute('aria-live', 'polite');
-  expect(status).toHaveTextContent('Planning next step');
+  await waitFor(() => {
+    expect(status).toHaveTextContent('Planning next step');
+  });
 
   rerender(
     <AgentStatusRegion status={{ phase: 'complete', message: 'Response complete.', assertive: false }} />
   );
-  expect(screen.getByRole('status')).toHaveTextContent('Response complete.');
+  await waitFor(() => {
+    expect(screen.getByRole('status')).toHaveTextContent('Response complete.');
+  });
 
   rerender(
     <AgentStatusRegion status={{ phase: 'cancelled', message: 'Response cancelled.', assertive: false }} />
   );
-  expect(screen.getByRole('status')).toHaveTextContent('Response cancelled.');
+  await waitFor(() => {
+    expect(screen.getByRole('status')).toHaveTextContent('Response cancelled.');
+  });
 });
 
-test('uses assertive announcements only for error states', () => {
+test('uses assertive announcements only for error states', async () => {
   const { rerender } = render(
     <AgentStatusRegion status={{ phase: 'plan', message: 'Planning next step', assertive: false }} />
   );
@@ -70,5 +76,7 @@ test('uses assertive announcements only for error states', () => {
     <AgentStatusRegion status={{ phase: 'error', message: 'Request failed.', assertive: true }} />
   );
   expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'assertive');
-  expect(screen.getByRole('status')).toHaveTextContent('Request failed.');
+  await waitFor(() => {
+    expect(screen.getByRole('status')).toHaveTextContent('Request failed.');
+  });
 });
