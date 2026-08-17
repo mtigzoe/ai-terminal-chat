@@ -1,3 +1,11 @@
+# AI Terminal Chat
+
+## Table of Contents
+
+- [Project Status](#project-status)
+  - [Completed](#completed)
+  - [Future Work](#future-work)
+
 ## Project Status
 
 ### Completed
