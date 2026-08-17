@@ -378,3 +378,98 @@ def test_run_command_allowlist_has_no_mutating_git_commands():
     mutating = ("git add", "git commit", "git push", "git checkout", "git reset", "git rm")
     for prefix in tools.ALLOWED_COMMAND_PREFIXES:
         assert not any(prefix.startswith(m) for m in mutating), prefix
+
+
+def test_wsl_is_allowed_by_default():
+    assert tools.is_command_allowed("wsl ls")
+    assert tools.is_command_allowed("wsl pwd")
+    assert tools.is_command_allowed("wsl git status")
+
+
+def test_existing_allowed_commands_still_work():
+    for command in (
+        "git status",
+        "git branch",
+        "ls",
+        "pwd",
+        "pytest",
+        "python --version",
+        "npm run build",
+        "flake8",
+        "black --check",
+        "ruff check",
+        "uv --version",
+        "uv run pytest",
+    ):
+        assert tools.is_command_allowed(command), command
+
+
+def test_disallowed_command_is_still_rejected():
+    assert not tools.is_command_allowed("whoami")
+    result = tools.run_command("whoami")
+    assert "error" in result
+    assert "not allowed" in result["error"].lower() or "Command not allowed" in result["error"]
+
+
+def test_add_and_remove_allowed_command_persists(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_file = config_dir / "config.json"
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+
+    # Start from defaults in this isolated config.
+    tools.ALLOWED_COMMAND_PREFIXES[:] = list(tools.DEFAULT_ALLOWED_COMMAND_PREFIXES)
+    tools._persist_allowed_commands(tools.ALLOWED_COMMAND_PREFIXES)
+
+    assert not tools.is_command_allowed("echo hello")
+    added = tools.add_allowed_command("echo")
+    assert "echo" in added
+    assert tools.is_command_allowed("echo hello")
+
+    # Simulate restart: clear list and reload from config.
+    tools.ALLOWED_COMMAND_PREFIXES.clear()
+    tools.reload_allowed_commands()
+    assert "echo" in tools.ALLOWED_COMMAND_PREFIXES
+    assert tools.is_command_allowed("echo hello")
+
+    removed = tools.remove_allowed_command("echo")
+    assert "echo" not in removed
+    assert not tools.is_command_allowed("echo hello")
+
+    tools.ALLOWED_COMMAND_PREFIXES.clear()
+    tools.reload_allowed_commands()
+    assert "echo" not in tools.ALLOWED_COMMAND_PREFIXES
+
+
+def test_dangerous_commands_cannot_be_added_via_api(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_file = config_dir / "config.json"
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+
+    tools.ALLOWED_COMMAND_PREFIXES[:] = list(tools.DEFAULT_ALLOWED_COMMAND_PREFIXES)
+
+    for bad in ("rm", "sudo", "git push", "git reset", "shutdown", "rm -rf"):
+        with pytest.raises(ValueError):
+            tools.add_allowed_command(bad)
+        assert not tools.is_command_allowed(bad)
+        assert not tools.is_command_allowed(f"{bad} anything")
+
+
+def test_chaining_still_blocked_after_allowlist_changes(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_file = config_dir / "config.json"
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+
+    tools.ALLOWED_COMMAND_PREFIXES[:] = list(tools.DEFAULT_ALLOWED_COMMAND_PREFIXES)
+    tools.add_allowed_command("echo")
+
+    for command in (
+        "echo hello && whoami",
+        "echo hello | cat",
+        "echo hello > /tmp/out",
+        "echo `whoami`",
+    ):
+        result = tools.run_command(command)
+        assert "error" in result

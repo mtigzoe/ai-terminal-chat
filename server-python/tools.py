@@ -236,7 +236,12 @@ def search_files(query: str, path: str = ".") -> dict:
 # nothing here can commit, push, rewrite history, or delete anything —
 # writes to files go through create_file/write_file, and deletion goes
 # through delete_file, both of which have their own guardrails.
-ALLOWED_COMMAND_PREFIXES = (
+#
+# This is the single authoritative allowlist used by run_command() and
+# is_command_allowed(). The Settings UI and /allowed-commands API read
+# and mutate this same list; user changes are persisted in the existing
+# ~/.ai-terminal-chat/config.json configuration file.
+DEFAULT_ALLOWED_COMMAND_PREFIXES = (
     "git status",
     "git branch",
     "git log",
@@ -246,6 +251,7 @@ ALLOWED_COMMAND_PREFIXES = (
     "pwd",
     "dir",
     "ls",
+    "wsl",
     "python --version",
     "python3 --version",
     "node --version",
@@ -267,7 +273,14 @@ ALLOWED_COMMAND_PREFIXES = (
     "flake8",
     "black --check",
     "ruff check",
+    "uv --version",
+    "uv run",
 )
+
+# Runtime allowlist. Starts as the defaults and is updated from the
+# persisted configuration (and via the Settings UI / API). Always keep
+# this as a list so mutations are visible to is_command_allowed().
+ALLOWED_COMMAND_PREFIXES: list[str] = list(DEFAULT_ALLOWED_COMMAND_PREFIXES)
 
 # Characters/sequences that enable chaining, piping, redirection, or
 # substitution. Blocking these stops an allowed command from being used
@@ -299,6 +312,139 @@ BLOCKED_COMMAND_PATTERNS = [
         r"\bid_rsa\b",
     )
 ]
+
+# Prefixes that must never be added through the Settings UI / API, even
+# if a user attempts to do so. Defense in depth against elevating the
+# allowlist to dangerous commands.
+FORBIDDEN_ALLOWED_COMMAND_PREFIXES = (
+    "rm",
+    "del",
+    "rmdir",
+    "Remove-Item",
+    "sudo",
+    "shutdown",
+    "reboot",
+    "format",
+    "diskpart",
+    "git reset",
+    "git clean",
+    "git push",
+    "git commit",
+    "git add",
+)
+
+
+def _normalize_command_prefix(prefix: str) -> str:
+    """Return a stripped command prefix suitable for the allowlist."""
+
+    return (prefix or "").strip()
+
+
+def _is_forbidden_prefix(prefix: str) -> bool:
+    """True if the prefix is explicitly blocked from the allowlist."""
+
+    normalized = _normalize_command_prefix(prefix).lower()
+    if not normalized:
+        return True
+    for forbidden in FORBIDDEN_ALLOWED_COMMAND_PREFIXES:
+        if normalized == forbidden.lower() or normalized.startswith(
+            forbidden.lower() + " "
+        ):
+            return True
+    # Also reject anything containing dangerous shell characters.
+    for char in DANGEROUS_COMMAND_CHARACTERS:
+        if char in normalized:
+            return True
+    return False
+
+
+def _load_allowed_commands_from_config() -> list[str] | None:
+    """Load a persisted allowed-commands list, or None if not configured."""
+
+    from security import _load_config
+
+    data = _load_config()
+    raw = data.get("allowed_commands")
+    if not isinstance(raw, list):
+        return None
+    prefixes: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        normalized = _normalize_command_prefix(item)
+        if normalized and not _is_forbidden_prefix(normalized):
+            prefixes.append(normalized)
+    return prefixes if prefixes else None
+
+
+def _persist_allowed_commands(prefixes: list[str]) -> None:
+    """Write the current allowlist into the existing configuration file."""
+
+    from security import _load_config, _persist_config
+
+    payload = _load_config()
+    payload["allowed_commands"] = list(prefixes)
+    _persist_config(payload)
+
+
+def reload_allowed_commands() -> list[str]:
+    """Reload ALLOWED_COMMAND_PREFIXES from configuration (or defaults).
+
+    Returns the active list. Safe to call at startup and after API updates.
+    """
+
+    global ALLOWED_COMMAND_PREFIXES
+    loaded = _load_allowed_commands_from_config()
+    if loaded is not None:
+        ALLOWED_COMMAND_PREFIXES = loaded
+    else:
+        ALLOWED_COMMAND_PREFIXES = list(DEFAULT_ALLOWED_COMMAND_PREFIXES)
+    return list(ALLOWED_COMMAND_PREFIXES)
+
+
+def get_allowed_commands() -> list[str]:
+    """Return a sorted copy of the active allowed command prefixes."""
+
+    return sorted(ALLOWED_COMMAND_PREFIXES)
+
+
+def add_allowed_command(prefix: str) -> list[str]:
+    """Add a command prefix to the allowlist and persist it.
+
+    Raises ValueError for empty, forbidden, or dangerous prefixes.
+    """
+
+    normalized = _normalize_command_prefix(prefix)
+    if not normalized:
+        raise ValueError("A non-empty command prefix is required.")
+    if _is_forbidden_prefix(normalized):
+        raise ValueError(
+            f"Command prefix '{normalized}' is not permitted for safety reasons."
+        )
+    if normalized not in ALLOWED_COMMAND_PREFIXES:
+        ALLOWED_COMMAND_PREFIXES.append(normalized)
+        _persist_allowed_commands(ALLOWED_COMMAND_PREFIXES)
+    return get_allowed_commands()
+
+
+def remove_allowed_command(prefix: str) -> list[str]:
+    """Remove a command prefix from the allowlist and persist it.
+
+    Raises ValueError if the prefix is not present.
+    """
+
+    normalized = _normalize_command_prefix(prefix)
+    if not normalized:
+        raise ValueError("A non-empty command prefix is required.")
+    if normalized not in ALLOWED_COMMAND_PREFIXES:
+        raise ValueError(f"Command prefix '{normalized}' is not in the allowlist.")
+    ALLOWED_COMMAND_PREFIXES.remove(normalized)
+    _persist_allowed_commands(ALLOWED_COMMAND_PREFIXES)
+    return get_allowed_commands()
+
+
+# Load any user-configured allowlist at import time.
+reload_allowed_commands()
 
 
 def is_command_allowed(command: str) -> bool:

@@ -15,6 +15,12 @@ const SettingsPage = ({ host }) => {
   const [apiKey, setApiKey] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
+  const [allowedCommands, setAllowedCommands] = useState([]);
+  const [newCommandPrefix, setNewCommandPrefix] = useState('');
+  const [selectedCommand, setSelectedCommand] = useState('');
+  const [allowedCommandsStatus, setAllowedCommandsStatus] = useState('');
+  const [allowedCommandsError, setAllowedCommandsError] = useState(false);
+  const [allowedCommandsBusy, setAllowedCommandsBusy] = useState(false);
 
   const loadModels = async (providerName, preserveModel = '') => {
     if (!providerName) return;
@@ -42,15 +48,18 @@ const SettingsPage = ({ host }) => {
 
     const loadSettings = async () => {
       try {
-        const [providerResponse, projectRootResponse] = await Promise.all([
-          axios.get(`${host}/providers?probe=0`),
-          axios.get(`${host}/project-root`),
-        ]);
+        const [providerResponse, projectRootResponse, allowedCommandsResponse] =
+          await Promise.all([
+            axios.get(`${host}/providers?probe=0`),
+            axios.get(`${host}/project-root`),
+            axios.get(`${host}/allowed-commands`),
+          ]);
         if (!active) return;
         setProviderNames(providerResponse.data.providers || []);
         setProvider(providerResponse.data.name || '');
         setModel(providerResponse.data.model || '');
         setProjectRoot(projectRootResponse.data.path || '');
+        setAllowedCommands(allowedCommandsResponse.data.commands || []);
         setStatusMessage('');
         await loadModels(providerResponse.data.name, providerResponse.data.model || '');
       } catch {
@@ -170,6 +179,67 @@ const SettingsPage = ({ host }) => {
     }
   };
 
+  const handleAddAllowedCommand = async (event) => {
+    event.preventDefault();
+    const prefix = newCommandPrefix.trim();
+    if (!prefix) {
+      setAllowedCommandsError(true);
+      setAllowedCommandsStatus('Enter a command prefix to add.');
+      return;
+    }
+
+    setAllowedCommandsBusy(true);
+    setAllowedCommandsError(false);
+    setAllowedCommandsStatus('');
+
+    try {
+      const response = await axios.post(`${host}/allowed-commands`, {
+        command: prefix,
+      });
+      setAllowedCommands(response.data.commands || []);
+      setNewCommandPrefix('');
+      setSelectedCommand('');
+      setAllowedCommandsStatus(`Added allowed command: ${prefix}`);
+    } catch (error) {
+      setAllowedCommandsError(true);
+      setAllowedCommandsStatus(
+        error?.response?.data?.error || error?.message || 'Could not add command.'
+      );
+    } finally {
+      setAllowedCommandsBusy(false);
+    }
+  };
+
+  const handleRemoveAllowedCommand = async (event) => {
+    event.preventDefault();
+    const prefix = selectedCommand.trim();
+    if (!prefix) {
+      setAllowedCommandsError(true);
+      setAllowedCommandsStatus('Select a command prefix to remove.');
+      return;
+    }
+
+    setAllowedCommandsBusy(true);
+    setAllowedCommandsError(false);
+    setAllowedCommandsStatus('');
+
+    try {
+      const response = await axios.delete(
+        `${host}/allowed-commands/${encodeURIComponent(prefix)}`
+      );
+      setAllowedCommands(response.data.commands || []);
+      setSelectedCommand('');
+      setAllowedCommandsStatus(`Removed allowed command: ${prefix}`);
+    } catch (error) {
+      setAllowedCommandsError(true);
+      setAllowedCommandsStatus(
+        error?.response?.data?.error || error?.message || 'Could not remove command.'
+      );
+    } finally {
+      setAllowedCommandsBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <main className="settings-page" aria-labelledby="settings-heading">
@@ -283,6 +353,86 @@ const SettingsPage = ({ host }) => {
           {statusMessage}
         </div>
       </form>
+
+      <section
+        className="settings-allowed-commands"
+        aria-labelledby="allowed-commands-heading"
+      >
+        <h2 id="allowed-commands-heading">Allowed Commands</h2>
+        <p id="allowed-commands-help" className="settings-help">
+          These prefixes control which terminal commands the agent may run.
+          Changes are saved immediately and apply to the same allowlist used by
+          the terminal tool. Dangerous commands cannot be added.
+        </p>
+
+        <div className="settings-field">
+          <label htmlFor="allowed-commands-list">Current allowed command prefixes</label>
+          <select
+            id="allowed-commands-list"
+            size={Math.min(12, Math.max(6, allowedCommands.length || 6))}
+            value={selectedCommand}
+            onChange={(event) => setSelectedCommand(event.target.value)}
+            disabled={allowedCommandsBusy}
+            aria-describedby="allowed-commands-help"
+          >
+            {allowedCommands.length === 0 ? (
+              <option value="" disabled>No allowed commands configured</option>
+            ) : (
+              allowedCommands.map((cmd) => (
+                <option key={cmd} value={cmd}>{cmd}</option>
+              ))
+            )}
+          </select>
+        </div>
+
+        <div className="settings-field settings-allowed-commands-actions">
+          <label htmlFor="allowed-commands-new">Add command prefix</label>
+          <input
+            id="allowed-commands-new"
+            type="text"
+            value={newCommandPrefix}
+            onChange={(event) => setNewCommandPrefix(event.target.value)}
+            disabled={allowedCommandsBusy}
+            placeholder="e.g. wsl or cargo test"
+            autoComplete="off"
+            spellCheck="false"
+            aria-describedby="allowed-commands-help"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleAddAllowedCommand(event);
+              }
+            }}
+          />
+          <div className="settings-allowed-commands-buttons">
+            <button
+              type="button"
+              className="settings-folder-button"
+              onClick={handleAddAllowedCommand}
+              disabled={allowedCommandsBusy || !newCommandPrefix.trim()}
+            >
+              {allowedCommandsBusy ? 'Working…' : 'Add'}
+            </button>
+            <button
+              type="button"
+              className="settings-folder-button"
+              onClick={handleRemoveAllowedCommand}
+              disabled={allowedCommandsBusy || !selectedCommand}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+
+        <div
+          className={`settings-status${allowedCommandsError ? ' settings-status--error' : ''}`}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {allowedCommandsStatus}
+        </div>
+      </section>
 
       <section className="keyboard-shortcuts" aria-labelledby="keyboard-shortcuts-heading">
         <h2 id="keyboard-shortcuts-heading">Keyboard Shortcuts</h2>
