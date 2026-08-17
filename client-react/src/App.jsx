@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import { flushSync } from 'react-dom';
 import './App.css';
@@ -78,19 +78,34 @@ function App() {
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const is_stream = toggled;
 
-  useEffect(() => {
-    let active = true;
+  const refreshProjectRoot = useCallback(() => {
     axios.get(`${host}/project-root`).then((response) => {
-      if (!active) return;
       setProjectRoot(response.data.path || '');
       setProjectRootError(false);
     }).catch(() => {
-      if (!active) return;
       setProjectRoot('');
       setProjectRootError(true);
     });
-    return () => { active = false; };
   }, [host]);
+
+  useEffect(() => {
+    refreshProjectRoot();
+  }, [refreshProjectRoot]);
+
+  // Re-read the project root when the window becomes visible again
+  // (for example after returning from the Settings page).
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshProjectRoot();
+    };
+    const onFocus = () => refreshProjectRoot();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [refreshProjectRoot]);
 
   function executeScroll() {
     const element = document.getElementById('checkpoint');
@@ -241,7 +256,7 @@ function App() {
           <WorkspaceTabs
             ariaLabel="Project and terminal"
             panels={[
-              { id: 'project', label: 'Project', content: <ProjectExplorer host={host} onUseSelectedFiles={handleSelectedFiles} /> },
+              { id: 'project', label: 'Project', content: <ProjectExplorer key={projectRoot || 'default'} host={host} onUseSelectedFiles={handleSelectedFiles} /> },
               { id: 'terminal', label: 'Terminal', content: <TerminalPanel host={host} onSendToChat={handleClick} /> },
             ]}
           />

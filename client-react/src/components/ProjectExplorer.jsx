@@ -103,6 +103,26 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     setStatus('Project tree collapsed.');
   };
 
+  const expandAll = () => {
+    // Only expand directories whose contents are already loaded (children cache).
+    // This preserves lazy-loading and makes files appear immediately.
+    const next = new Set();
+    const collect = (entries, parentPath) => {
+      for (const entry of entries) {
+        if (!isDirectory(entry)) continue;
+        const path = entryPath(entry, parentPath);
+        if (children[path]) {
+          next.add(path);
+          collect(children[path], path);
+        }
+      }
+    };
+    collect(rootEntries, '.');
+    setExpanded(next);
+    setActivePath(null);
+    setStatus(next.size ? 'Project tree expanded.' : 'No loaded folders to expand.');
+  };
+
   const openFile = async (entry, path) => {
     setStatus(`Opening ${entryName(entry)}.`);
     setError('');
@@ -227,6 +247,7 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       <p className="project-path" aria-label="Current project directory">.</p>
       <div className="project-actions">
         <button type="button" onClick={collapseAll}>Collapse all</button>
+        <button type="button" onClick={expandAll}>Expand all</button>
         <button type="button" onClick={async () => {
           setChildren({});
           const entries = await loadDirectory('.', true);
