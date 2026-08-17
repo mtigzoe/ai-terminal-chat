@@ -60,7 +60,12 @@ export default function TerminalPanel({ host, onSendToChat }) {
   };
 
   return (
-    <section className="terminal-panel" aria-labelledby="terminal-panel-heading">
+    <section
+      className="terminal-panel"
+      role="region"
+      aria-labelledby="terminal-panel-heading"
+      data-focus-region="terminal"
+    >
       <h2 id="terminal-panel-heading">Terminal</h2>
       <div className="terminal-output" role="log" aria-label="Terminal output" aria-live="polite" aria-relevant="additions">
         {output.length === 0 ? (
@@ -83,7 +88,7 @@ export default function TerminalPanel({ host, onSendToChat }) {
       </div>
       <form onSubmit={runCommand} className="terminal-form">
         <label htmlFor="terminal-command">Command</label>
-        <input ref={inputRef} id="terminal-command" type="text" value={command} onChange={(event) => setCommand(event.target.value)} disabled={running} autoComplete="off" spellCheck="false" />
+        <input ref={inputRef} data-focus-target="terminal-input" id="terminal-command" type="text" value={command} onChange={(event) => setCommand(event.target.value)} disabled={running} autoComplete="off" spellCheck="false" />
         <button type="submit" disabled={running || !command.trim()}>{running ? 'Running…' : 'Run'}</button>
       </form>
       <div role="status" aria-live="polite" className="terminal-status">{status}</div>
