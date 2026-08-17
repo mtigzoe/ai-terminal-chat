@@ -22,7 +22,7 @@ The project combines a React/Vite frontend with a Flask/Python backend and a pro
 - [API endpoints](#api-endpoints)
 - [Project Status](#project-status)
   - [Completed](#completed)
-  - [Future work](#future-work)
+- [Future Direction](#future-direction)
 - [Testing](#testing)
   - [Frontend tests](#frontend-tests)
   - [Backend tests](#backend-tests)
@@ -321,17 +321,20 @@ Main endpoints implemented by the Flask backend:
 - [x] Project path display and project-tree recovery states
 - [x] Automated accessibility regression tests
 
-### Future work
+## Future Direction
 
-- [ ] Advanced screen-reader support beyond the current project-tree workflows
-- [ ] Better integrated project and terminal views
-- [ ] Native local-project selection/configuration
-- [ ] Accessible desktop workflows that don't depend on browser navigation
-- [ ] TypeScript backend
-- [ ] Virtualized project tree for very large directories
-- [ ] Accessible project-tree context menu
-- [ ] Git status badges in the project tree
-- [ ] Drag-and-drop file workflows with keyboard alternatives
+The project will continue to focus on accessibility, safe local AI assistance, and a practical desktop development workflow. Planned improvements include:
+
+- [ ] **Advanced screen-reader support** — improve announcements, navigation, and interaction patterns beyond the current project-tree workflows.
+- [ ] **Better integrated project and terminal views** — make project browsing, chat, and terminal workflows feel more cohesive while preserving keyboard and screen-reader usability.
+- [ ] **Native local-project selection and configuration** — provide a more direct desktop workflow for selecting and managing the active project.
+- [ ] **Accessible desktop workflows** — reduce reliance on browser-specific navigation patterns and improve the Electron experience for keyboard and screen-reader users.
+- [ ] **TypeScript backend** — evaluate and, when appropriate, migrate the Python backend to TypeScript while preserving the current provider, tool, security, and accessibility behavior.
+- [ ] **Accessible project-tree context menu** — provide keyboard-accessible contextual actions for files and directories.
+- [ ] **Git status indicators** — expose useful Git state, such as modified or staged files, directly in the project tree.
+- [ ] **Drag-and-drop alternatives** — provide equivalent keyboard-accessible workflows for file operations so drag-and-drop is never required.
+- [ ] **Broader local/offline AI improvements** — continue improving Ollama-based workflows, model configuration, and reliability for local development.
+- [ ] **Expanded accessibility validation** — continue combining automated regression tests with manual JAWS, NVDA, and Orca testing as new UI and Electron features are added.
 
 ## Testing
 
