@@ -125,7 +125,9 @@ describe('non-streaming chat lifecycle', () => {
 
     const status = document.getElementById('agent-status-live');
     expect(status).toHaveAttribute('aria-live', 'assertive');
-    expect(status).toHaveTextContent(/provider offline/i);
+    await waitFor(() => {
+      expect(status).toHaveTextContent(/provider offline/i);
+    });
 
     const textarea = getTextarea();
     expect(textarea).not.toBeDisabled();

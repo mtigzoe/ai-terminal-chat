@@ -1,19 +1,63 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
 import userIcon from '../assets/user-icon.png';
 // TODO: Consider replacing chatbotIcon with its own distinct icon.
 import chatbotIcon from '../assets/user-icon.png';
 import { phaseLabel } from '../agentStatus.js';
 
+/**
+ * Agent status live region.
+ * When status is null the region remains in the DOM (empty) so that subsequent
+ * announcements can be forced by clearing then setting content.
+ */
 function AgentStatusRegion({ status }) {
+  const regionRef = useRef(null);
+  const lastMessageRef = useRef('');
+
+  useEffect(() => {
+    if (!status) {
+      lastMessageRef.current = '';
+      if (regionRef.current) regionRef.current.textContent = '';
+      return;
+    }
+    const live = status.assertive ? 'assertive' : 'polite';
+    const message = `${phaseLabel(status.phase)}. ${status.message || ''}`.trim();
+    if (message === lastMessageRef.current) return;
+    lastMessageRef.current = message;
+    const el = regionRef.current;
+    if (!el) return;
+    el.setAttribute('aria-live', live);
+    // Clear briefly so screen readers re-announce even when the text is similar.
+    el.textContent = '';
+    const id = window.setTimeout(() => {
+      el.textContent = message;
+    }, 40);
+    return () => window.clearTimeout(id);
+  }, [status]);
+
   if (!status) {
     return (
-      <div id="agent-status-live" className="agent-status-live sr-only" role="status" aria-live="polite" aria-atomic="true" />
+      <div
+        id="agent-status-live"
+        ref={regionRef}
+        className="agent-status-live sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      />
     );
   }
+
   const live = status.assertive ? 'assertive' : 'polite';
   return (
-    <div id="agent-status-live" className={`agent-status agent-status--${status.phase || 'plan'}`} role="status" aria-live={live} aria-atomic="true">
+    <div
+      id="agent-status-live"
+      ref={regionRef}
+      className={`agent-status agent-status--${status.phase || 'plan'}`}
+      role="status"
+      aria-live={live}
+      aria-atomic="true"
+    >
       <span className="agent-status-phase">{phaseLabel(status.phase)}</span>
       <span className="agent-status-message">{status.message}</span>
     </div>
@@ -35,16 +79,50 @@ function formatActivityItem(item) {
   return null;
 }
 
-function ToolActivity({ activity = [] }) {
+/**
+ * Tool activity list with progressive disclosure.
+ * New items during streaming are also mirrored into a polite live region so
+ * screen-reader users hear progress without having to leave the input focus.
+ */
+function ToolActivity({ activity = [], announceNew = false }) {
+  const liveRef = useRef(null);
+  const prevCountRef = useRef(0);
+
   const items = activity.map((item, index) => {
     const formatted = formatActivityItem(item);
     return formatted ? { ...formatted, key: `${formatted.kind}-${index}`, details: item } : null;
   }).filter(Boolean);
+
+  useEffect(() => {
+    if (!announceNew || !liveRef.current || items.length <= prevCountRef.current) {
+      prevCountRef.current = items.length;
+      return;
+    }
+    const newest = items[items.length - 1];
+    if (!newest) return;
+    const el = liveRef.current;
+    el.textContent = '';
+    const id = window.setTimeout(() => {
+      el.textContent = newest.text;
+    }, 40);
+    prevCountRef.current = items.length;
+    return () => window.clearTimeout(id);
+  }, [items, announceNew]);
+
   if (!items.length) return null;
 
   return (
     <section className="tool-activity" aria-labelledby="agent-activity-heading">
       <h3 id="agent-activity-heading">Agent activity</h3>
+      {/* Polite live region for newly added activity while streaming */}
+      <div
+        ref={liveRef}
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-relevant="additions text"
+      />
       <ol aria-label="Agent activity items">
         {items.map((item) => (
           <li key={item.key} className={`activity-item activity-item--${item.kind}`}>
@@ -64,10 +142,13 @@ function ToolActivity({ activity = [] }) {
 }
 
 const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatus = null, waiting = false }) => (
-  <main className="chat-area" aria-label="Conversation" aria-busy={waiting}>
+  <main className="chat-area" id="main-conversation" aria-label="Conversation" aria-busy={waiting} tabIndex={-1}>
     <AgentStatusRegion status={agentStatus} />
     {data?.length <= 0 ? (
-      <div className="welcome-area"><p className="welcome-1">Hi,</p><p className="welcome-2">How can I help you today?</p></div>
+      <div className="welcome-area">
+        <p className="welcome-1">Hi,</p>
+        <p className="welcome-2">How can I help you today?</p>
+      </div>
     ) : null}
     {data.map((element, index) => {
       const isUser = element.role === 'user';
@@ -86,7 +167,7 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
       <article className="tempResponse" aria-label="Assistant response in progress" aria-live="off">
         <img src={chatbotIcon} alt="" aria-hidden="true" />
         <div>
-          <ToolActivity activity={streamToolActivity} />
+          <ToolActivity activity={streamToolActivity} announceNew />
           {answer && <div className="message-content"><Markdown>{answer}</Markdown></div>}
         </div>
       </article>

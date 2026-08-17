@@ -25,33 +25,84 @@ function generateRequestId() {
 }
 
 function ConfirmationDialog({ pending, onResolve, resolving }) {
-  const cancelRef = useRef(null);
+  const dialogRef = useRef(null);
+  const denyRef = useRef(null);
+  const allowRef = useRef(null);
+
   useEffect(() => {
     if (!pending) return undefined;
-    cancelRef.current?.focus();
+    // Safer default: focus Deny first so accidental Enter does not approve.
+    denyRef.current?.focus();
+
     const handleKeyDown = (event) => {
       if (event.key === 'Escape' && !resolving) {
         event.preventDefault();
         onResolve(false);
+        return;
+      }
+      // Simple focus trap between the two action buttons.
+      if (event.key === 'Tab') {
+        const focusables = [denyRef.current, allowRef.current].filter(Boolean);
+        if (focusables.length < 2) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [pending, resolving, onResolve]);
+
   if (!pending) return null;
   const path = pending.args?.path || pending.preview?.path || '';
   const action = pending.name || 'tool operation';
   const previewText = pending.preview?.message || pending.preview?.description || '';
+  const descriptionIds = [
+    'confirmation-dialog-description',
+    previewText ? 'confirmation-dialog-preview' : null,
+    'confirmation-dialog-safety',
+  ].filter(Boolean).join(' ');
+
   return (
     <div className="confirmation-backdrop" role="presentation">
-      <section className="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmation-dialog-title" aria-describedby="confirmation-dialog-description">
+      <section
+        ref={dialogRef}
+        className="confirmation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirmation-dialog-title"
+        aria-describedby={descriptionIds}
+      >
         <h2 id="confirmation-dialog-title">Confirmation required</h2>
-        <p id="confirmation-dialog-description">The assistant wants to perform <strong>{action}</strong>{path ? <> on <code>{path}</code></> : ''}.</p>
-        {previewText && <p>{previewText}</p>}
-        <p>Nothing will be changed unless you choose Allow.</p>
+        <p id="confirmation-dialog-description">
+          The assistant wants to perform <strong>{action}</strong>
+          {path ? <> on <code>{path}</code></> : ''}.
+        </p>
+        {previewText && <p id="confirmation-dialog-preview">{previewText}</p>}
+        <p id="confirmation-dialog-safety">Nothing will be changed unless you choose Allow.</p>
         <div className="confirmation-dialog-actions">
-          <button ref={cancelRef} type="button" onClick={() => onResolve(false)} disabled={resolving}>Deny</button>
-          <button type="button" onClick={() => onResolve(true)} disabled={resolving}>{resolving ? 'Processing…' : 'Allow'}</button>
+          <button
+            ref={denyRef}
+            type="button"
+            onClick={() => onResolve(false)}
+            disabled={resolving}
+          >
+            Deny
+          </button>
+          <button
+            ref={allowRef}
+            type="button"
+            onClick={() => onResolve(true)}
+            disabled={resolving}
+          >
+            {resolving ? 'Processing…' : 'Allow'}
+          </button>
         </div>
       </section>
     </div>
@@ -307,16 +358,24 @@ function App() {
 
   return (
     <div style={{ textAlign: 'center' }}>
+      {/* Skip links for keyboard and screen-reader navigation */}
+      <nav className="skip-links" aria-label="Skip links">
+        <a className="skip-link" href="#main-conversation">Skip to conversation</a>
+        <a className="skip-link" href="#message-input-region">Skip to message input</a>
+        <a className="skip-link" href="#workspace-panels">Skip to project and terminal</a>
+      </nav>
       <div className="app-shell">
         <div className="chat-app">
           <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
           <ProviderSelector host={host} waiting={waiting} />
           <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
           {waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}
-          <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
+          <div id="message-input-region">
+            <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
+          </div>
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
-        <aside className="workspace-panels" aria-label="Project and terminal">
+        <aside id="workspace-panels" className="workspace-panels" aria-label="Project and terminal">
           <section className="current-project" aria-labelledby="current-project-heading">
             <div><h2 id="current-project-heading">Current project</h2>{projectRootError ? <p role="status" aria-live="polite">Unable to determine current project.</p> : <p>{projectRoot || 'Loading current project…'}</p>}</div>
             <a href="/settings.html#settings-project-root">Change project</a>

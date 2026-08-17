@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, test } from 'vitest';
 import ChatArea, { AgentStatusRegion } from './components/ConversationDisplayArea';
 
@@ -8,18 +8,22 @@ describe('ConversationDisplayArea accessibility', () => {
     expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
-  test('uses polite live region for non-error status', () => {
+  test('uses polite live region for non-error status', async () => {
     render(<AgentStatusRegion status={{ phase: 'plan', message: 'Planning next step', assertive: false }} />);
     const status = screen.getByRole('status');
     expect(status).toHaveAttribute('aria-live', 'polite');
-    expect(status).toHaveTextContent('Planning next step');
+    await waitFor(() => {
+      expect(status).toHaveTextContent('Planning next step');
+    });
   });
 
-  test('uses assertive live region for error status', () => {
+  test('uses assertive live region for error status', async () => {
     render(<AgentStatusRegion status={{ phase: 'error', message: 'Something went wrong.', assertive: true }} />);
     const status = screen.getByRole('status');
     expect(status).toHaveAttribute('aria-live', 'assertive');
-    expect(status).toHaveTextContent('Something went wrong.');
+    await waitFor(() => {
+      expect(status).toHaveTextContent('Something went wrong.');
+    });
   });
 
   test('messages have accessible labels identifying them as user or assistant', () => {
