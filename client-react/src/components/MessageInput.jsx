@@ -34,7 +34,6 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
         ref={inputRef}
         value={message}
         aria-describedby="message-input-help"
-        aria-disabled="false"
         onChange={(event) => setMessage(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {

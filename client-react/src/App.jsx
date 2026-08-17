@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import { flushSync } from 'react-dom';
 import './App.css';
@@ -78,19 +78,102 @@ function App() {
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const is_stream = toggled;
 
-  useEffect(() => {
-    let active = true;
+  const refreshProjectRoot = useCallback(() => {
     axios.get(`${host}/project-root`).then((response) => {
-      if (!active) return;
       setProjectRoot(response.data.path || '');
       setProjectRootError(false);
     }).catch(() => {
-      if (!active) return;
       setProjectRoot('');
       setProjectRootError(true);
     });
-    return () => { active = false; };
   }, [host]);
+
+  useEffect(() => {
+    refreshProjectRoot();
+  }, [refreshProjectRoot]);
+
+  // Re-read the project root when the window becomes visible again
+  // (for example after returning from the Settings page).
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshProjectRoot();
+    };
+    const onFocus = () => refreshProjectRoot();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [refreshProjectRoot]);
+
+  // F6 / Shift+F6 cycles focus between major regions (desktop-style).
+  // Order: message input → project tree → terminal input → …
+  const [workspacePanel, setWorkspacePanel] = useState(() => {
+    try {
+      const stored = localStorage.getItem('workspace-panel');
+      return stored === 'terminal' || stored === 'project' ? stored : 'project';
+    } catch {
+      return 'project';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('workspace-panel', workspacePanel);
+    } catch {
+      // ignore
+    }
+  }, [workspacePanel]);
+
+  useEffect(() => {
+    const regions = ['chat', 'project', 'terminal'];
+
+    const focusRegion = (id) => {
+      if (id === 'chat') {
+        inputRef.current?.focus();
+        return;
+      }
+      if (id === 'project') {
+        setWorkspacePanel('project');
+        window.setTimeout(() => {
+          const tree = document.querySelector('[data-focus-target="project-tree"]');
+          const firstItem = tree?.querySelector('[role="treeitem"]');
+          (firstItem || tree)?.focus?.();
+        }, 0);
+        return;
+      }
+      if (id === 'terminal') {
+        setWorkspacePanel('terminal');
+        window.setTimeout(() => {
+          const input = document.querySelector('[data-focus-target="terminal-input"]');
+          input?.focus?.();
+        }, 0);
+      }
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key !== 'F6') return;
+      event.preventDefault();
+      const active = document.activeElement;
+      let current = 'chat';
+      if (active?.closest?.('[data-focus-region="project"]') || active?.getAttribute?.('data-focus-target') === 'project-tree') {
+        current = 'project';
+      } else if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') {
+        current = 'terminal';
+      } else if (active === inputRef.current || active?.closest?.('.chat-app')) {
+        current = 'chat';
+      }
+      const index = regions.indexOf(current);
+      const nextIndex = event.shiftKey
+        ? (index - 1 + regions.length) % regions.length
+        : (index + 1) % regions.length;
+      focusRegion(regions[nextIndex]);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   function executeScroll() {
     const element = document.getElementById('checkpoint');
@@ -223,13 +306,13 @@ function App() {
   };
 
   return (
-    <center>
+    <div style={{ textAlign: 'center' }}>
       <div className="app-shell">
         <div className="chat-app">
           <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
           <ProviderSelector host={host} waiting={waiting} />
           <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
-          {waiting && <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>}
+          {waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}
           <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
@@ -240,14 +323,16 @@ function App() {
           </section>
           <WorkspaceTabs
             ariaLabel="Project and terminal"
+            activePanelId={workspacePanel}
+            onActivePanelChange={setWorkspacePanel}
             panels={[
-              { id: 'project', label: 'Project', content: <ProjectExplorer host={host} onUseSelectedFiles={handleSelectedFiles} /> },
+              { id: 'project', label: 'Project', content: <ProjectExplorer key={projectRoot || 'default'} host={host} projectRoot={projectRoot} onUseSelectedFiles={handleSelectedFiles} /> },
               { id: 'terminal', label: 'Terminal', content: <TerminalPanel host={host} onSendToChat={handleClick} /> },
             ]}
           />
         </aside>
       </div>
-    </center>
+    </div>
   );
 }
 
