@@ -331,15 +331,17 @@ Main endpoints implemented by the Flask backend:
 
 ### Future work
 
-- [ ] Better integrated project and terminal views
-- [ ] Native local-project selection/configuration
-- [ ] Accessible desktop workflows that don't depend on browser navigation
-- [ ] TypeScript backend
-- [ ] Virtualized project tree for very large directories
-- [ ] Accessible project-tree context menu
-- [ ] Git status badges in the project tree
-- [ ] Drag-and-drop file workflows with keyboard alternatives
-- [ ] Optional user-controlled announcement verbosity preferences
+- [ ] Better integrated project and terminal views — make project browsing, chat, and terminal workflows feel more cohesive while preserving keyboard and screen-reader usability.
+- [ ] Native local-project selection and configuration — provide a more direct desktop workflow for selecting and managing the active project.
+- [ ] Accessible desktop workflows — reduce reliance on browser-specific navigation patterns and improve the Electron experience for keyboard and screen-reader users.
+- [ ] TypeScript backend — evaluate and, when appropriate, migrate the Python backend to TypeScript while preserving the current provider, tool, security, and accessibility behavior.
+- [ ] Virtualized project tree for very large directories.
+- [ ] Accessible project-tree context menu — provide keyboard-accessible contextual actions for files and directories.
+- [ ] Git status indicators — expose useful Git state, such as modified or staged files, directly in the project tree.
+- [ ] Drag-and-drop alternatives — provide equivalent keyboard-accessible workflows for file operations so drag-and-drop is never required.
+- [ ] Broader local/offline AI improvements — continue improving Ollama-based workflows, model configuration, and reliability for local development.
+- [ ] Expanded accessibility validation — continue combining automated regression tests with manual JAWS, NVDA, and Orca testing as new UI and Electron features are added.
+- [ ] Optional user-controlled announcement verbosity preferences.
 
 ## Testing
 
