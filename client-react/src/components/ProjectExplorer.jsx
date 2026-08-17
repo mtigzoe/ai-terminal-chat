@@ -7,17 +7,35 @@ import axios from 'axios';
  * Directories are loaded only when expanded; files can be previewed or
  * explicitly selected for the agent.
  */
-export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles }) {
+export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles }) {
+  const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
+
+  const readStored = (key, fallback) => {
+    try {
+      const raw = sessionStorage.getItem(`${storageKey}:${key}`);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   const [rootEntries, setRootEntries] = useState([]);
   const [children, setChildren] = useState({});
-  const [expanded, setExpanded] = useState(() => new Set());
-  const [selectedFiles, setSelectedFiles] = useState(() => new Set());
+  const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', [])));
+  const [selectedFiles, setSelectedFiles] = useState(() => new Set(readStored('selected', [])));
   const [openedFile, setOpenedFile] = useState(null);
   const [activePath, setActivePath] = useState(null);
   const [status, setStatus] = useState('Loading project.');
   const [error, setError] = useState('');
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [filterQuery, setFilterQuery] = useState('');
+  const [lastSelectedPath, setLastSelectedPath] = useState(null);
   const treeRef = useRef(null);
   const previewCloseRef = useRef(null);
+  const filterRef = useRef(null);
+  const skipNextPersist = useRef(false);
 
   const entryName = (entry) => entry?.name || entry?.path || '';
   const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir;
@@ -50,13 +68,32 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   useEffect(() => {
     let active = true;
     setStatus('Loading project.');
-    axios.get(`${host}/project/list`, { params: { path: '.' } }).then((response) => {
+    axios.get(`${host}/project/list`, { params: { path: '.' } }).then(async (response) => {
       if (!active) return;
       const nextEntries = Array.isArray(response.data?.entries) ? response.data.entries : [];
       setRootEntries(nextEntries);
       setChildren((current) => ({ ...current, '.': nextEntries }));
       setError('');
       setStatus(`${response.data?.path || '.'}: ${nextEntries.length} items.`);
+
+      // Rehydrate children for folders that were expanded in a previous session
+      // so the restored expansion actually shows files without another click.
+      const paths = Array.from(expanded).filter((path) => path && path !== '.');
+      if (paths.length) {
+        const loaded = {};
+        for (const path of paths) {
+          if (!active) return;
+          try {
+            const res = await axios.get(`${host}/project/list`, { params: { path } });
+            loaded[path] = Array.isArray(res.data?.entries) ? res.data.entries : [];
+          } catch {
+            // Leave missing; user can expand manually.
+          }
+        }
+        if (active && Object.keys(loaded).length) {
+          setChildren((current) => ({ ...current, ...loaded }));
+        }
+      }
     }).catch((err) => {
       if (!active) return;
       const message = err?.response?.data?.error || err?.message || 'Unable to load project directory.';
@@ -65,6 +102,8 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       setStatus('Unable to load project directory.');
     });
     return () => { active = false; };
+  // expanded is intentionally read only on mount (restored from sessionStorage).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host]);
 
   useEffect(() => {
@@ -79,6 +118,21 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openedFile]);
+
+  // Persist expansion and selection so they survive reload / returning from Settings.
+  useEffect(() => {
+    if (skipNextPersist.current) {
+      skipNextPersist.current = false;
+      return;
+    }
+    try {
+      sessionStorage.setItem(`${storageKey}:expanded`, JSON.stringify(Array.from(expanded)));
+      sessionStorage.setItem(`${storageKey}:selected`, JSON.stringify(Array.from(selectedFiles)));
+    } catch {
+      // sessionStorage may be unavailable; ignore.
+    }
+  }, [expanded, selectedFiles, storageKey]);
+
 
   const toggleDirectory = async (path, name) => {
     if (expanded.has(path)) {
@@ -101,6 +155,10 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     setExpanded(new Set());
     setActivePath(null);
     setStatus('Project tree collapsed.');
+    window.setTimeout(() => {
+      const first = treeRef.current?.querySelector('[role="treeitem"]');
+      first?.focus?.();
+    }, 0);
   };
 
   const expandAll = () => {
@@ -121,6 +179,10 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     setExpanded(next);
     setActivePath(null);
     setStatus(next.size ? 'Project tree expanded.' : 'No loaded folders to expand.');
+    window.setTimeout(() => {
+      const first = treeRef.current?.querySelector('[role="treeitem"]');
+      first?.focus?.();
+    }, 0);
   };
 
   const openFile = async (entry, path) => {
@@ -141,9 +203,20 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     }
   };
 
-  const toggleFile = (entry, path) => {
+  const toggleFile = (entry, path, { shiftKey = false } = {}) => {
     setSelectedFiles((current) => {
       const next = new Set(current);
+      if (shiftKey && lastSelectedPath) {
+        const filePaths = visibleItems.filter((item) => !item.directory).map((item) => item.path);
+        const start = filePaths.indexOf(lastSelectedPath);
+        const end = filePaths.indexOf(path);
+        if (start !== -1 && end !== -1) {
+          const [from, to] = start < end ? [start, end] : [end, start];
+          for (let i = from; i <= to; i += 1) next.add(filePaths[i]);
+          setStatus(`Selected ${to - from + 1} files for the agent.`);
+          return next;
+        }
+      }
       if (next.has(path)) {
         next.delete(path);
         setStatus(`${entryName(entry)} removed from agent selection.`);
@@ -153,7 +226,26 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       }
       return next;
     });
+    setLastSelectedPath(path);
     setActivePath(path);
+  };
+
+  const selectAllVisible = () => {
+    const filePaths = visibleItems.filter((item) => !item.directory).map((item) => item.path);
+    setSelectedFiles((current) => {
+      const next = new Set(current);
+      filePaths.forEach((p) => next.add(p));
+      return next;
+    });
+    setStatus(filePaths.length
+      ? `Selected ${filePaths.length} visible ${filePaths.length === 1 ? 'file' : 'files'} for the agent.`
+      : 'No visible files to select.');
+  };
+
+  const clearSelection = () => {
+    setSelectedFiles(new Set());
+    setLastSelectedPath(null);
+    setStatus('Cleared agent file selection.');
   };
 
   const useSelectedFiles = async () => {
@@ -179,12 +271,38 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     }
   };
 
+  const normalizedFilter = filterQuery.trim().toLowerCase();
+
+  const entryMatchesFilter = (entry) => {
+    if (!normalizedFilter) return true;
+    return entryName(entry).toLowerCase().includes(normalizedFilter);
+  };
+
+  const subtreeHasMatch = (entries, parentPath) => {
+    if (!normalizedFilter) return true;
+    for (const entry of entries) {
+      if (entryMatchesFilter(entry)) return true;
+      const path = entryPath(entry, parentPath);
+      if (isDirectory(entry) && children[path] && subtreeHasMatch(children[path], path)) return true;
+    }
+    return false;
+  };
+
   const visibleItems = [];
   const addVisible = (entries, parentPath = '.', level = 1) => {
     for (const entry of entries) {
       const path = entryPath(entry, parentPath);
-      visibleItems.push({ entry, path, parentPath, level, directory: isDirectory(entry) });
-      if (isDirectory(entry) && expanded.has(path) && children[path]) {
+      const directory = isDirectory(entry);
+      const selfMatch = entryMatchesFilter(entry);
+      const childMatch = directory && children[path] ? subtreeHasMatch(children[path], path) : false;
+      if (normalizedFilter && !selfMatch && !childMatch) continue;
+
+      visibleItems.push({ entry, path, parentPath, level, directory });
+      const shouldDescend = directory && children[path] && (
+        (!normalizedFilter && expanded.has(path))
+        || (normalizedFilter && (selfMatch || childMatch) && (expanded.has(path) || childMatch))
+      );
+      if (shouldDescend) {
         addVisible(children[path], path, level + 1);
       }
     }
@@ -241,6 +359,17 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     }
   };
 
+
+  useEffect(() => {
+    if (!normalizedFilter) return undefined;
+    const count = visibleItems.length;
+    setStatus(count
+      ? `Filter "${filterQuery.trim()}": ${count} visible ${count === 1 ? 'item' : 'items'}.`
+      : `No entries match "${filterQuery.trim()}".`);
+    return undefined;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterQuery, rootEntries, children, expanded]);
+
   return (
     <section
       className="project-explorer"
@@ -249,24 +378,70 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       data-focus-region="project"
     >
       <h2 id="project-explorer-heading">Project</h2>
-      <p className="project-path" aria-label="Current project directory">.</p>
+      <p className="project-path" aria-label="Current project directory">
+        {projectRoot || '.'}
+      </p>
       <div className="project-actions">
         <button type="button" onClick={collapseAll}>Collapse all</button>
         <button type="button" onClick={expandAll}>Expand all</button>
         <button type="button" onClick={async () => {
           setChildren({});
-          const entries = await loadDirectory('.', true);
-          setRootEntries(entries);
           setExpanded(new Set());
           setActivePath(null);
+          try {
+            sessionStorage.removeItem(`${storageKey}:expanded`);
+          } catch { /* ignore */ }
+          const entries = await loadDirectory('.', true);
+          setRootEntries(entries);
         }}>Refresh</button>
+        <button type="button" onClick={selectAllVisible}>Select all visible</button>
+        <button type="button" onClick={clearSelection} disabled={selectedFiles.size === 0}>Clear selection</button>
         <button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>
           Use selected files with agent ({selectedFiles.size})
         </button>
       </div>
-      <p id="project-selection-help" className="project-selection-help">
-        Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Press F6 to move between the chat, project tree, and terminal.
-      </p>
+      <div className="project-filter">
+        <label htmlFor="project-filter-input">Filter files and folders</label>
+        <input
+          ref={filterRef}
+          id="project-filter-input"
+          type="search"
+          value={filterQuery}
+          onChange={(event) => setFilterQuery(event.target.value)}
+          placeholder="Type to filter..."
+          autoComplete="off"
+          aria-controls="project-tree-list"
+        />
+        {filterQuery && (
+          <button type="button" onClick={() => { setFilterQuery(''); filterRef.current?.focus(); }}>
+            Clear filter
+          </button>
+        )}
+      </div>
+      <div className="project-help-block">
+        <button
+          type="button"
+          className="project-shortcuts-toggle"
+          aria-expanded={showShortcuts}
+          aria-controls="project-shortcuts"
+          onClick={() => setShowShortcuts((value) => !value)}
+        >
+          {showShortcuts ? 'Hide keyboard shortcuts' : 'Show keyboard shortcuts'}
+        </button>
+        {showShortcuts && (
+          <ul id="project-shortcuts" className="project-shortcuts">
+            <li>F6 / Shift+F6 — move between chat, project tree, and terminal</li>
+            <li>Arrow keys — move between visible items</li>
+            <li>Right Arrow — expand folder; Left Arrow — collapse folder</li>
+            <li>Enter or Space — toggle folder; Enter on a file opens a preview</li>
+            <li>Home / End — first or last visible item</li>
+            <li>Checkboxes — select files to send to the agent</li>
+          </ul>
+        )}
+        <p id="project-selection-help" className="project-selection-help">
+          Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Press F6 to move between the chat, project tree, and terminal.
+        </p>
+      </div>
       <div
         ref={treeRef}
         role="tree"
@@ -274,6 +449,7 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
         aria-describedby="project-selection-help"
         className="project-list"
         data-focus-target="project-tree"
+        id="project-tree-list"
       >
         {visibleItems.map((item) => {
           const { entry, path, level, directory } = item;
@@ -300,7 +476,7 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
                 </button>
               ) : (
                 <>
-                  <input type="checkbox" checked={selected} onChange={() => toggleFile(entry, path)} aria-label={`Select ${name} for the agent`} />{' '}
+                  <input type="checkbox" checked={selected} onChange={(event) => toggleFile(entry, path, { shiftKey: event.nativeEvent?.shiftKey || event.shiftKey })} aria-label={`Select ${name} for the agent`} />{' '}
                   <button type="button" onClick={() => openFile(entry, path)} aria-label={`Open ${name}`}>
                     <span aria-hidden="true">[FILE]</span> {name}
                   </button>
@@ -310,7 +486,23 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
           );
         })}
       </div>
-      {visibleItems.length === 0 && !error && <p className="project-empty" aria-live="polite">No entries.</p>}
+      {visibleItems.length === 0 && !error && (
+        <div className="project-empty" aria-live="polite">
+          <p>{normalizedFilter ? `No entries match "${filterQuery.trim()}".` : 'No entries in this project.'}</p>
+          {!normalizedFilter && (
+            <p>
+              <a href="/settings.html#settings-project-root">Change project</a>
+              {' · '}
+              <button type="button" onClick={async () => {
+                setChildren({});
+                setExpanded(new Set());
+                const entries = await loadDirectory('.', true);
+                setRootEntries(entries);
+              }}>Retry</button>
+            </p>
+          )}
+        </div>
+      )}
       {openedFile && (
         <div className="confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpenedFile(null); }}>
           <section className="confirmation-dialog file-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="project-file-preview-heading">
@@ -323,7 +515,21 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
         </div>
       )}
       <div role="status" aria-live="polite" className="project-status">{status}</div>
-      {error && <div role="alert" className="project-error">{error}</div>}
+      {error && (
+        <div role="alert" className="project-error">
+          <p>{error}</p>
+          <p>
+            <a href="/settings.html#settings-project-root">Change project</a>
+            {' · '}
+            <button type="button" onClick={async () => {
+              setError('');
+              setChildren({});
+              const entries = await loadDirectory('.', true);
+              setRootEntries(entries);
+            }}>Retry</button>
+          </p>
+        </div>
+      )}
     </section>
   );
 }

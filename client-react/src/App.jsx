@@ -109,7 +109,22 @@ function App() {
 
   // F6 / Shift+F6 cycles focus between major regions (desktop-style).
   // Order: message input → project tree → terminal input → …
-  const [workspacePanel, setWorkspacePanel] = useState('project');
+  const [workspacePanel, setWorkspacePanel] = useState(() => {
+    try {
+      const stored = localStorage.getItem('workspace-panel');
+      return stored === 'terminal' || stored === 'project' ? stored : 'project';
+    } catch {
+      return 'project';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('workspace-panel', workspacePanel);
+    } catch {
+      // ignore
+    }
+  }, [workspacePanel]);
 
   useEffect(() => {
     const regions = ['chat', 'project', 'terminal'];
@@ -311,7 +326,7 @@ function App() {
             activePanelId={workspacePanel}
             onActivePanelChange={setWorkspacePanel}
             panels={[
-              { id: 'project', label: 'Project', content: <ProjectExplorer key={projectRoot || 'default'} host={host} onUseSelectedFiles={handleSelectedFiles} /> },
+              { id: 'project', label: 'Project', content: <ProjectExplorer key={projectRoot || 'default'} host={host} projectRoot={projectRoot} onUseSelectedFiles={handleSelectedFiles} /> },
               { id: 'terminal', label: 'Terminal', content: <TerminalPanel host={host} onSendToChat={handleClick} /> },
             ]}
           />
