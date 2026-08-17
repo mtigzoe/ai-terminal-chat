@@ -30,8 +30,8 @@ test('lists directory entries and exposes accessible file checkboxes', async () 
 
   expect(await screen.findByRole('heading', { name: 'Project' })).toBeInTheDocument();
   expect(await screen.findByRole('checkbox', { name: /select readme\.md for the agent/i })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /open directory src/i })).toBeInTheDocument();
-  expect(screen.getByRole('list', { name: /project files and directories/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /src, directory/i })).toBeInTheDocument();
+  expect(screen.getByRole('tree', { name: /project files and directories/i })).toBeInTheDocument();
 });
 
 test('opens a file for local preview without supplying it to the agent', async () => {
@@ -48,7 +48,7 @@ test('opens a file for local preview without supplying it to the agent', async (
 
   const onUseSelectedFiles = vi.fn();
   render(<ProjectExplorer host={host} onUseSelectedFiles={onUseSelectedFiles} />);
-  fireEvent.click(await screen.findByRole('button', { name: /open hello\.txt/i }));
+  fireEvent.click(await screen.findByRole('treeitem', { name: /hello\.txt, file/i }));
 
   expect(await screen.findByRole('heading', { name: /file: hello\.txt/i })).toBeInTheDocument();
   expect(screen.getByLabelText(/contents of hello\.txt/i)).toHaveTextContent('hello world');
@@ -101,8 +101,7 @@ test('space toggles the selected file without opening it', async () => {
   });
 
   render(<ProjectExplorer host={host} />);
-  const fileButton = await screen.findByRole('button', { name: /open a\.txt/i });
-  const fileEntry = screen.getByRole('listitem', { name: /a\.txt, file/i });
+  const fileEntry = await screen.findByRole('treeitem', { name: /a\.txt, file/i });
   fileEntry.focus();
   fireEvent.keyDown(fileEntry, { key: ' ' });
 

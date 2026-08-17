@@ -306,13 +306,13 @@ function App() {
   };
 
   return (
-    <center>
+    <div style={{ textAlign: 'center' }}>
       <div className="app-shell">
         <div className="chat-app">
           <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
           <ProviderSelector host={host} waiting={waiting} />
           <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
-          {waiting && <button type="button" onClick={stopCurrentRequest} aria-label="Cancel response">Cancel response</button>}
+          {waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}
           <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
@@ -332,7 +332,7 @@ function App() {
           />
         </aside>
       </div>
-    </center>
+    </div>
   );
 }
 

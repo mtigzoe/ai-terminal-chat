@@ -356,6 +356,9 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     } else if (!item.directory && event.key === 'Enter') {
       event.preventDefault();
       await openFile(item.entry, item.path);
+    } else if (!item.directory && event.key === ' ') {
+      event.preventDefault();
+      toggleFile(item.entry, item.path);
     }
   };
 
@@ -456,6 +459,9 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
           const name = entryName(entry);
           const selected = selectedFiles.has(path);
           const isActive = activePath === path;
+          const treeItemLabel = directory
+            ? `${expanded.has(path) ? 'Expanded' : 'Collapsed'} ${name}, directory`
+            : `${name}, file${selected ? ', selected' : ''}`;
           return (
             <div
               key={path}
@@ -464,24 +470,26 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
               aria-level={level}
               aria-expanded={directory ? expanded.has(path) : undefined}
               aria-selected={isActive}
+              aria-label={treeItemLabel}
               data-tree-path={path}
               onFocus={() => setActivePath(path)}
               onKeyDown={(event) => handleTreeKeyDown(event, item)}
+              onClick={() => directory ? toggleDirectory(path, name) : openFile(entry, path)}
               className="project-entry"
               style={{ paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` }}
             >
               {directory ? (
-                <button type="button" onClick={() => toggleDirectory(path, name)} aria-label={`${expanded.has(path) ? 'Collapse' : 'Expand'} ${name}`}>
-                  <span aria-hidden="true">{expanded.has(path) ? '▾' : '▸'}</span>{' '}{name}
-                </button>
+                <span aria-hidden="true">{expanded.has(path) ? '▾' : '▸'}</span>
               ) : (
-                <>
-                  <input type="checkbox" checked={selected} onChange={(event) => toggleFile(entry, path, { shiftKey: event.nativeEvent?.shiftKey || event.shiftKey })} aria-label={`Select ${name} for the agent`} />{' '}
-                  <button type="button" onClick={() => openFile(entry, path)} aria-label={`Open ${name}`}>
-                    <span aria-hidden="true">[FILE]</span> {name}
-                  </button>
-                </>
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={(event) => toggleFile(entry, path, { shiftKey: event.nativeEvent?.shiftKey || event.shiftKey })}
+                  aria-label={`Select ${name} for the agent`}
+                  onClick={(event) => event.stopPropagation()}
+                />
               )}
+              {' '}{name}
             </div>
           );
         })}

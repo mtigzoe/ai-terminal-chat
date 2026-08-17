@@ -23,6 +23,9 @@ function mockSuccessfulLoad({ provider = 'gemini', model = 'gemini-3.6-flash' } 
     if (url === `${HOST}/project-root`) {
       return Promise.resolve({ data: { path: '/tmp/project' } });
     }
+    if (url === `${HOST}/allowed-commands`) {
+      return Promise.resolve({ data: { commands: [] } });
+    }
     if (url.startsWith(`${HOST}/providers/`) && url.endsWith('/models')) {
       return Promise.resolve({ data: { models: [], supports_listing: false } });
     }
@@ -81,6 +84,9 @@ describe('loading settings', () => {
       }
       if (url === `${HOST}/project-root`) {
         return Promise.resolve({ data: { path: '/tmp/project' } });
+      }
+      if (url === `${HOST}/allowed-commands`) {
+        return Promise.resolve({ data: { commands: [] } });
       }
       if (url === `${HOST}/providers/ollama/models`) {
         return Promise.resolve({
