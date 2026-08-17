@@ -242,7 +242,12 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   };
 
   return (
-    <section className="project-explorer" aria-labelledby="project-explorer-heading">
+    <section
+      className="project-explorer"
+      role="region"
+      aria-labelledby="project-explorer-heading"
+      data-focus-region="project"
+    >
       <h2 id="project-explorer-heading">Project</h2>
       <p className="project-path" aria-label="Current project directory">.</p>
       <div className="project-actions">
@@ -259,8 +264,17 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
           Use selected files with agent ({selectedFiles.size})
         </button>
       </div>
-      <p id="project-selection-help">Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, and Enter or Space toggles a folder. Check files to supply their contents to the agent.</p>
-      <div ref={treeRef} role="tree" aria-label="Project files and directories" aria-describedby="project-selection-help" className="project-list">
+      <p id="project-selection-help" className="project-selection-help">
+        Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Press F6 to move between the chat, project tree, and terminal.
+      </p>
+      <div
+        ref={treeRef}
+        role="tree"
+        aria-label="Project files and directories"
+        aria-describedby="project-selection-help"
+        className="project-list"
+        data-focus-target="project-tree"
+      >
         {visibleItems.map((item) => {
           const { entry, path, level, directory } = item;
           const name = entryName(entry);

@@ -107,6 +107,59 @@ function App() {
     };
   }, [refreshProjectRoot]);
 
+  // F6 / Shift+F6 cycles focus between major regions (desktop-style).
+  // Order: message input → project tree → terminal input → …
+  const [workspacePanel, setWorkspacePanel] = useState('project');
+
+  useEffect(() => {
+    const regions = ['chat', 'project', 'terminal'];
+
+    const focusRegion = (id) => {
+      if (id === 'chat') {
+        inputRef.current?.focus();
+        return;
+      }
+      if (id === 'project') {
+        setWorkspacePanel('project');
+        window.setTimeout(() => {
+          const tree = document.querySelector('[data-focus-target="project-tree"]');
+          const firstItem = tree?.querySelector('[role="treeitem"]');
+          (firstItem || tree)?.focus?.();
+        }, 0);
+        return;
+      }
+      if (id === 'terminal') {
+        setWorkspacePanel('terminal');
+        window.setTimeout(() => {
+          const input = document.querySelector('[data-focus-target="terminal-input"]');
+          input?.focus?.();
+        }, 0);
+      }
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key !== 'F6') return;
+      event.preventDefault();
+      const active = document.activeElement;
+      let current = 'chat';
+      if (active?.closest?.('[data-focus-region="project"]') || active?.getAttribute?.('data-focus-target') === 'project-tree') {
+        current = 'project';
+      } else if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') {
+        current = 'terminal';
+      } else if (active === inputRef.current || active?.closest?.('.chat-app')) {
+        current = 'chat';
+      }
+      const index = regions.indexOf(current);
+      const nextIndex = event.shiftKey
+        ? (index - 1 + regions.length) % regions.length
+        : (index + 1) % regions.length;
+      focusRegion(regions[nextIndex]);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   function executeScroll() {
     const element = document.getElementById('checkpoint');
     if (element) element.scrollIntoView({ behavior: 'smooth' });
@@ -255,6 +308,8 @@ function App() {
           </section>
           <WorkspaceTabs
             ariaLabel="Project and terminal"
+            activePanelId={workspacePanel}
+            onActivePanelChange={setWorkspacePanel}
             panels={[
               { id: 'project', label: 'Project', content: <ProjectExplorer key={projectRoot || 'default'} host={host} onUseSelectedFiles={handleSelectedFiles} /> },
               { id: 'terminal', label: 'Terminal', content: <TerminalPanel host={host} onSendToChat={handleClick} /> },
