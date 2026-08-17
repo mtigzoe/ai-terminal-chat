@@ -81,19 +81,26 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   }, [openedFile]);
 
   const toggleDirectory = async (path, name) => {
-    const nextExpanded = new Set(expanded);
-    if (nextExpanded.has(path)) {
-      nextExpanded.delete(path);
-      setExpanded(nextExpanded);
+    if (expanded.has(path)) {
+      setExpanded((current) => {
+        const next = new Set(current);
+        next.delete(path);
+        return next;
+      });
       setActivePath(path);
       setStatus(`${name} collapsed.`);
       return;
     }
     await loadDirectory(path);
-    nextExpanded.add(path);
-    setExpanded(nextExpanded);
+    setExpanded((current) => new Set(current).add(path));
     setActivePath(path);
     setStatus(`${name} expanded.`);
+  };
+
+  const collapseAll = () => {
+    setExpanded(new Set());
+    setActivePath(null);
+    setStatus('Project tree collapsed.');
   };
 
   const openFile = async (entry, path) => {
@@ -164,12 +171,16 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   };
   addVisible(rootEntries);
 
+  const focusItem = (path) => {
+    setActivePath(path);
+    window.setTimeout(() => treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(path)}"]`)?.focus(), 0);
+  };
+
   const moveActive = (offset) => {
     if (!visibleItems.length) return;
     const index = Math.max(0, visibleItems.findIndex((item) => item.path === activePath));
     const next = Math.max(0, Math.min(index + offset, visibleItems.length - 1));
-    setActivePath(visibleItems[next].path);
-    window.setTimeout(() => treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(visibleItems[next].path)}"]`)?.focus(), 0);
+    focusItem(visibleItems[next].path);
   };
 
   const handleTreeKeyDown = async (event, item) => {
@@ -182,34 +193,24 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       moveActive(-1);
     } else if (event.key === 'Home') {
       event.preventDefault();
-      if (visibleItems[0]) {
-        setActivePath(visibleItems[0].path);
-        treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(visibleItems[0].path)}"]`)?.focus();
-      }
+      if (visibleItems[0]) focusItem(visibleItems[0].path);
     } else if (event.key === 'End') {
       event.preventDefault();
       const last = visibleItems[visibleItems.length - 1];
-      if (last) {
-        setActivePath(last.path);
-        treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(last.path)}"]`)?.focus();
-      }
+      if (last) focusItem(last.path);
     } else if (item.directory && event.key === 'ArrowRight') {
       event.preventDefault();
       if (!expanded.has(item.path)) await toggleDirectory(item.path, entryName(item.entry));
       else if (children[item.path]?.length) {
         const firstChild = visibleItems[index + 1];
-        if (firstChild) {
-          setActivePath(firstChild.path);
-          treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(firstChild.path)}"]`)?.focus();
-        }
+        if (firstChild) focusItem(firstChild.path);
       }
     } else if (item.directory && event.key === 'ArrowLeft') {
       event.preventDefault();
       if (expanded.has(item.path)) {
         await toggleDirectory(item.path, entryName(item.entry));
       } else if (item.parentPath !== '.') {
-        setActivePath(item.parentPath);
-        treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(item.parentPath)}"]`)?.focus();
+        focusItem(item.parentPath);
       }
     } else if (item.directory && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
@@ -225,7 +226,7 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       <h2 id="project-explorer-heading">Project</h2>
       <p className="project-path" aria-label="Current project directory">.</p>
       <div className="project-actions">
-        <button type="button" onClick={() => { setExpanded(new Set()); setActivePath(null); setStatus('Project tree collapsed.'); }}>Collapse all</button>
+        <button type="button" onClick={collapseAll}>Collapse all</button>
         <button type="button" onClick={async () => {
           setChildren({});
           const entries = await loadDirectory('.', true);
@@ -252,7 +253,6 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
               aria-level={level}
               aria-expanded={directory ? expanded.has(path) : undefined}
               aria-selected={isActive}
-              aria-label={directory ? `${name}, ${expanded.has(path) ? 'expanded' : 'collapsed'}, directory` : `${name}, file`}
               data-tree-path={path}
               onFocus={() => setActivePath(path)}
               onKeyDown={(event) => handleTreeKeyDown(event, item)}
