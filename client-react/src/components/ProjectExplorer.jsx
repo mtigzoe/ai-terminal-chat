@@ -54,6 +54,11 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
   }, [loadDirectory]);
 
   useEffect(() => {
+    // Do not steal initial application focus from the message field while the
+    // project directory loads. If the user is already navigating the project
+    // list, keep the active item synchronized with the selected index.
+    const activeElement = document.activeElement;
+    if (!listRef.current?.contains(activeElement)) return;
     const option = listRef.current?.querySelector('[data-project-entry="active"]');
     option?.focus();
   }, [entries, selectedIndex]);
