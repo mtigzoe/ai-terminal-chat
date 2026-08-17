@@ -277,8 +277,11 @@ Accessibility is a core goal. Implemented features include:
 
 - Keyboard-operable chat, workspace tabs, and project tree.
 - Accessible expandable/collapsible project tree with focus management, filtering, and multi-file selection.
-- ARIA live regions and status announcements for agent progress and errors.
-- Labelled controls and dialog semantics (including Escape dismissal).
+- ARIA live regions and status announcements for agent progress and errors, with clear-then-set re-announcement support.
+- Streaming tool-activity announcements via polite live regions so progress is heard without leaving the message input.
+- Concise terminal result summaries (exit code and line counts) instead of dumping long stdout/stderr into live regions.
+- Labelled controls and dialog semantics (including Escape dismissal and a focus trap on the confirmation dialog).
+- Skip links to conversation, message input, and workspace panels.
 - Screen-reader-oriented presentation of tool activity and conversation state.
 
 Automated tests cover many structural and keyboard behaviours; they do not replace manual testing with JAWS, NVDA, or Orca. See the Testing section for details and limitations.
@@ -320,10 +323,14 @@ Main endpoints implemented by the Flask backend:
 - [x] Project tree state persistence and workspace-tab persistence
 - [x] Project path display and project-tree recovery states
 - [x] Automated accessibility regression tests
+- [x] Advanced screen-reader support for agent status, tool activity, terminal output, and confirmation dialogs
+- [x] Skip links and clearer landmarks for conversation, message input, and workspace panels
+- [x] Concise terminal result summaries (exit code + line counts) to avoid dumping long output into live regions
+- [x] Streaming tool-activity announcements via polite live regions
+- [x] Confirmation dialog focus trap and safer initial focus on Deny
 
 ### Future work
 
-- [ ] Advanced screen-reader support beyond the current project-tree workflows
 - [ ] Better integrated project and terminal views
 - [ ] Native local-project selection/configuration
 - [ ] Accessible desktop workflows that don't depend on browser navigation
@@ -332,6 +339,7 @@ Main endpoints implemented by the Flask backend:
 - [ ] Accessible project-tree context menu
 - [ ] Git status badges in the project tree
 - [ ] Drag-and-drop file workflows with keyboard alternatives
+- [ ] Optional user-controlled announcement verbosity preferences
 
 ## Testing
 
@@ -390,11 +398,13 @@ Automated tests can verify DOM structure, accessible names, focus, keyboard beha
 The following behaviors should still be verified manually with a screen reader:
 
 - **Chat messages**: JAWS/NVDA/Orca correctly announces new messages and streaming updates.
-- **Agent status**: polite and assertive live-region announcements are heard at the right time.
-- **Terminal output**: terminal output is announced as it appears; command results are accessible.
+- **Agent status**: polite and assertive live-region announcements are heard at the right time; identical consecutive status messages re-announce.
+- **Tool activity while streaming**: new progress/result items are announced via the polite live region without requiring the user to leave the message input.
+- **Terminal output**: a concise summary (exit code + line counts) is announced; full stdout/stderr remains available in the log for browse mode.
+- **Skip links**: Tab from the start of the page reaches Skip to conversation / message input / project and terminal, and activation moves focus to the target region.
 - **Project tree**: treeitem roles are navigable with screen-reader arrow keys; expand/collapse state is announced.
 - **Workspace tabs**: tab and tabpanel roles are announced correctly when switching panels.
-- **Dialogs**: confirmation dialogs receive focus and are announced; Escape closes them.
+- **Dialogs**: confirmation dialogs receive focus on Deny, trap Tab between Deny and Allow, announce their description, and close on Escape.
 - **Settings form**: all form fields are labelled and errors are announced.
 
 ### Accessibility testing limitations
