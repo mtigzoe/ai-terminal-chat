@@ -2,21 +2,70 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
 /**
- * Keyboard-accessible project browser backed by Flask's project APIs.
+ * Keyboard-accessible, expandable project tree backed by Flask's project APIs.
  * It deliberately does not access the filesystem from the renderer.
- * Opening a file previews it locally; selecting a file and choosing
- * "Use selected files with agent" explicitly supplies its contents to the AI.
+ * Directories are loaded only when expanded; files can be previewed or
+ * explicitly selected for the agent.
  */
 export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles }) {
-  const [currentPath, setCurrentPath] = useState('.');
-  const [entries, setEntries] = useState([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [rootEntries, setRootEntries] = useState([]);
+  const [children, setChildren] = useState({});
+  const [expanded, setExpanded] = useState(() => new Set());
   const [selectedFiles, setSelectedFiles] = useState(() => new Set());
   const [openedFile, setOpenedFile] = useState(null);
+  const [activePath, setActivePath] = useState(null);
   const [status, setStatus] = useState('Loading project.');
   const [error, setError] = useState('');
-  const listRef = useRef(null);
+  const treeRef = useRef(null);
   const previewCloseRef = useRef(null);
+
+  const entryName = (entry) => entry?.name || entry?.path || '';
+  const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir;
+  const entryPath = (entry, parentPath = '.') => {
+    const name = entryName(entry);
+    if (!name) return '';
+    if (entry?.path) return entry.path;
+    if (!parentPath || parentPath === '.') return name;
+    return `${parentPath.replace(/[\\/]$/, '')}/${name}`;
+  };
+
+  const loadDirectory = useCallback(async (path, announce = true) => {
+    if (children[path]) return children[path];
+    setError('');
+    if (announce) setStatus(`Loading ${path}.`);
+    try {
+      const response = await axios.get(`${host}/project/list`, { params: { path } });
+      const nextEntries = Array.isArray(response.data?.entries) ? response.data.entries : [];
+      setChildren((current) => ({ ...current, [path]: nextEntries }));
+      if (announce) setStatus(`${response.data?.path || path}: ${nextEntries.length} items.`);
+      return nextEntries;
+    } catch (err) {
+      const message = err?.response?.data?.error || err?.message || 'Unable to load project directory.';
+      setError(message);
+      setStatus('Unable to load project directory.');
+      return [];
+    }
+  }, [children, host]);
+
+  useEffect(() => {
+    let active = true;
+    setStatus('Loading project.');
+    axios.get(`${host}/project/list`, { params: { path: '.' } }).then((response) => {
+      if (!active) return;
+      const nextEntries = Array.isArray(response.data?.entries) ? response.data.entries : [];
+      setRootEntries(nextEntries);
+      setChildren((current) => ({ ...current, '.': nextEntries }));
+      setError('');
+      setStatus(`${response.data?.path || '.'}: ${nextEntries.length} items.`);
+    }).catch((err) => {
+      if (!active) return;
+      const message = err?.response?.data?.error || err?.message || 'Unable to load project directory.';
+      setRootEntries([]);
+      setError(message);
+      setStatus('Unable to load project directory.');
+    });
+    return () => { active = false; };
+  }, [host]);
 
   useEffect(() => {
     if (!openedFile) return undefined;
@@ -31,53 +80,24 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openedFile]);
 
-  const loadDirectory = useCallback(async (path) => {
-    setStatus(`Loading ${path}.`);
-    setError('');
-    try {
-      const response = await axios.get(`${host}/project/list`, { params: { path } });
-      const nextEntries = Array.isArray(response.data?.entries) ? response.data.entries : [];
-      setEntries(nextEntries);
-      setCurrentPath(response.data?.path || path || '.');
-      setSelectedIndex(0);
-      setStatus(`${response.data?.path || path}: ${nextEntries.length} items.`);
-    } catch (err) {
-      const message = err?.response?.data?.error || err?.message || 'Unable to load project directory.';
-      setError(message);
-      setEntries([]);
-      setStatus('Unable to load project directory.');
+  const toggleDirectory = async (path, name) => {
+    const nextExpanded = new Set(expanded);
+    if (nextExpanded.has(path)) {
+      nextExpanded.delete(path);
+      setExpanded(nextExpanded);
+      setActivePath(path);
+      setStatus(`${name} collapsed.`);
+      return;
     }
-  }, [host]);
-
-  useEffect(() => {
-    loadDirectory('.');
-  }, [loadDirectory]);
-
-  useEffect(() => {
-    // Do not steal initial application focus from the message field while the
-    // project directory loads. If the user is already navigating the project
-    // list, keep the active item synchronized with the selected index.
-    const activeElement = document.activeElement;
-    if (!listRef.current?.contains(activeElement)) return;
-    const option = listRef.current?.querySelector('[data-project-entry="active"]');
-    option?.focus();
-  }, [entries, selectedIndex]);
-
-  const entryPath = (entry) => {
-    const name = entry?.name || entry?.path || '';
-    if (!name) return '';
-    if (entry?.path) return entry.path;
-    if (!currentPath || currentPath === '.') return name;
-    return `${currentPath.replace(/[\\/]$/, '')}/${name}`;
+    await loadDirectory(path);
+    nextExpanded.add(path);
+    setExpanded(nextExpanded);
+    setActivePath(path);
+    setStatus(`${name} expanded.`);
   };
 
-  const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir;
-
-  const openFile = async (entry) => {
-    if (!entry || isDirectory(entry)) return;
-    const path = entryPath(entry);
-    if (!path) return;
-    setStatus(`Opening ${entry.name || path}.`);
+  const openFile = async (entry, path) => {
+    setStatus(`Opening ${entryName(entry)}.`);
     setError('');
     try {
       const response = await axios.get(`${host}/project/read`, { params: { path } });
@@ -85,7 +105,8 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       const file = { path: response.data?.path || path, content };
       setOpenedFile(file);
       onFileOpened?.(file);
-      setStatus(`Opened ${entry.name || path}. This does not send the file to the agent.`);
+      setActivePath(path);
+      setStatus(`Opened ${entryName(entry)}. This does not send the file to the agent.`);
     } catch (err) {
       const message = err?.response?.data?.error || err?.message || 'Unable to read file.';
       setError(message);
@@ -93,20 +114,19 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     }
   };
 
-  const toggleFile = (entry) => {
-    if (!entry || isDirectory(entry)) return;
-    const path = entryPath(entry);
+  const toggleFile = (entry, path) => {
     setSelectedFiles((current) => {
       const next = new Set(current);
       if (next.has(path)) {
         next.delete(path);
-        setStatus(`${entry.name || path} removed from agent selection.`);
+        setStatus(`${entryName(entry)} removed from agent selection.`);
       } else {
         next.add(path);
-        setStatus(`${entry.name || path} selected for the agent.`);
+        setStatus(`${entryName(entry)} selected for the agent.`);
       }
       return next;
     });
+    setActivePath(path);
   };
 
   const useSelectedFiles = async () => {
@@ -115,17 +135,13 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
       setStatus('No files are selected for the agent.');
       return;
     }
-
     setStatus(`Reading ${paths.length} selected ${paths.length === 1 ? 'file' : 'files'} for the agent.`);
     setError('');
     try {
       const files = [];
       for (const path of paths) {
         const response = await axios.get(`${host}/project/read`, { params: { path } });
-        files.push({
-          path: response.data?.path || path,
-          content: response.data?.contents ?? response.data?.content ?? '',
-        });
+        files.push({ path: response.data?.path || path, content: response.data?.contents ?? response.data?.content ?? '' });
       }
       onUseSelectedFiles?.(files);
       setStatus(`${files.length} ${files.length === 1 ? 'file' : 'files'} supplied to the agent.`);
@@ -136,94 +152,122 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
     }
   };
 
-  const goUp = async () => {
-    if (currentPath === '.' || currentPath === '' || currentPath === '/') {
-      setStatus('Already at the project root.');
-      return;
+  const visibleItems = [];
+  const addVisible = (entries, parentPath = '.', level = 1) => {
+    for (const entry of entries) {
+      const path = entryPath(entry, parentPath);
+      visibleItems.push({ entry, path, parentPath, level, directory: isDirectory(entry) });
+      if (isDirectory(entry) && expanded.has(path) && children[path]) {
+        addVisible(children[path], path, level + 1);
+      }
     }
-    const normalized = currentPath.replace(/\\/g, '/').replace(/\/$/, '');
-    const parts = normalized.split('/').filter(Boolean);
-    parts.pop();
-    await loadDirectory(parts.length ? parts.join('/') : '.');
+  };
+  addVisible(rootEntries);
+
+  const moveActive = (offset) => {
+    if (!visibleItems.length) return;
+    const index = Math.max(0, visibleItems.findIndex((item) => item.path === activePath));
+    const next = Math.max(0, Math.min(index + offset, visibleItems.length - 1));
+    setActivePath(visibleItems[next].path);
+    window.setTimeout(() => treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(visibleItems[next].path)}"]`)?.focus(), 0);
   };
 
-  const handleKeyDown = async (event, index) => {
-    if (event.target !== event.currentTarget) return;
-
+  const handleTreeKeyDown = async (event, item) => {
+    const index = visibleItems.findIndex((visible) => visible.path === item.path);
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      setSelectedIndex(Math.min(index + 1, entries.length - 1));
+      moveActive(1);
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      setSelectedIndex(Math.max(index - 1, 0));
+      moveActive(-1);
     } else if (event.key === 'Home') {
       event.preventDefault();
-      setSelectedIndex(0);
+      if (visibleItems[0]) {
+        setActivePath(visibleItems[0].path);
+        treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(visibleItems[0].path)}"]`)?.focus();
+      }
     } else if (event.key === 'End') {
       event.preventDefault();
-      setSelectedIndex(Math.max(entries.length - 1, 0));
-    } else if (event.key === 'Enter') {
+      const last = visibleItems[visibleItems.length - 1];
+      if (last) {
+        setActivePath(last.path);
+        treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(last.path)}"]`)?.focus();
+      }
+    } else if (item.directory && event.key === 'ArrowRight') {
       event.preventDefault();
-      if (isDirectory(entries[index])) await loadDirectory(entryPath(entries[index]));
-      else await openFile(entries[index]);
-    } else if (event.key === ' ') {
+      if (!expanded.has(item.path)) await toggleDirectory(item.path, entryName(item.entry));
+      else if (children[item.path]?.length) {
+        const firstChild = visibleItems[index + 1];
+        if (firstChild) {
+          setActivePath(firstChild.path);
+          treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(firstChild.path)}"]`)?.focus();
+        }
+      }
+    } else if (item.directory && event.key === 'ArrowLeft') {
       event.preventDefault();
-      if (!isDirectory(entries[index])) toggleFile(entries[index]);
-    } else if (event.key === 'Backspace') {
+      if (expanded.has(item.path)) {
+        await toggleDirectory(item.path, entryName(item.entry));
+      } else if (item.parentPath !== '.') {
+        setActivePath(item.parentPath);
+        treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(item.parentPath)}"]`)?.focus();
+      }
+    } else if (item.directory && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
-      await goUp();
+      await toggleDirectory(item.path, entryName(item.entry));
+    } else if (!item.directory && event.key === 'Enter') {
+      event.preventDefault();
+      await openFile(item.entry, item.path);
     }
   };
 
   return (
     <section className="project-explorer" aria-labelledby="project-explorer-heading">
       <h2 id="project-explorer-heading">Project</h2>
-      <p className="project-path" aria-label="Current project directory">{currentPath || '.'}</p>
+      <p className="project-path" aria-label="Current project directory">.</p>
       <div className="project-actions">
-        <button type="button" onClick={goUp} disabled={currentPath === '.'}>Up</button>
-        <button type="button" onClick={() => loadDirectory(currentPath || '.')}>Refresh</button>
+        <button type="button" onClick={() => { setExpanded(new Set()); setActivePath(null); setStatus('Project tree collapsed.'); }}>Collapse all</button>
+        <button type="button" onClick={async () => {
+          setChildren({});
+          const entries = await loadDirectory('.', true);
+          setRootEntries(entries);
+          setExpanded(new Set());
+          setActivePath(null);
+        }}>Refresh</button>
         <button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>
           Use selected files with agent ({selectedFiles.size})
         </button>
       </div>
-      <p id="project-selection-help">Check files to supply their contents to the agent. Opening a file only previews it.</p>
-      <div
-        ref={listRef}
-        role="list"
-        aria-label="Project files and directories"
-        aria-describedby="project-selection-help"
-        className="project-list"
-      >
-        {entries.map((entry, index) => {
-          const directory = isDirectory(entry);
-          const path = entryPath(entry);
-          const checked = selectedFiles.has(path);
-          const label = `${entry.name || entry.path}${directory ? ', directory' : ', file'}`;
+      <p id="project-selection-help">Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, and Enter or Space toggles a folder. Check files to supply their contents to the agent.</p>
+      <div ref={treeRef} role="tree" aria-label="Project files and directories" aria-describedby="project-selection-help" className="project-list">
+        {visibleItems.map((item) => {
+          const { entry, path, level, directory } = item;
+          const name = entryName(entry);
+          const selected = selectedFiles.has(path);
+          const isActive = activePath === path;
           return (
             <div
-              key={entry.path || entry.name || index}
-              role="listitem"
-              tabIndex={index === selectedIndex ? 0 : -1}
-              aria-label={label}
-              data-project-entry={index === selectedIndex ? 'active' : undefined}
-              onKeyDown={(event) => handleKeyDown(event, index)}
-              onFocus={() => setSelectedIndex(index)}
+              key={path}
+              role="treeitem"
+              tabIndex={isActive || (!activePath && visibleItems[0]?.path === path) ? 0 : -1}
+              aria-level={level}
+              aria-expanded={directory ? expanded.has(path) : undefined}
+              aria-selected={isActive}
+              aria-label={directory ? `${name}, ${expanded.has(path) ? 'expanded' : 'collapsed'}, directory` : `${name}, file`}
+              data-tree-path={path}
+              onFocus={() => setActivePath(path)}
+              onKeyDown={(event) => handleTreeKeyDown(event, item)}
               className="project-entry"
+              style={{ paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` }}
             >
               {directory ? (
-                <button type="button" onClick={() => loadDirectory(path)} aria-label={`Open directory ${entry.name || path}`}>
-                  <span aria-hidden="true">[DIR]</span> {entry.name || path}
+                <button type="button" onClick={() => toggleDirectory(path, name)} aria-label={`${expanded.has(path) ? 'Collapse' : 'Expand'} ${name}`}>
+                  <span aria-hidden="true">{expanded.has(path) ? '▾' : '▸'}</span>{' '}{name}
                 </button>
               ) : (
                 <>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleFile(entry)}
-                    aria-label={`Select ${entry.name || path} for the agent`}
-                  />{' '}
-                  <button type="button" onClick={() => openFile(entry)} aria-label={`Open ${entry.name || path}`}>
-                    <span aria-hidden="true">[FILE]</span> {entry.name || path}
+                  <input type="checkbox" checked={selected} onChange={() => toggleFile(entry, path)} aria-label={`Select ${name} for the agent`} />{' '}
+                  <button type="button" onClick={() => openFile(entry, path)} aria-label={`Open ${name}`}>
+                    <span aria-hidden="true">[FILE]</span> {name}
                   </button>
                 </>
               )}
@@ -231,27 +275,14 @@ export default function ProjectExplorer({ host, onFileOpened, onUseSelectedFiles
           );
         })}
       </div>
-      {entries.length === 0 && !error && <p className="project-empty" aria-live="polite">No entries.</p>}
+      {visibleItems.length === 0 && !error && <p className="project-empty" aria-live="polite">No entries.</p>}
       {openedFile && (
-        <div
-          className="confirmation-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setOpenedFile(null);
-          }}
-        >
-          <section
-            className="confirmation-dialog file-preview-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="project-file-preview-heading"
-          >
+        <div className="confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpenedFile(null); }}>
+          <section className="confirmation-dialog file-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="project-file-preview-heading">
             <h3 id="project-file-preview-heading">File: {openedFile.path}</h3>
             <pre aria-label={`Contents of ${openedFile.path}`}>{openedFile.content}</pre>
             <div className="confirmation-dialog-actions">
-              <button ref={previewCloseRef} type="button" onClick={() => setOpenedFile(null)}>
-                Close
-              </button>
+              <button ref={previewCloseRef} type="button" onClick={() => setOpenedFile(null)}>Close</button>
             </div>
           </section>
         </div>
