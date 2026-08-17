@@ -6,13 +6,17 @@ import React, { useRef, useState } from 'react';
  * mounted — only visibility toggles via the `hidden` attribute — so panel
  * state (file browser position, terminal history) survives tab switches.
  */
-export default function WorkspaceTabs({ panels, ariaLabel }) {
-  const [activeId, setActiveId] = useState(panels[0]?.id);
+export default function WorkspaceTabs({ panels, ariaLabel, activePanelId, onActivePanelChange }) {
+  const [internalActiveId, setInternalActiveId] = useState(panels[0]?.id);
+  const activeId = activePanelId ?? internalActiveId;
   const tabRefs = useRef({});
 
-  const activate = (id) => {
-    setActiveId(id);
-    tabRefs.current[id]?.focus();
+  const activate = (id, { focusTab = true } = {}) => {
+    if (onActivePanelChange) onActivePanelChange(id);
+    else setInternalActiveId(id);
+    if (focusTab) {
+      window.setTimeout(() => tabRefs.current[id]?.focus(), 0);
+    }
   };
 
   const handleKeyDown = (event, index) => {
