@@ -36,9 +36,12 @@ from tools import (
     DEFAULT_TOOL_TIMEOUT,
     GIT_CONFIRM_TOOL_NAMES,
     WRITE_TOOL_NAMES,
+    add_allowed_command,
+    get_allowed_commands,
     is_command_allowed,
     list_files,
     read_file,
+    remove_allowed_command,
     run_command,
 )  # noqa: F401
 
@@ -159,6 +162,45 @@ def project_root():
         return {"error": f"Could not save project path: {exc}"}, 500
 
     return {"path": str(root)}
+
+
+@app.route("/allowed-commands", methods=["GET", "POST"])
+def allowed_commands():
+    """List or add allowed terminal command prefixes.
+
+    GET returns the current allowlist used by run_command().
+    POST adds a prefix (JSON body: {"command": "wsl"} or {"prefix": "..."}).
+    The allowlist is the same authoritative list enforced by the terminal
+    tool; changes are persisted in the application configuration file.
+    """
+
+    if request.method == "GET":
+        return {"commands": get_allowed_commands()}
+
+    data = request.get_json(silent=True) or {}
+    prefix = str(data.get("command") or data.get("prefix") or "").strip()
+    try:
+        commands = add_allowed_command(prefix)
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+    except OSError as exc:
+        return {"error": f"Could not save allowed commands: {exc}"}, 500
+
+    return {"commands": commands, "added": prefix}
+
+
+@app.route("/allowed-commands/<path:command>", methods=["DELETE"])
+def allowed_commands_delete(command):
+    """Remove a command prefix from the allowlist and persist the change."""
+
+    try:
+        commands = remove_allowed_command(command)
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+    except OSError as exc:
+        return {"error": f"Could not save allowed commands: {exc}"}, 500
+
+    return {"commands": commands, "removed": command}
 
 
 @app.route("/providers/<name>/models", methods=["GET"])

@@ -435,3 +435,49 @@ def test_confirm_endpoint_ignores_client_supplied_tool_and_args(client, monkeypa
     finally:
         app.WRITE_TOOL_NAMES.discard("fake_write")
         app.WRITE_TOOL_NAMES.discard("other_tool")
+
+
+def test_allowed_commands_get_returns_list(client):
+    response = client.get("/allowed-commands")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "commands" in data
+    assert isinstance(data["commands"], list)
+    assert "wsl" in data["commands"]
+    assert "git status" in data["commands"]
+
+
+def test_allowed_commands_add_and_remove(client, tmp_path, monkeypatch):
+    import security
+    import tools
+
+    config_dir = tmp_path / "config"
+    config_file = config_dir / "config.json"
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+    tools.ALLOWED_COMMAND_PREFIXES[:] = list(tools.DEFAULT_ALLOWED_COMMAND_PREFIXES)
+
+    response = client.post("/allowed-commands", json={"command": "echo"})
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "echo" in data["commands"]
+
+    response = client.delete("/allowed-commands/echo")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "echo" not in data["commands"]
+
+
+def test_allowed_commands_rejects_dangerous_prefix(client, tmp_path, monkeypatch):
+    import security
+    import tools
+
+    config_dir = tmp_path / "config"
+    config_file = config_dir / "config.json"
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+    tools.ALLOWED_COMMAND_PREFIXES[:] = list(tools.DEFAULT_ALLOWED_COMMAND_PREFIXES)
+
+    response = client.post("/allowed-commands", json={"command": "rm"})
+    assert response.status_code == 400
+    assert "error" in response.get_json()

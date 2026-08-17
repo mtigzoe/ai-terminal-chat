@@ -94,11 +94,22 @@ def get_project_root() -> Path:
     return PROJECT_ROOT.resolve()
 
 
-def _persist_project_root(root: Path) -> None:
-    """Persist the selected project root atomically outside the project."""
+def _load_config() -> dict:
+    """Load the full application configuration file, or an empty dict."""
+
+    try:
+        data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
+
+
+def _persist_config(payload: dict) -> None:
+    """Persist the full configuration dict atomically outside the project."""
 
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"project_root": str(root)}
 
     fd, temp_name = tempfile.mkstemp(
         prefix="config-",
@@ -117,6 +128,18 @@ def _persist_project_root(root: Path) -> None:
         except OSError:
             pass
         raise
+
+
+def _persist_project_root(root: Path) -> None:
+    """Persist the selected project root atomically outside the project.
+
+    Merges into any existing configuration so other keys (for example
+    allowed_commands) are preserved.
+    """
+
+    payload = _load_config()
+    payload["project_root"] = str(root)
+    _persist_config(payload)
 
 
 def _choose_project_root() -> Path:
