@@ -1,174 +1,253 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { getAllowedReadPaths, getProjectRoot, isReadAllowed, safePath } from "./security.ts";
+// Git inspection and confirmation-required Git operations.
+//
+// Mirrors the Git portion of server-python/tools.py. Read-only operations
+// never mutate repository state. gitAdd() uses an explicit preview/confirm
+// flag and stages exactly one non-sensitive file.
 
-const GIT_STATUS_TIMEOUT = 10;
-const GIT_DIFF_TIMEOUT = 10;
-const GIT_LOG_TIMEOUT = 10;
-const GIT_BRANCH_TIMEOUT = 10;
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath } from "./security.ts";
+
+const execFileAsync = promisify(execFile);
+
+const GIT_STATUS_TIMEOUT_MS = 10_000;
+const GIT_DIFF_TIMEOUT_MS = 10_000;
+const GIT_LOG_TIMEOUT_MS = 10_000;
+const GIT_BRANCH_TIMEOUT_MS = 10_000;
+const GIT_ADD_TIMEOUT_MS = 15_000;
 
 const GIT_STATUS_MAX_CHARS = 20_000;
 const GIT_LOG_MAX_CHARS = 20_000;
 const GIT_BRANCH_MAX_CHARS = 20_000;
 const GIT_DIFF_MAX_CHARS = 50_000;
 
-function runGit(
-  args: string[],
-  timeout: number,
-  cwd?: string
-): { code: number; stdout: string; stderr: string } {
+function cap(value: string, limit: number): { value: string; truncated: boolean } {
+  return { value: value.slice(0, limit), truncated: value.length > limit };
+}
+
+function errorText(error: unknown): string {
+  const value = error as NodeJS.ErrnoException & { stderr?: string };
+  if (value.code === "ENOENT") return "git is not installed or not on PATH.";
+  if (value.stderr) return String(value.stderr).trim();
+  return value.message ?? String(error);
+}
+
+async function runGit(args: string[], timeout: number): Promise<{
+  code: number;
+  stdout: string;
+  stderr: string;
+}> {
   try {
-    const result = spawnSync("git", args, {
-      cwd: cwd || getProjectRoot(),
-      encoding: "utf-8",
-      timeout: timeout * 1000,
-      stdio: ["pipe", "pipe", "pipe"],
+    const result = await execFileAsync("git", args, {
+      cwd: getProjectRoot(),
+      shell: false,
+      timeout,
+      windowsHide: true,
+      maxBuffer: Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000),
+      encoding: "utf8",
     });
-    return {
-      code: result.status ?? 0,
-      stdout: result.stdout || "",
-      stderr: result.stderr || "",
+    return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+  } catch (error) {
+    const value = error as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      status?: number;
+      code?: number | string;
     };
-  } catch {
-    return { code: 1, stdout: "", stderr: "git command failed" };
+    if (value.code === "ENOENT") throw error;
+    if (value.code === "ETIMEDOUT" || value.killed) {
+      throw Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), {
+        code: "ETIMEDOUT",
+      });
+    }
+    return {
+      code: typeof value.code === "number" ? value.code : (value.status ?? 1),
+      stdout: String(value.stdout ?? ""),
+      stderr: String(value.stderr ?? ""),
+    };
   }
 }
 
-export function gitStatus(): Record<string, unknown> {
-  const result = runGit(
-    ["status", "--short", "--branch"],
-    GIT_STATUS_TIMEOUT
-  );
-
-  if (result.code === 127) return { error: "git is not installed or not on PATH." };
-  if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." };
-
-  const statusText = result.stdout || "";
-  const truncated = statusText.length > GIT_STATUS_MAX_CHARS;
-  const payload: Record<string, unknown> = {
-    status: statusText.slice(0, GIT_STATUS_MAX_CHARS),
-    truncated,
-  };
-  if (truncated) {
-    payload.truncation_note = `Status output was truncated to ${GIT_STATUS_MAX_CHARS} characters.`;
+export async function gitStatus(): Promise<Record<string, unknown>> {
+  try {
+    const result = await runGit(["status", "--short", "--branch"], GIT_STATUS_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." };
+    const status = cap(result.stdout, GIT_STATUS_MAX_CHARS);
+    const payload: Record<string, unknown> = { status: status.value, truncated: status.truncated };
+    if (status.truncated && !('error' in payload)) {
+      payload.truncation_note = `Status output was truncated to ${GIT_STATUS_MAX_CHARS} characters.`;
+    }
+    return payload;
+  } catch (error) {
+    return { error: errorText(error) };
   }
-  return payload;
 }
 
 /** Count files recorded in the current commit without changing repository state. */
-export function gitCommittedFileCount(): Record<string, unknown> {
-  const result = runGit(["ls-tree", "-r", "--name-only", "HEAD"], GIT_STATUS_TIMEOUT);
+export async function gitCommittedFileCount(): Promise<Record<string, unknown>> {
+  try {
+    const result = await runGit(
+      ["ls-tree", "-r", "--name-only", "HEAD"],
+      GIT_STATUS_TIMEOUT_MS,
+    );
 
-  if (result.code === 127) return { error: "git is not installed or not on PATH." };
-  if (result.code !== 0) {
+    if (result.code !== 0) {
+      return {
+        error:
+          result.stderr.trim() ||
+          "Could not count files in the current commit. The repository may not have a commit yet.",
+      };
+    }
+
     return {
-      error:
-        result.stderr.trim() ||
-        "Could not count files in the current commit. The repository may not have a commit yet.",
+      committed_files: result.stdout.split(/\r?\n/).filter(Boolean).length,
     };
+  } catch (error) {
+    return { error: errorText(error) };
   }
-
-  return {
-    committed_files: result.stdout.split(/\r?\n/).filter(Boolean).length,
-  };
 }
 
-export function gitDiff(
-  relPath = "",
-  staged = false
-): Record<string, unknown> {
+export async function gitDiff(path = "", staged = false): Promise<Record<string, unknown>> {
   const args = ["diff"];
   if (staged) args.push("--staged");
 
   const allowed = getAllowedReadPaths();
+
   if (allowed !== undefined) {
-    if (relPath) {
+    if (path) {
       try {
-        const filePath = safePath(relPath);
-        if (!isReadAllowed(relPath)) {
-          return { error: `Access denied: '${relPath}' is not selected for the agent.` };
+        const filePath = safePath(path);
+        if (!isReadAllowed(path)) {
+          return { error: `Access denied: '${path}' is not selected for the agent.` };
         }
-        args.push("--", path.relative(getProjectRoot(), filePath));
-      } catch (exc) {
-        return { error: String(exc) };
+        if (isSensitivePath(filePath)) {
+          return { error: `Refusing to inspect sensitive file: ${path}` };
+        }
+        const root = getProjectRoot();
+        const relativePath = filePath.slice(root.length).replace(/^[/\\]+/, "");
+        args.push("--", relativePath);
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
       }
     } else {
       const selected = [...allowed];
+
       if (selected.length === 0) {
         return { diff: "", truncated: false };
       }
+
       args.push("--", ...selected);
     }
-  } else if (relPath) {
+  } else if (path) {
+    let filePath: string;
     try {
-      const filePath = safePath(relPath);
-      args.push(path.relative(getProjectRoot(), filePath));
-    } catch (exc) {
-      return { error: String(exc) };
+      filePath = safePath(path);
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
     }
+
+    if (isSensitivePath(filePath)) {
+      return { error: `Refusing to inspect sensitive file: ${path}` };
+    }
+
+    const root = getProjectRoot();
+    const relativePath = filePath.slice(root.length).replace(/^[/\\]+/, "");
+    args.push("--", relativePath);
   }
 
-  const result = runGit(args, GIT_DIFF_TIMEOUT);
-
-  if (result.code === 127) return { error: "git is not installed or not on PATH." };
-  if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." };
-
-  const diffText = result.stdout || "";
-  const truncated = diffText.length > GIT_DIFF_MAX_CHARS;
-  const payload: Record<string, unknown> = {
-    diff: diffText.slice(0, GIT_DIFF_MAX_CHARS),
-    truncated,
-  };
-  if (truncated) {
-    payload.truncation_note = `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters.`;
-  }
-  return payload;
-}
-
-export function gitLog(maxCount = 10): Record<string, unknown> {
-  let count: number;
   try {
-    count = parseInt(String(maxCount), 10);
-  } catch {
-    return { error: "max_count must be a whole number." };
+    const result = await runGit(args, GIT_DIFF_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." };
+    const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS);
+    const payload: Record<string, unknown> = { diff: diff.value, truncated: diff.truncated };
+    if (diff.truncated && !('error' in payload)) {
+      payload.truncation_note = `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.`;
+    }
+    return payload;
+  } catch (error) {
+    return { error: errorText(error) };
   }
-  count = Math.max(1, Math.min(count, 100));
-
-  const result = runGit(
-    ["log", `-${count}`, "--oneline", "--decorate"],
-    GIT_LOG_TIMEOUT
-  );
-
-  if (result.code === 127) return { error: "git is not installed or not on PATH." };
-  if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." };
-
-  const logText = result.stdout || "";
-  const truncated = logText.length > GIT_LOG_MAX_CHARS;
-  const payload: Record<string, unknown> = {
-    log: logText.slice(0, GIT_LOG_MAX_CHARS),
-    truncated,
-  };
-  if (truncated) {
-    payload.truncation_note = `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.`;
-  }
-  return payload;
 }
 
-export function gitBranch(): Record<string, unknown> {
-  const result = runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT);
+export async function gitLog(maxCount = 10): Promise<Record<string, unknown>> {
+  const numeric = Number(maxCount);
+  if (!Number.isInteger(numeric)) return { error: "max_count must be a whole number." };
+  const count = Math.max(1, Math.min(numeric, 100));
 
-  if (result.code === 127) return { error: "git is not installed or not on PATH." };
-  if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." };
-
-  const branchesText = result.stdout || "";
-  const truncated = branchesText.length > GIT_BRANCH_MAX_CHARS;
-  const payload: Record<string, unknown> = {
-    branches: branchesText.slice(0, GIT_BRANCH_MAX_CHARS),
-    truncated,
-  };
-  if (truncated) {
-    payload.truncation_note = `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.`;
+  try {
+    const result = await runGit(["log", `-${count}`, "--oneline", "--decorate"], GIT_LOG_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." };
+    const log = cap(result.stdout, GIT_LOG_MAX_CHARS);
+    const payload: Record<string, unknown> = { log: log.value, truncated: log.truncated };
+    if (log.truncated && !('error' in payload)) {
+      payload.truncation_note = `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.`;
+    }
+    return payload;
+  } catch (error) {
+    return { error: errorText(error) };
   }
-  return payload;
+}
+
+export async function gitBranch(): Promise<Record<string, unknown>> {
+  try {
+    const result = await runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." };
+    const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS);
+    const payload: Record<string, unknown> = { branches: branches.value, truncated: branches.truncated };
+    if (branches.truncated && !('error' in payload)) {
+      payload.truncation_note = `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.`;
+    }
+    return payload;
+  } catch (error) {
+    return { error: errorText(error) };
+  }
+}
+
+export async function gitAdd(path: string, confirm = false): Promise<Record<string, unknown>> {
+  let filePath: string;
+  try {
+    filePath = safePath(path);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${path}` };
+
+  try {
+    const repository = await runGit(["rev-parse", "--show-toplevel"], GIT_ADD_TIMEOUT_MS);
+    if (repository.code !== 0) {
+      return { error: "git_add requires the project to be inside a git repository." };
+    }
+  } catch (error) {
+    return { error: errorText(error) };
+  }
+
+  const { statSync } = await import("node:fs");
+  try {
+    if (!statSync(filePath).isFile()) return { error: "git_add can only stage a single file, not a directory." };
+  } catch {
+    return { error: `File does not exist: ${path}` };
+  }
+
+  const root = getProjectRoot();
+  const relativePath = filePath.slice(root.length).replace(/^[/\\]+/, "");
+
+  if (!confirm) {
+    return {
+      requires_confirmation: true,
+      path: relativePath,
+      message: `'${relativePath}' was NOT staged. Ask the user to explicitly confirm it, then call git_add again with confirm=true.`,
+    };
+  }
+
+  try {
+    const result = await runGit(["add", "--", relativePath], GIT_ADD_TIMEOUT_MS);
+    if (result.code !== 0) {
+      return { error: `git add failed: ${result.stderr.trim() || result.stdout.trim()}` };
+    }
+    return { path: relativePath, staged: true };
+  } catch (error) {
+    return { error: `Could not stage file: ${errorText(error)}` };
+  }
 }
