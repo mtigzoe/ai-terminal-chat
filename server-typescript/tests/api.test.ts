@@ -62,6 +62,14 @@ describe("POST /providers/select", () => {
     const data = await res.json();
     expect(data.name).toBe("ollama");
     expect(data.model).toBe("llama3.1");
+
+    const current = await createTestApp().request("http://localhost/providers?probe=0");
+    expect(current.status).toBe(200);
+    expect(await current.json()).toMatchObject({
+      name: "ollama",
+      model: "llama3.1",
+      current: "ollama",
+    });
   });
 });
 
@@ -158,6 +166,15 @@ describe("GET /project/read", () => {
     expect(res.status).toBe(404);
     const data = await res.json();
     expect(data.error).toBeDefined();
+  });
+
+  it("rejects absolute paths, including paths inside the project", async () => {
+    const absolutePath = encodeURIComponent(process.cwd());
+    const res = await createTestApp().request(
+      `http://localhost/project/read?path=${absolutePath}`
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain("Absolute paths are not allowed");
   });
 });
 
@@ -274,6 +291,11 @@ describe("POST /chat", () => {
 
   it("processes a chat message with stub provider", async () => {
     process.env.PROVIDER = "gemini";
+    await createTestApp().request("http://localhost/providers/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "gemini" }),
+    });
     const res = await createTestApp().request("http://localhost/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -283,6 +305,45 @@ describe("POST /chat", () => {
     const data = await res.json();
     expect(data.request_id).toBeDefined();
   }, 10000);
+});
+
+describe("POST /stream", () => {
+  beforeEach(async () => {
+    process.env.PROVIDER = "gemini";
+    await createTestApp().request("http://localhost/providers/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "gemini" }),
+    });
+  });
+
+  it("uses Flask-compatible plain text when NDJSON was not requested", async () => {
+    const res = await createTestApp().request("http://localhost/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat: "Hello", history: [] }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    expect(await res.text()).toContain("[stub] Hello from");
+  });
+
+  it("returns NDJSON events for the React client's negotiated stream", async () => {
+    const res = await createTestApp().request("http://localhost/stream", {
+      method: "POST",
+      headers: {
+        Accept: "application/x-ndjson, text/plain",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ chat: "Hello", history: [] }),
+    });
+    expect(res.headers.get("content-type")).toContain("application/x-ndjson");
+    const events = (await res.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.some((event) => event.type === "final")).toBe(true);
+  });
 });
 
 describe("POST /cancel/:request_id", () => {

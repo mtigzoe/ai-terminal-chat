@@ -161,7 +161,7 @@ export async function buildProviderStatus(
   if (probe) {
     if (provider.capabilities.local) {
       try {
-        void provider.refreshCapabilities();
+        await provider.refreshCapabilities();
         status.capabilities = provider.capabilities;
       } catch {
         // ignore
