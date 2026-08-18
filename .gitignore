@@ -10,3 +10,6 @@
 
 # Frontend dependencies
 /client-react/node_modules/
+
+# TypeScript dependencies
+server-typescript/node_modules/
