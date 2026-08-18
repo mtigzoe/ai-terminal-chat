@@ -12,8 +12,9 @@
 // base URLs — server-python/providers.py: load_provider_config) are
 // migrated in providers.ts (Phase 4), which will reuse the helpers here.
 
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
 // .env loading (mirrors server-python/app.py: `load_dotenv()`)
@@ -36,6 +37,67 @@ export function loadEnvFile(path = ".env"): void {
     return;
   }
   process.loadEnvFile(resolved);
+}
+
+// ---------------------------------------------------------------------------
+// Shared application configuration persistence
+// ---------------------------------------------------------------------------
+
+export type AppConfig = Record<string, unknown>;
+
+function defaultConfigFilePath(): string {
+  return join(homedir(), ".ai-terminal-chat", "config.json");
+}
+
+/**
+ * Load the shared application configuration object.
+ *
+ * Invalid, missing, or non-object JSON is treated as an empty configuration,
+ * matching the Python security/config behavior. Callers can provide a custom
+ * path in tests without changing process-global state.
+ */
+export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConfig {
+  try {
+    const raw = readFileSync(configFilePath, "utf8");
+    const data = JSON.parse(raw) as unknown;
+    if (data !== null && typeof data === "object" && !Array.isArray(data)) {
+      return data as AppConfig;
+    }
+  } catch {
+    // Missing, unreadable, or invalid JSON: use an empty configuration.
+  }
+  return {};
+}
+
+/**
+ * Persist the shared application configuration atomically.
+ *
+ * The destination directory is created as needed and the temporary file is
+ * replaced atomically, preserving other configuration keys when callers use
+ * loadAppConfig() -> mutate -> persistAppConfig().
+ */
+export function persistAppConfig(
+  payload: AppConfig,
+  configFilePath = defaultConfigFilePath(),
+): void {
+  const directory = dirname(configFilePath);
+  mkdirSync(directory, { recursive: true });
+  const tempPath = join(
+    directory,
+    `config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`,
+  );
+
+  try {
+    writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    renameSync(tempPath, configFilePath);
+  } catch (err) {
+    try {
+      rmSync(tempPath, { force: true });
+    } catch {
+      // Preserve the original persistence error.
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -93,12 +155,8 @@ export interface ServerConfig {
   /** TCP port the HTTP server listens on. `PORT` env var, default 9000 — matches client-react's default `VITE_API_URL` of http://localhost:9000. */
   port: number;
   /**
-   * Host/interface the HTTP server binds to. Always loopback-only,
+   * Host/interface the server binds to. Always loopback-only,
    * matching server-python's hardcoded `app.run(host="127.0.0.1", ...)`.
-   * Deliberately not environment-configurable: this backend holds
-   * provider API keys and exposes unauthenticated filesystem/terminal
-   * tools, so widening the bind address (e.g. to 0.0.0.0) must be a
-   * conscious code change, not an accidental env var.
    */
   host: string;
 }
@@ -106,13 +164,7 @@ export interface ServerConfig {
 const DEFAULT_PORT = 9000;
 export const SERVER_HOST = "127.0.0.1";
 
-/**
- * Build the server configuration from the current environment.
- *
- * Call `loadEnvFile()` first if a `.env` file should be consulted — kept
- * as a separate step so tests can set `process.env` directly without
- * touching the filesystem.
- */
+/** Build the server configuration from the current environment. */
 export function loadServerConfig(): ServerConfig {
   return {
     port: getEnvInt("PORT", DEFAULT_PORT),
@@ -132,8 +184,7 @@ const DEFAULT_PROVIDER_NAME = "gemini";
  * Mirrors `os.getenv("PROVIDER", "gemini").lower()`, used both by the
  * legacy provider factory in __init__.py and by providers.py:get_provider.
  * Returns the raw lowercased name; validating it against
- * `SUPPORTED_PROVIDERS` (types.ts) is providers.ts's job (Phase 4), since
- * an unrecognized name is a provider-selection error, not a config error.
+ * `SUPPORTED_PROVIDERS` (types.ts) is providers.ts's job (Phase 4).
  */
 export function getConfiguredProviderName(): string {
   return getEnvString("PROVIDER", DEFAULT_PROVIDER_NAME).toLowerCase();
