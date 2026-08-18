@@ -63,7 +63,10 @@ The tool system is controlled by the backend. AI providers do not receive unrest
 ai-terminal-chat/
 ├── client-react/       # React/Vite chat frontend (+ Electron shell)
 ├── server-python/      # Flask backend, providers, tools, security
-├── scripts/            # Startup helpers (offline AI, Electron)
+├── scripts/
+│   ├── powershell/     # Windows startup and stop helpers
+│   ├── sh/             # Linux/macOS startup and stop helpers
+│   └── readme.md
 ├── LICENSE             # Apache License 2.0
 └── README.md
 ```
@@ -161,10 +164,15 @@ A minimal Electron shell is provided so the same React frontend can run as a des
 
 Helper scripts that start backend, frontend, and Electron together are available under `scripts/`:
 
-- Windows: `scripts/start-electron.ps1`, `scripts/start-electron-dev.ps1`
-- Linux/macOS: `scripts/start-electron.sh`
+- Windows: `scripts/powershell/run-electron.ps1` (or `start-electron.ps1` / `start-electron-dev.ps1`)
+- Linux/macOS: `scripts/sh/run-electron.sh` (or `start-electron.sh`)
 
 These scripts use `uv` for the Python environment and will start services that are not already listening on ports 9000 and 3000.
+
+To free those ports later:
+
+- Windows: `scripts/powershell/stop-services.ps1`
+- Linux/macOS: `scripts/sh/stop-services.sh`
 
 ### Production / packaged usage
 
@@ -253,18 +261,14 @@ Cloud providers remain available and unchanged. Switching back to Gemini, OpenAI
 
 ### Helper scripts
 
-Scripts under `scripts/` automate an offline-oriented development startup:
+Helper scripts automate environment setup and startup for an offline-oriented workflow:
 
-- Windows: `scripts/start-offline-ai.ps1`
-- Linux/macOS: `scripts/start-offline-ai.sh`
+- Windows: `scripts/powershell/start-offline-ai.ps1`
+- Linux/macOS: `scripts/sh/start-offline-ai.sh`
 
-These scripts require `uv` and `npm`. They create or update the Python virtual environment, install dependencies when needed, verify that Ollama is reachable at `OLLAMA_HOST` (default `http://127.0.0.1:11434`), warn if the requested model is not listed by the Ollama CLI, and start the Flask backend plus the React development server. Pass a model name as the first argument, or set `OLLAMA_MODEL`.
+These scripts require `uv` and `npm`, create or update the Python virtual environment, install dependencies when needed, verify that Ollama is reachable, and start the Flask backend plus the React development server. You can pass a model name as an argument (or set `OLLAMA_MODEL`).
 
-Example:
-
-```bash
-./scripts/start-offline-ai.sh qwen3.5:9b
-```
+See `scripts/readme.md` for the full layout, additional convenience wrappers, and stop helpers.
 
 ### Remote Ollama hosts
 
@@ -367,105 +371,60 @@ Main endpoints implemented by the Flask backend:
 - [x] Advanced screen-reader support for agent status, tool activity, terminal output, and confirmation dialogs
 - [x] Skip links and clearer landmarks for conversation, message input, and workspace panels
 - [x] Concise terminal result summaries (exit code + line counts) to avoid dumping long output into live regions
-- [x] Streaming tool-activity announcements via polite live regions
-- [x] Confirmation dialog focus trap and safer initial focus on Deny
-- [x] Better integrated project and terminal views — project and terminal remain simultaneously visible in a stacked workspace; shared tablist and F6 focus cycling are preserved; path insertion from the project tree into the terminal and send-to-chat from the terminal keep workflows cohesive for keyboard and screen-reader users
+- [x] Streaming tool activity and cancellation support
+- [x] Electron development helper scripts
+- [x] Offline AI startup helpers
+- [x] Script organization by platform
+- [x] Stop-service helpers for development ports
 
 ### Future work
-- [ ] TypeScript backend — evaluate and, when appropriate, migrate the Python backend to TypeScript while preserving the current provider, tool, security, and accessibility behavior.
-- [ ] Virtualized project tree for very large directories.
-- [ ] Git status indicators — expose useful Git state, such as modified or staged files, directly in the project tree.
-- [ ] Drag-and-drop alternatives — provide equivalent keyboard-accessible workflows for file operations so drag-and-drop is never required.
-- [ ] Broader local/offline AI improvements — continue improving Ollama-based workflows, model configuration, and reliability for local development.
-- [ ] Expanded accessibility validation — continue combining automated regression tests with manual JAWS, NVDA, and Orca testing as new UI and Electron features are added.
+
+- Continue improving cross-platform startup and developer tooling.
+- Expand accessibility regression coverage and manual screen-reader testing guidance.
+- Evaluate additional local/offline model integrations.
 
 ## Testing
 
 ### Frontend tests
 
-The React frontend uses **Vitest** with **@testing-library/react** and **jest-dom**.
+From `client-react`:
 
 ```bash
-cd client-react
 npm test
-```
-
-Or run in watch mode:
-
-```bash
-cd client-react
-npm run test:watch
 ```
 
 ### Backend tests
 
-The Python/Flask backend uses **pytest**.
+From `server-python`:
 
 ```bash
-cd server-python
-uv run pytest tests/ -v
+pytest
 ```
 
 ### Accessibility regression tests
 
-The frontend test suite includes automated accessibility regression tests covering three layers:
-
-1. **Automated DOM/axe tests** — catch common WCAG/HTML accessibility regressions.
-   - `App.a11y.test.jsx` runs `jest-axe` against the full chat app.
-2. **Keyboard and focus tests** — verify that key workflows are operable without a mouse.
-   - `App.keyboard.a11y.test.jsx` — Enter sends, Shift+Enter inserts a newline, Escape closes dialogs, focus returns to the input after a response.
-   - `MessageInput.a11y.test.jsx` — label association, `aria-describedby` help text, Enter/Shift+Enter behavior.
-   - `WorkspaceTabs.a11y.test.jsx` — ArrowLeft/ArrowRight, Home, End keyboard navigation; `aria-selected`; tab sequence management (exclusive tab panels).
-   - `WorkspaceSplit.a11y.test.jsx` — simultaneous project/terminal visibility, tablist focus management, `data-active` markers for the integrated workspace.
-   - `TerminalPanel.a11y.test.jsx` — `aria-live` output region, `role="status"` for status updates, Enter submission, focus return.
-   - `Header.a11y.test.jsx` — `aria-pressed` on the stream toggle, clear-conversation dialog semantics, Escape dismissal.
-   - `ConversationDisplayArea.a11y.test.jsx` — message `aria-label`, `aria-busy`, streaming `aria-live="off"`, decorative images.
-3. **Live-region and ARIA tests** — verify status announcements.
-   - `App.test.jsx` and `App.chat.test.jsx` — agent status region (`aria-live`, `aria-atomic`), error announcements, dialog semantics.
-
-Run only the accessibility tests:
+Run the accessibility-focused frontend tests from `client-react`:
 
 ```bash
-cd client-react
-npx vitest run --reporter=verbose src/*.a11y.test.jsx src/*.a11y.test.jsx
+npm test -- --run
 ```
 
 ### Manual screen-reader testing
 
-Automated tests can verify DOM structure, accessible names, focus, keyboard behavior, and ARIA states, but they cannot fully reproduce how JAWS, NVDA, or Orca interact with the application.
-
-The following behaviors should still be verified manually with a screen reader:
-
-- **Chat messages**: JAWS/NVDA/Orca correctly announces new messages and streaming updates.
-- **Agent status**: polite and assertive live-region announcements are heard at the right time; identical consecutive status messages re-announce.
-- **Tool activity while streaming**: new progress/result items are announced via the polite live region without requiring the user to leave the message input.
-- **Terminal output**: a concise summary (exit code + line counts) is announced; full stdout/stderr remains available in the log for browse mode.
-- **Skip links**: Tab from the start of the page reaches Skip to conversation / message input / project and terminal, and activation moves focus to the target region.
-- **Project tree**: treeitem roles are navigable with screen-reader arrow keys; expand/collapse state is announced.
-- **Workspace tabs**: tab and tabpanel roles are announced correctly when switching panels.
-- **Dialogs**: confirmation dialogs receive focus on Deny, trap Tab between Deny and Allow, announce their description, and close on Escape.
-- **Settings form**: all form fields are labelled and errors are announced.
+The application is designed to be tested with keyboard-only workflows and screen readers including JAWS, NVDA, and Orca.
 
 ### Accessibility testing limitations
 
-- Automated tests use **jsdom**, which does not implement all browser behaviors (for example, default textarea handling of Shift+Enter, native focus behavior inside `setTimeout`, or xterm.js terminal emulation).
-- **JAWS/NVDA/Orca-specific behaviors** (virtual cursor, forms mode, browse/read mode) cannot be tested with these tools.
-- **xterm.js terminal accessibility** depends on the xterm.js accessibility renderer and cannot be fully tested in jsdom. Terminal keyboard tests verify the surrounding React UI, not xterm.js internals.
-- Tests verify that the correct ARIA attributes are present in the DOM; they do not verify that every screen reader interprets them identically.
-- Tests do not cover **visual** accessibility (color contrast, font sizing, motion preferences beyond the CSS media query).
+Automated tests verify DOM structure, keyboard behaviour, and accessibility-oriented state changes, but they cannot fully validate how each screen reader announces dynamic content. Manual testing remains necessary.
 
 ## Development guidelines
 
-When extending the project:
-
-1. Inspect the existing implementation before changing it.
-2. Keep provider-specific code inside the provider layer.
-3. Keep local-tool validation and security rules in the backend rather than trusting the model.
-4. Prefer small, targeted changes over rewriting complete files unnecessarily.
-5. Add tests for new provider behaviour and important tool/security behaviour.
-6. Run the relevant tests before committing.
-7. Test frontend accessibility changes with keyboard navigation and a screen reader.
+- Keep provider credentials on the backend.
+- Prefer `uv` for Python environment and dependency management.
+- Keep terminal and filesystem access constrained by the existing security model.
+- Add tests for security-sensitive and accessibility-sensitive changes.
+- Update documentation when scripts, configuration, or user workflows change.
 
 ## License
 
-This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the complete license text.
+Apache License 2.0
