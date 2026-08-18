@@ -111,3 +111,29 @@ def test_native_and_openai_urls_defaults():
     native, openai = native_and_openai_urls("")
     assert native == "http://localhost:11434"
     assert openai == "http://localhost:11434/v1"
+
+
+def test_ollama_refresh_capabilities_clears_notes_when_model_available():
+    """Configured model present and advertising tools → empty notes."""
+    provider = OllamaProvider(
+        base_url="http://localhost:11434/v1",
+        model="llama3.1",
+    )
+    tags = Mock(status_code=200)
+    tags.json.return_value = {"models": [{"name": "llama3.1:latest"}]}
+    show = Mock(status_code=200)
+    show.json.return_value = {"capabilities": ["completion", "tools"]}
+
+    def request_side_effect(method, url, **kwargs):
+        if str(url).endswith("/api/tags"):
+            return tags
+        if str(url).endswith("/api/show"):
+            return show
+        raise AssertionError(url)
+
+    with patch("ollama.requests.request", side_effect=request_side_effect):
+        caps = provider.refresh_capabilities()
+        assert provider.has_model("llama3.1") is True
+
+    assert caps.notes == ""
+    assert caps.tools is True
