@@ -1,7 +1,20 @@
-import { test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { join } from "node:path";
 
+import { __setProjectRootForTests, getProjectRoot } from "./security.js";
 import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus } from "./git.js";
+
+let originalProjectRoot: string;
+
+beforeEach(() => {
+  originalProjectRoot = getProjectRoot();
+  __setProjectRootForTests(process.cwd());
+});
+
+afterEach(() => {
+  __setProjectRootForTests(originalProjectRoot);
+});
 
 test("gitStatus returns structured status output", async () => {
   const result = await gitStatus();
@@ -39,6 +52,6 @@ test("gitAdd previews staging and does not mutate without confirmation", async (
   assert.equal("requires_confirmation" in result, true);
   if ("requires_confirmation" in result) {
     assert.equal(result.requires_confirmation, true);
-    assert.equal(result.path, "src/git.test.ts");
+    assert.equal(result.path, join("src", "git.test.ts"));
   }
 });
