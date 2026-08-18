@@ -231,11 +231,14 @@ function commandBlocked(command: string): string | null {
 }
 
 function executableForCommand(args: string[]): { file: string; args: string[] } {
-  const executable = args[0];
-  if (executable && process.platform === "win32" && ["ls", "dir"].includes(executable.toLowerCase())) {
-    return { file: "cmd", args: ["/c", "dir", ...args.slice(1)] };
+  const executable = args[0] ?? "";
+  if (process.platform === "win32" && ["ls", "dir"].includes(executable.toLowerCase())) {
+    return { file: "cmd.exe", args: ["/d", "/s", "/c", "dir", ...args.slice(1)] };
   }
-  return { file: executable ?? "", args: args.slice(1) };
+  if (process.platform === "win32" && executable.toLowerCase() === "npm") {
+    return { file: "npm.cmd", args: args.slice(1) };
+  }
+  return { file: executable, args: args.slice(1) };
 }
 
 function capOutput(value: string): { value: string; truncated: boolean } {
