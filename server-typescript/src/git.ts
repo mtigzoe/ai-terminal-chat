@@ -7,7 +7,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { getProjectRoot } from "./security.js";
+import { getProjectRoot, isSensitivePath, safePath } from "./security.js";
 import type {
   GitAddResult,
   GitBranchResult,
@@ -15,7 +15,6 @@ import type {
   GitLogResult,
   GitStatusResult,
 } from "./types.js";
-import { isSensitivePath, safePath } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,6 +61,7 @@ async function runGit(args: string[], timeout: number): Promise<{
       stderr?: string;
       status?: number;
       code?: number | string;
+      killed?: boolean;
     };
     if (value.code === "ENOENT") throw error;
     if (value.code === "ETIMEDOUT" || value.killed) {
@@ -83,7 +83,7 @@ export async function gitStatus(): Promise<GitStatusResult> {
     if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." };
     const status = cap(result.stdout, GIT_STATUS_MAX_CHARS);
     const payload: GitStatusResult = { status: status.value, truncated: status.truncated };
-    if (status.truncated && !('error' in payload)) {
+    if (status.truncated && !("error" in payload)) {
       payload.truncation_note = `Status output was truncated to ${GIT_STATUS_MAX_CHARS} characters.`;
     }
     return payload;
@@ -114,7 +114,7 @@ export async function gitDiff(path = "", staged = false): Promise<GitDiffResult>
     if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." };
     const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS);
     const payload: GitDiffResult = { diff: diff.value, truncated: diff.truncated };
-    if (diff.truncated && !('error' in payload)) {
+    if (diff.truncated && !("error" in payload)) {
       payload.truncation_note = `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.`;
     }
     return payload;
@@ -133,7 +133,7 @@ export async function gitLog(maxCount = 10): Promise<GitLogResult> {
     if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." };
     const log = cap(result.stdout, GIT_LOG_MAX_CHARS);
     const payload: GitLogResult = { log: log.value, truncated: log.truncated };
-    if (log.truncated && !('error' in payload)) {
+    if (log.truncated && !("error" in payload)) {
       payload.truncation_note = `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.`;
     }
     return payload;
@@ -148,7 +148,7 @@ export async function gitBranch(): Promise<GitBranchResult> {
     if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." };
     const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS);
     const payload: GitBranchResult = { branches: branches.value, truncated: branches.truncated };
-    if (branches.truncated && !('error' in payload)) {
+    if (branches.truncated && !("error" in payload)) {
       payload.truncation_note = `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.`;
     }
     return payload;
