@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import './ProjectTreeContextMenu.css';
 
 const getTreeItem = (target) => {
   if (!(target instanceof Element)) return null;
@@ -90,7 +91,6 @@ export default function ProjectTreeContextMenu() {
   const isExpanded = target.getAttribute('aria-expanded') === 'true';
   const checkbox = target.querySelector('input[type="checkbox"]');
   const isSelected = checkbox?.checked === true;
-  const isFile = !isDirectory;
 
   const runAndClose = (action) => {
     action();
@@ -131,9 +131,8 @@ export default function ProjectTreeContextMenu() {
   menuItems.push({
     label: 'Insert path into terminal',
     action: insertPath,
-    disabled: !document.querySelector('.project-actions button') ||
-      !Array.from(document.querySelectorAll('.project-actions button'))
-        .some((button) => button.textContent?.includes('Insert path into terminal')),
+    disabled: !Array.from(document.querySelectorAll('.project-actions button'))
+      .some((button) => button.textContent?.includes('Insert path into terminal')),
   });
 
   return (
