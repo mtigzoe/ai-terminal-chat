@@ -6,13 +6,13 @@ Helper scripts that prepare the Python environment (via `uv`), install frontend 
 
 ```text
 scripts/
-├── powershell/                 # Windows PowerShell
+├── powershell/                 # Windows PowerShell helpers
 │   ├── run-electron.ps1        # Convenience wrapper → start-electron-dev.ps1
 │   ├── start-electron.ps1      # Backend + Vite + Electron
 │   ├── start-electron-dev.ps1  # Same as above (kept for compatibility)
 │   ├── start-offline-ai.ps1    # Backend + Vite with remote Linux Ollama
 │   └── stop-services.ps1       # Stop listeners on ports 9000 and 3000
-├── sh/                         # Linux / macOS Bash
+├── sh/                         # Linux / macOS Bash helpers
 │   ├── run-electron.sh         # Convenience wrapper → start-electron.sh
 │   ├── start-electron.sh       # Backend + Vite + Electron
 │   ├── start-offline-ai.sh     # Backend + Vite with local Ollama
@@ -35,7 +35,7 @@ scripts/
 ```powershell
 # Electron development (backend + Vite + Electron)
 .\scripts\powershell\run-electron.ps1
-# or
+# or use either implementation directly
 .\scripts\powershell\start-electron.ps1
 .\scripts\powershell\start-electron-dev.ps1
 
@@ -68,6 +68,19 @@ OLLAMA_HOST=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:9b ./scripts/sh/start-of
 ./scripts/sh/stop-services.sh
 ```
 
+## Top-level README references
+
+The repository-level `README.md` should use the organized paths shown below:
+
+- Electron development on Windows: `scripts/powershell/run-electron.ps1` (or `start-electron.ps1` / `start-electron-dev.ps1`)
+- Electron development on Linux/macOS: `scripts/sh/run-electron.sh` (or `start-electron.sh`)
+- Offline AI on Windows: `scripts/powershell/start-offline-ai.ps1`
+- Offline AI on Linux/macOS: `scripts/sh/start-offline-ai.sh`
+- Stop services on Windows: `scripts/powershell/stop-services.ps1`
+- Stop services on Linux/macOS: `scripts/sh/stop-services.sh`
+
+For the full script layout, prerequisites, usage examples, convenience wrappers, and stop helpers, refer to this file from the top-level README as `scripts/readme.md`.
+
 ## Behaviour notes
 
 - Start scripts detect whether ports 9000 (Flask) and 3000 (Vite) are already in use and only start the missing services.
@@ -79,4 +92,4 @@ OLLAMA_HOST=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:9b ./scripts/sh/start-of
 
 ## Duplication note
 
-`start-electron.ps1` and `start-electron-dev.ps1` are currently nearly identical. One may be removed or turned into a thin wrapper in a future cleanup if desired. The Bash side provides a single implementation plus a `run-electron.sh` convenience wrapper.
+`start-electron.ps1` and `start-electron-dev.ps1` are currently nearly identical. `run-electron.ps1` provides a convenience entry point to the development script. The Bash side provides a single implementation plus a `run-electron.sh` convenience wrapper.
