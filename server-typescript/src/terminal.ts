@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { loadAppConfig, persistAppConfig } from "./config.js";
+import { getProjectRoot } from "./security.js";
 import type { RunCommandResult } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -111,7 +112,8 @@ function loadAllowedCommandsFromConfig(): string[] | null {
   const raw = loadAppConfig().allowed_commands;
   if (!Array.isArray(raw)) return null;
 
-  const prefixes = raw.filter((item): item is string => typeof item === "string")
+  const prefixes = raw
+    .filter((item): item is string => typeof item === "string")
     .map(normalizePrefix)
     .filter((prefix) => Boolean(prefix) && !isForbiddenPrefix(prefix));
 
@@ -260,7 +262,7 @@ export async function runCommand(command: string): Promise<RunCommandResult> {
 
   try {
     const { stdout, stderr } = await execFileAsync(file, fileArgs, {
-      cwd: (await import("./security.js")).getProjectRoot(),
+      cwd: getProjectRoot(),
       shell: false,
       timeout: COMMAND_TIMEOUT_MS,
       windowsHide: true,
@@ -282,7 +284,13 @@ export async function runCommand(command: string): Promise<RunCommandResult> {
     }
     return payload;
   } catch (err) {
-    const error = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string; killed?: boolean };
+    const error = err as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      code?: number | string;
+      killed?: boolean;
+      signal?: NodeJS.Signals | null;
+    };
     if (error.killed && error.signal === "SIGTERM") {
       return { error: `Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds.` };
     }
