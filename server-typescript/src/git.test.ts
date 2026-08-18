@@ -35,10 +35,10 @@ test("gitDiff rejects an absolute path", async () => {
 });
 
 test("gitAdd previews staging and does not mutate without confirmation", async () => {
-  const result = await gitAdd("git.test.ts");
+  const result = await gitAdd("src/git.test.ts");
   assert.equal("requires_confirmation" in result, true);
   if ("requires_confirmation" in result) {
     assert.equal(result.requires_confirmation, true);
-    assert.equal(result.path, "git.test.ts");
+    assert.equal(result.path, "src/git.test.ts");
   }
 });
