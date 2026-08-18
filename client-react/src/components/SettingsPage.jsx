@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
 const SettingsPage = ({ host }) => {
@@ -21,6 +21,18 @@ const SettingsPage = ({ host }) => {
   const [allowedCommandsStatus, setAllowedCommandsStatus] = useState('');
   const [allowedCommandsError, setAllowedCommandsError] = useState(false);
   const [allowedCommandsBusy, setAllowedCommandsBusy] = useState(false);
+  const chooseFolderButtonRef = useRef(null);
+
+  /**
+   * Restore keyboard focus to the Choose a folder button after the native
+   * OS dialog closes. Disabled buttons cannot hold focus, so we defer until
+   * React has re-enabled the control.
+   */
+  const restoreChooseFolderFocus = () => {
+    window.setTimeout(() => {
+      chooseFolderButtonRef.current?.focus();
+    }, 0);
+  };
 
   const loadModels = async (providerName, preserveModel = '') => {
     if (!providerName) return;
@@ -136,6 +148,7 @@ const SettingsPage = ({ host }) => {
       );
     } finally {
       setChoosingFolder(false);
+      restoreChooseFolderFocus();
     }
   };
 
@@ -271,6 +284,7 @@ const SettingsPage = ({ host }) => {
           />
           <button
             type="button"
+            ref={chooseFolderButtonRef}
             className="settings-folder-button"
             onClick={handleChooseFolder}
             disabled={saving || choosingFolder}
