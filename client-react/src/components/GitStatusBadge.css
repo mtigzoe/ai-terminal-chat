@@ -1,0 +1,23 @@
+.project-git-status {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0 0.3rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8em;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.project-git-status-modified { color: #8a5a00; }
+.project-git-status-staged,
+.project-git-status-added { color: #236b2b; }
+.project-git-status-untracked { color: #555; }
+.project-git-status-deleted { color: #a33; }
+.project-git-status-renamed { color: #245a9b; }
+.project-git-status-conflict { color: #8a1f11; }
+
+@media (forced-colors: active) {
+  .project-git-status { color: ButtonText; border-color: ButtonText; }
+}
