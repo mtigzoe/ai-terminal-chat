@@ -88,11 +88,23 @@ def _provider_status(target=None, probe: bool = True) -> dict:
         status["base_url"] = config.to_public_dict().get("base_url")
 
     if probe:
+        # Refresh capabilities for local providers so missing-model and
+        # empty-catalog notes are included in the status response.
+        if getattr(target.capabilities, "local", False):
+            try:
+                target.refresh_capabilities()
+                status["capabilities"] = target.capabilities.to_dict()
+            except Exception:
+                pass
+
         probe_result = target.probe()
         status["available"] = probe_result["available"]
         status["error"] = probe_result["error"]
         if not probe_result["available"]:
             status["diagnostics"] = _diagnostics(target, probe_result["error"])
+        elif status["capabilities"].get("notes"):
+            # Reachable, but notes may warn about a missing model.
+            status["error"] = status["capabilities"]["notes"]
 
     return status
 
@@ -106,7 +118,10 @@ def _diagnostics(target, error: str) -> dict:
     short list of concrete next steps.
     """
 
-    config = getattr(target, "config", None)
+    config = getattr(target, "provider_config", None)
+    native_url = getattr(target, "native_base_url", None)
+    server_url = native_url or (getattr(config, "base_url", None) if config else None)
+
     causes = [f"{getattr(target, 'display_name', target.name)} is not running"]
 
     is_local = bool(target.capabilities.local)
@@ -116,13 +131,15 @@ def _diagnostics(target, error: str) -> dict:
         causes.append(
             "The configured server URL/host environment variable is incorrect"
         )
+        if getattr(target, "display_name", "") == "Ollama":
+            causes.append("Start the server with `ollama serve`")
     else:
         causes.append("The API key is missing, revoked, or incorrect")
         causes.append("The network connection is down")
 
     return {
         "provider": getattr(target, "display_name", getattr(target, "name", None)),
-        "server": getattr(config, "base_url", None),
+        "server": server_url,
         "model": getattr(target, "model", None),
         "possible_causes": causes,
         "detail": error,
@@ -212,6 +229,10 @@ def provider_models(name):
     reflects the server the user would actually get if they switched.
     Returns an empty list (not an error) when the provider can't be
     reached or doesn't support listing — see Provider.list_models().
+
+    For local providers (Ollama), also reports reachability and a clear
+    error string when the server is down so the Settings UI can show
+    actionable feedback instead of a silent empty dropdown.
     """
 
     name = (name or "").lower()
@@ -228,11 +249,29 @@ def provider_models(name):
     except Exception as exc:
         return {"provider": name, "models": [], "error": str(exc)}, 200
 
-    return {
+    models = candidate.list_models()
+    payload = {
         "provider": name,
         "supports_listing": candidate.capabilities.model_listing,
-        "models": candidate.list_models(),
+        "models": models,
     }
+
+    if getattr(candidate.capabilities, "local", False):
+        probe = candidate.probe()
+        payload["available"] = probe["available"]
+        if not probe["available"]:
+            payload["error"] = probe["error"] or (
+                f"{getattr(candidate, 'display_name', name)} is not reachable."
+            )
+        elif not models:
+            payload["error"] = (
+                f"{getattr(candidate, 'display_name', name)} is reachable but "
+                "reports no installed models. Pull a model (for example "
+                f"`ollama pull {getattr(candidate, 'model', 'llama3.1')}`) "
+                "and try again."
+            )
+
+    return payload
 
 
 @app.route("/providers/select", methods=["POST"])
