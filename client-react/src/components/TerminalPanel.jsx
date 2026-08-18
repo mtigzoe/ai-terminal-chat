@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { summarizeTerminalResult } from '../liveAnnounce.js';
 
@@ -13,12 +13,28 @@ import { summarizeTerminalResult } from '../liveAnnounce.js';
  * - Explicit labels on each result so users can navigate by heading or
  *   landmark without relying on visual layout.
  */
-export default function TerminalPanel({ host, onSendToChat }) {
+export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPathInserted }) {
   const [command, setCommand] = useState('');
   const [output, setOutput] = useState([]);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState('Terminal ready.');
   const inputRef = useRef(null);
+
+  // When the project tree requests a path insertion, append it to the
+  // command field and move focus to the terminal for a cohesive workflow.
+  useEffect(() => {
+    if (!pathToInsert) return undefined;
+    setCommand((current) => {
+      const trimmed = current.trimEnd();
+      if (!trimmed) return pathToInsert;
+      if (trimmed.endsWith(pathToInsert)) return trimmed;
+      return `${trimmed} ${pathToInsert}`;
+    });
+    setStatus(`Inserted path ${pathToInsert} into the command field.`);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+    onPathInserted?.();
+    return undefined;
+  }, [pathToInsert, onPathInserted]);
 
   const runCommand = async (event) => {
     event.preventDefault();
@@ -76,12 +92,16 @@ export default function TerminalPanel({ host, onSendToChat }) {
       data-focus-region="terminal"
     >
       <h2 id="terminal-panel-heading">Terminal</h2>
+      <p className="terminal-panel-help" id="terminal-panel-description">
+        Run allowlisted development commands in the current project. Results can be sent to chat. Use F6 to move between chat, project, and terminal.
+      </p>
       <div
         className="terminal-output"
         role="log"
         aria-label="Terminal output"
         aria-live="polite"
         aria-relevant="additions"
+        aria-describedby="terminal-panel-description"
       >
         {output.length === 0 ? (
           <p>No terminal commands have been run.</p>

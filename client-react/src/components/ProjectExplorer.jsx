@@ -7,7 +7,7 @@ import axios from 'axios';
  * Directories are loaded only when expanded; files can be previewed or
  * explicitly selected for the agent.
  */
-export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles }) {
+export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles, onInsertPathIntoTerminal }) {
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
 
   const readStored = (key, fallback) => {
@@ -402,6 +402,20 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         <button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>
           Use selected files with agent ({selectedFiles.size})
         </button>
+        {onInsertPathIntoTerminal && (
+          <button
+            type="button"
+            onClick={() => {
+              const path = activePath || Array.from(selectedFiles)[0] || '.';
+              onInsertPathIntoTerminal(path);
+              setStatus(`Sent path ${path} to the terminal command field.`);
+            }}
+            disabled={!activePath && selectedFiles.size === 0}
+            title="Insert the focused or selected path into the terminal command field"
+          >
+            Insert path into terminal
+          </button>
+        )}
       </div>
       <div className="project-filter">
         <label htmlFor="project-filter-input">Filter files and folders</label>
@@ -439,10 +453,11 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
             <li>Enter or Space — toggle folder; Enter on a file opens a preview</li>
             <li>Home / End — first or last visible item</li>
             <li>Checkboxes — select files to send to the agent</li>
+            <li>Insert path into terminal — places the focused or selected path in the terminal command field</li>
           </ul>
         )}
         <p id="project-selection-help" className="project-selection-help">
-          Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Press F6 to move between the chat, project tree, and terminal.
+          Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Use “Insert path into terminal” for a command workflow. Press F6 to move between the chat, project tree, and terminal.
         </p>
       </div>
       <div

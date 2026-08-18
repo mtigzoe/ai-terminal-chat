@@ -328,10 +328,10 @@ Main endpoints implemented by the Flask backend:
 - [x] Concise terminal result summaries (exit code + line counts) to avoid dumping long output into live regions
 - [x] Streaming tool-activity announcements via polite live regions
 - [x] Confirmation dialog focus trap and safer initial focus on Deny
+- [x] Better integrated project and terminal views — project and terminal remain simultaneously visible in a stacked workspace; shared tablist and F6 focus cycling are preserved; path insertion from the project tree into the terminal and send-to-chat from the terminal keep workflows cohesive for keyboard and screen-reader users
 
 ### Future work
 
-- [ ] Better integrated project and terminal views — make project browsing, chat, and terminal workflows feel more cohesive while preserving keyboard and screen-reader usability.
 - [ ] Native local-project selection and configuration — provide a more direct desktop workflow for selecting and managing the active project.
 - [ ] Accessible desktop workflows — reduce reliance on browser-specific navigation patterns and improve the Electron experience for keyboard and screen-reader users.
 - [ ] TypeScript backend — evaluate and, when appropriate, migrate the Python backend to TypeScript while preserving the current provider, tool, security, and accessibility behavior.
@@ -379,7 +379,8 @@ The frontend test suite includes automated accessibility regression tests coveri
 2. **Keyboard and focus tests** — verify that key workflows are operable without a mouse.
    - `App.keyboard.a11y.test.jsx` — Enter sends, Shift+Enter inserts a newline, Escape closes dialogs, focus returns to the input after a response.
    - `MessageInput.a11y.test.jsx` — label association, `aria-describedby` help text, Enter/Shift+Enter behavior.
-   - `WorkspaceTabs.a11y.test.jsx` — ArrowLeft/ArrowRight, Home, End keyboard navigation; `aria-selected`; tab sequence management.
+   - `WorkspaceTabs.a11y.test.jsx` — ArrowLeft/ArrowRight, Home, End keyboard navigation; `aria-selected`; tab sequence management (exclusive tab panels).
+   - `WorkspaceSplit.a11y.test.jsx` — simultaneous project/terminal visibility, tablist focus management, `data-active` markers for the integrated workspace.
    - `TerminalPanel.a11y.test.jsx` — `aria-live` output region, `role="status"` for status updates, Enter submission, focus return.
    - `Header.a11y.test.jsx` — `aria-pressed` on the stream toggle, clear-conversation dialog semantics, Escape dismissal.
    - `ConversationDisplayArea.a11y.test.jsx` — message `aria-label`, `aria-busy`, streaming `aria-live="off"`, decorative images.
