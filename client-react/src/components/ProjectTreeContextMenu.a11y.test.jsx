@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, test } from 'vitest';
 import ProjectTreeContextMenu from './ProjectTreeContextMenu';
 
@@ -34,7 +34,7 @@ describe('ProjectTreeContextMenu accessibility', () => {
     document.body.innerHTML = '';
   });
 
-  test('opens from the context-menu keyboard key and exposes menuitems', () => {
+  test('opens from the context-menu keyboard key and exposes menuitems', async () => {
     render(<><TreeFixture /><ProjectTreeContextMenu /></>);
     const treeItem = screen.getByRole('treeitem');
 
@@ -44,10 +44,12 @@ describe('ProjectTreeContextMenu accessibility', () => {
     expect(screen.getByRole('menuitem', { name: /open file/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /select for agent/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /copy path/i })).toBeInTheDocument();
-    expect(document.activeElement).toHaveAttribute('role', 'menuitem');
+    await waitFor(() => {
+      expect(document.activeElement).toHaveAttribute('role', 'menuitem');
+    });
   });
 
-  test('opens with Shift+F10 and provides folder-specific actions', () => {
+  test('opens with Shift+F10 and provides folder-specific actions', async () => {
     render(<><TreeFixture directory /><ProjectTreeContextMenu /></>);
     const treeItem = screen.getByRole('treeitem');
 
@@ -56,9 +58,12 @@ describe('ProjectTreeContextMenu accessibility', () => {
     expect(screen.getByRole('menu', { name: /actions for collapsed src/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /expand folder/i })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /open file/i })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.activeElement).toHaveAttribute('role', 'menuitem');
+    });
   });
 
-  test('Escape closes the menu and restores focus to the tree item', () => {
+  test('Escape closes the menu and restores focus to the tree item', async () => {
     render(<><TreeFixture /><ProjectTreeContextMenu /></>);
     const treeItem = screen.getByRole('treeitem');
     treeItem.focus();
@@ -69,16 +74,20 @@ describe('ProjectTreeContextMenu accessibility', () => {
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
 
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
-    expect(document.activeElement).toBe(treeItem);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(treeItem);
+    });
   });
 
-  test('ArrowDown and ArrowUp move through menuitems', () => {
+  test('ArrowDown and ArrowUp move through menuitems', async () => {
     render(<><TreeFixture /><ProjectTreeContextMenu /></>);
     const treeItem = screen.getByRole('treeitem');
     fireEvent.contextMenu(treeItem, { clientX: 40, clientY: 50 });
 
     const items = screen.getAllByRole('menuitem');
-    expect(document.activeElement).toBe(items[0]);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(items[0]);
+    });
 
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowDown' });
     expect(document.activeElement).toBe(items[1]);
