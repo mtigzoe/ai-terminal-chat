@@ -30,7 +30,7 @@ export const TOOL_FUNCTIONS = {
   git_log: (args: ToolArgsByName["git_log"]) => gitLog(args.max_count ?? 10),
   git_branch: () => gitBranch(),
   git_add: (args: ToolArgsByName["git_add"]) => gitAdd(args.path, args.confirm ?? false),
-} satisfies Partial<Record<ToolName, (args: never) => ToolResult | Promise<ToolResult>>>;
+};
 
 /**
  * Execute a named tool with runtime argument validation kept intentionally
