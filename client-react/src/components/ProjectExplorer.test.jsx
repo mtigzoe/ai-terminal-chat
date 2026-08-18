@@ -59,7 +59,10 @@ test('shows Git status indicators and includes the status in accessible tree lab
   expect(await screen.findByRole('treeitem', { name: /README\.md, file, modified/i })).toBeInTheDocument();
   expect(screen.getByRole('treeitem', { name: /new\.txt, file, untracked/i })).toBeInTheDocument();
   expect(screen.getByRole('treeitem', { name: /src, directory, modified/i })).toBeInTheDocument();
-  expect(screen.getByText('[M]', { selector: 'span' })).toHaveAttribute('title', 'Git status: modified');
+
+  const modifiedBadges = screen.getAllByText('[M]', { selector: 'span' });
+  expect(modifiedBadges).toHaveLength(2);
+  expect(modifiedBadges[0]).toHaveAttribute('title', 'Git status: modified');
   expect(screen.getByText('[U]', { selector: 'span' })).toHaveAttribute('title', 'Git status: untracked');
   expect(axios.post).toHaveBeenCalledWith(`${host}/terminal/run`, {
     command: 'git status --porcelain=v1 --untracked-files=all',
