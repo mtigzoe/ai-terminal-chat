@@ -108,3 +108,38 @@ test('space toggles the selected file without opening it', async () => {
   expect(screen.getByRole('checkbox', { name: /select a\.txt for the agent/i })).toBeChecked();
   expect(axios.get).toHaveBeenCalledTimes(1);
 });
+
+test('virtualizes large directories instead of mounting every tree row', async () => {
+  const entries = Array.from({ length: 250 }, (_, index) => ({
+    name: `file-${index + 1}.txt`,
+    type: 'file',
+  }));
+  axios.get.mockResolvedValueOnce({ data: { path: '.', entries } });
+
+  render(<ProjectExplorer host={host} />);
+  const tree = await screen.findByRole('tree', { name: /project files and directories/i });
+
+  await waitFor(() => {
+    expect(tree.querySelectorAll('[role="treeitem"]').length).toBeLessThan(entries.length);
+  });
+  expect(screen.getByRole('treeitem', { name: /file-1\.txt, file/i })).toBeInTheDocument();
+  expect(screen.queryByRole('treeitem', { name: /file-250\.txt, file/i })).not.toBeInTheDocument();
+});
+
+test('virtualized tree keeps keyboard navigation accessible to offscreen rows', async () => {
+  const entries = Array.from({ length: 250 }, (_, index) => ({
+    name: `file-${index + 1}.txt`,
+    type: 'file',
+  }));
+  axios.get.mockResolvedValueOnce({ data: { path: '.', entries } });
+
+  render(<ProjectExplorer host={host} />);
+  const first = await screen.findByRole('treeitem', { name: /file-1\.txt, file/i });
+  first.focus();
+  fireEvent.keyDown(first, { key: 'End' });
+
+  await waitFor(() => {
+    expect(screen.getByRole('treeitem', { name: /file-250\.txt, file/i })).toHaveFocus();
+  });
+  expect(screen.queryByRole('treeitem', { name: /file-1\.txt, file/i })).not.toBeInTheDocument();
+});
