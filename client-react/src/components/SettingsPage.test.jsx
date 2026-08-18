@@ -198,4 +198,117 @@ describe('folder picker', () => {
     await screen.findByText(/folder selection cancelled/i);
     expect(screen.getByLabelText(/default project path/i)).toHaveValue(previous);
   });
+
+  test('Choose a folder button is keyboard accessible and labelled', async () => {
+    await renderLoaded();
+    const button = screen.getByRole('button', { name: /choose a folder/i });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-describedby', 'settings-project-root-help');
+  });
+
+  test('restores focus to Choose a folder after a successful Electron selection', async () => {
+    await renderLoaded();
+    window.electronAPI = {
+      isElectron: true,
+      chooseFolder: vi.fn().mockResolvedValue('/tmp/chosen-project'),
+    };
+
+    const button = screen.getByRole('button', { name: /choose a folder/i });
+    button.focus();
+    expect(document.activeElement).toBe(button);
+
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/default project path/i)).toHaveValue('/tmp/chosen-project')
+    );
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /choose a folder/i })
+      );
+    });
+    expect(screen.getByText(/folder selected:\s*\/tmp\/chosen-project/i)).toBeInTheDocument();
+  });
+
+  test('restores focus to Choose a folder after cancellation', async () => {
+    await renderLoaded();
+    window.electronAPI = {
+      isElectron: true,
+      chooseFolder: vi.fn().mockResolvedValue(null),
+    };
+
+    const button = screen.getByRole('button', { name: /choose a folder/i });
+    button.focus();
+    fireEvent.click(button);
+
+    await screen.findByText(/folder selection cancelled/i);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /choose a folder/i })
+      );
+    });
+  });
+
+  test('restores focus to Choose a folder after a picker error', async () => {
+    await renderLoaded();
+    window.electronAPI = {
+      isElectron: true,
+      chooseFolder: vi.fn().mockRejectedValue(new Error('Dialog failed')),
+    };
+
+    const button = screen.getByRole('button', { name: /choose a folder/i });
+    button.focus();
+    fireEvent.click(button);
+
+    await screen.findByText(/dialog failed/i);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /choose a folder/i })
+      );
+    });
+  });
+
+  test('announces opening the folder picker then the selection outcome once', async () => {
+    await renderLoaded();
+    let resolveChoose;
+    window.electronAPI = {
+      isElectron: true,
+      chooseFolder: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveChoose = resolve;
+          })
+      ),
+    };
+
+    fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
+    await screen.findByText(/opening the folder picker/i);
+
+    resolveChoose('/tmp/announced-project');
+
+    await waitFor(() =>
+      expect(screen.getByText(/folder selected:\s*\/tmp\/announced-project/i)).toBeInTheDocument()
+    );
+    // Final status region should show the selection, not the intermediate message.
+    const statuses = screen.getAllByRole('status');
+    const folderStatus = statuses.find((el) =>
+      /folder selected/i.test(el.textContent || '')
+    );
+    expect(folderStatus).toBeTruthy();
+    expect(folderStatus.textContent).toMatch(/folder selected:\s*\/tmp\/announced-project/i);
+  });
+
+  test('browser File System Access API does not claim a reliable absolute path', async () => {
+    await renderLoaded();
+    delete window.electronAPI;
+    window.showDirectoryPicker = vi.fn().mockResolvedValue({ name: 'only-a-name' });
+
+    fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
+
+    await screen.findByText(/browser selected folder name/i);
+    expect(screen.getByText(/full filesystem path/i)).toBeInTheDocument();
+    // Path field must not be overwritten with a bare folder name.
+    expect(screen.getByLabelText(/default project path/i)).toHaveValue('/tmp/project');
+  });
 });
