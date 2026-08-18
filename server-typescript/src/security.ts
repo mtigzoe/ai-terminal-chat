@@ -117,6 +117,13 @@ export function safePath(requested: string): string {
     throw new Error("A path is required.");
   }
 
+  // Do not allow callers to smuggle an absolute POSIX or Windows path into
+  // a project-root-relative API, even when that absolute path is inside the
+  // project. This matches Python's PurePosixPath/PureWindowsPath checks.
+  if (path.isAbsolute(requested) || path.win32.isAbsolute(requested)) {
+    throw new Error("Absolute paths are not allowed. Use a path relative to the project root.");
+  }
+
   const root = getProjectRoot();
   const resolved = path.resolve(root, requested);
 
@@ -156,7 +163,7 @@ export function isSensitivePath(filePath: string): boolean {
   const root = getProjectRoot();
   try {
     const relative = path.relative(root, filePath);
-    if (relative.startsWith(".git" + path.sep) || relative === ".git") {
+    if (relative.split(path.sep).includes(".git")) {
       return true;
     }
   } catch {

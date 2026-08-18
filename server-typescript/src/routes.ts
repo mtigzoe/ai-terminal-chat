@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { getProvider, buildProviderStatus } from "./providers/factory.ts";
+import type { Provider } from "./providers/base.ts";
 import { SUPPORTED_PROVIDERS } from "./providers/config.ts";
 import { getProjectRoot, setProjectRoot } from "./security.ts";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
@@ -14,16 +15,32 @@ import {
 import { createPending, getPending, popPending } from "./pending.ts";
 import { cancel, release, register } from "./cancellation.ts";
 import { runAgentLoop, type AgentEvent } from "./agent.ts";
+import {
+  create_file,
+  write_file,
+  apply_patch,
+  delete_file,
+  git_add,
+} from "./write-tools.ts";
 
 type Env = Record<string, never>;
 
 export const app = new Hono<{ Bindings: Env }>();
 
+// Flask keeps the successfully selected provider in process memory. Keep the
+// same lifetime here so /providers, /chat, and /stream all use the provider
+// selected through /providers/select rather than rebuilding from PROVIDER.
+let activeProvider: Provider | undefined;
+
+function getActiveProvider(): Provider {
+  return activeProvider ?? getProvider();
+}
+
 app.use("*", cors());
 
 app.get("/providers", async (c) => {
   const probe = c.req.query("probe") !== "0";
-  const provider = getProvider();
+  const provider = getActiveProvider();
   const status = await buildProviderStatus(provider, probe);
   return c.json({
     ...status,
@@ -79,6 +96,7 @@ app.post("/providers/select", async (c) => {
 
   try {
     const candidate = getProvider(name, model ? { model } : undefined);
+    activeProvider = candidate;
     const status = await buildProviderStatus(candidate, true);
     return c.json(status);
   } catch (exc) {
@@ -108,22 +126,25 @@ app.get("/providers/:name/models", async (c) => {
     const candidate = getProvider(name);
     const models = await candidate.listModels();
     const supportsListing = candidate.capabilities.model_listing;
-    const probe = await candidate.probe();
-
     const payload: Record<string, unknown> = {
       provider: name,
       supports_listing: supportsListing,
       models,
     };
-    payload.available = probe.available;
-
-    if (!probe.available) {
-      payload.error =
-        probe.error || `${candidate.displayName || name} is not reachable.`;
-    } else if (!models.length) {
-      payload.error = `${
-        candidate.displayName || name
-      } is reachable but reports no installed models. Pull a model and try again.`;
+    // The Flask API probes and reports reachability only for local providers.
+    // Remote providers that do not implement model listing simply return an
+    // empty model list without turning it into a reachability error.
+    if (candidate.capabilities.local) {
+      const probe = await candidate.probe();
+      payload.available = probe.available;
+      if (!probe.available) {
+        payload.error =
+          probe.error || `${candidate.displayName || name} is not reachable.`;
+      } else if (!models.length) {
+        payload.error = `${
+          candidate.displayName || name
+        } is reachable but reports no installed models. Pull a model and try again.`;
+      }
     }
 
     return c.json(payload);
@@ -149,7 +170,16 @@ app.post("/project-root", async (c) => {
     const root = setProjectRoot(path);
     return c.json({ path: String(root) });
   } catch (exc) {
-    return c.json({ error: String(exc) }, 400 as any);
+    const error = String(exc);
+    const isValidationError =
+      error.includes("project path is required") ||
+      error.includes("Project path does not exist") ||
+      error.includes("Project path is not a directory") ||
+      error.includes("Native folder picker");
+    return c.json(
+      { error: isValidationError ? error : `Could not save project path: ${error}` },
+      (isValidationError ? 400 : 500) as any
+    );
   }
 });
 
@@ -202,7 +232,14 @@ app.post("/allowed-commands", async (c) => {
     const commands = addAllowedCommand(prefix);
     return c.json({ commands, added: prefix });
   } catch (exc) {
-    return c.json({ error: String(exc) }, 400 as any);
+    const error = String(exc);
+    const isValidationError =
+      error.includes("non-empty command prefix") ||
+      error.includes("not permitted for safety reasons");
+    return c.json(
+      { error: isValidationError ? error : `Could not save allowed commands: ${error}` },
+      (isValidationError ? 400 : 500) as any
+    );
   }
 });
 
@@ -212,7 +249,14 @@ app.delete("/allowed-commands/:command", (c) => {
     const commands = removeAllowedCommand(command);
     return c.json({ commands, removed: command });
   } catch (exc) {
-    return c.json({ error: String(exc) }, 400 as any);
+    const error = String(exc);
+    const isValidationError =
+      error.includes("non-empty command prefix") ||
+      error.includes("is not in the allowlist");
+    return c.json(
+      { error: isValidationError ? error : `Could not save allowed commands: ${error}` },
+      (isValidationError ? 400 : 500) as any
+    );
   }
 });
 
@@ -251,7 +295,7 @@ app.post("/chat", async (c) => {
     return c.json({ text: "", error: "Message must not be empty." }, 400 as any);
   }
 
-  const provider = getProvider();
+  const provider = getActiveProvider();
   let contents: unknown[];
   try {
     contents = provider.buildContents(msg, history);
@@ -351,7 +395,7 @@ app.post("/stream", async (c) => {
     return c.text("Please enter a message.");
   }
 
-  const provider = getProvider();
+  const provider = getActiveProvider();
   let contents: unknown[];
   try {
     contents = provider.buildContents(msg, history);
@@ -360,6 +404,7 @@ app.post("/stream", async (c) => {
   }
 
   const cancelSignal = register(requestId);
+  const wantsNdjson = c.req.header("Accept")?.includes("application/x-ndjson") ?? false;
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
@@ -376,15 +421,16 @@ app.post("/stream", async (c) => {
             },
           })) {
             if (cancelSignal.aborted) break;
-            const line = JSON.stringify(event) + "\n";
+            const line = wantsNdjson
+              ? JSON.stringify(event) + "\n"
+              : formatPlainStreamEvent(event);
             controller.enqueue(encoder.encode(line));
           }
         } catch (exc) {
-          controller.enqueue(
-            encoder.encode(
-              JSON.stringify({ type: "error", message: String(exc) }) + "\n"
-            )
-          );
+          const event: AgentEvent = { type: "error", message: String(exc) };
+          controller.enqueue(encoder.encode(
+            wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
+          ));
         } finally {
           release(requestId);
           controller.close();
@@ -395,7 +441,7 @@ app.post("/stream", async (c) => {
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/plain",
+      "Content-Type": wantsNdjson ? "application/x-ndjson" : "text/plain; charset=utf-8",
       "Cache-Control": "no-cache",
     },
   });
@@ -501,12 +547,37 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>) => u
       gitDiff(String(args.path || ""), Boolean(args.staged)),
     git_log: (args) => gitLog(Number(args.max_count || 10)),
     git_branch: () => gitBranch(),
-    create_file: () => ({ error: "File creation is not yet implemented in TypeScript." }),
-    write_file: () => ({ error: "File writing is not yet implemented in TypeScript." }),
-    apply_patch: () => ({ error: "Patch application is not yet implemented in TypeScript." }),
-    delete_file: () => ({ error: "File deletion is not yet implemented in TypeScript." }),
-    git_add: () => ({ error: "Git add is not yet implemented in TypeScript." }),
+    create_file: (args) => create_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
+    write_file: (args) => write_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
+    apply_patch: (args) => apply_patch(String(args.patch || ""), Boolean(args.confirm)),
+    delete_file: (args) => delete_file(String(args.path || ""), Boolean(args.confirm)),
+    git_add: (args) => git_add(String(args.path || ""), Boolean(args.confirm)),
   };
+}
+
+function formatPlainStreamEvent(event: AgentEvent): string {
+  if (event.type === "progress") {
+    return `\n[${event.phase || "progress"}] ${event.message || ""}\n`;
+  }
+  if (event.type === "tool_call") {
+    const args = Object.entries(event.args)
+      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+      .join(", ");
+    return `\n⚙️ ${event.name}(${args})\n`;
+  }
+  if (event.type === "tool_result") {
+    const result = event.result;
+    if (result && typeof result === "object" && "error" in result && result.error) {
+      return `⚠️ ${event.name}: ${String(result.error)}\n`;
+    }
+    return "";
+  }
+  if (event.type === "pending_confirmation") {
+    return `\n[Confirmation required: ${event.name} action_id=${event.action_id}] Waiting for explicit user confirmation.\n`;
+  }
+  if (event.type === "final") return event.text;
+  if (event.type === "error") return `\n[Error: ${event.message}]`;
+  return "\n[cancelled] Cancelled by user request.\n";
 }
 
 export type AppType = typeof app;
