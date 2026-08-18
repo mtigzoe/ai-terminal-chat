@@ -60,6 +60,8 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   const [lastSelectedPath, setLastSelectedPath] = useState(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [gitStatuses, setGitStatuses] = useState({});
+  const [gitStatusError, setGitStatusError] = useState('');
+  const gitStatusRefreshing = useRef(false);
   const treeRef = useRef(null);
   const previewCloseRef = useRef(null);
   const filterRef = useRef(null);
@@ -76,6 +78,8 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   };
 
   const refreshGitStatus = useCallback(async () => {
+    if (gitStatusRefreshing.current) return;
+    gitStatusRefreshing.current = true;
     try {
       const response = await axios.post(`${host}/terminal/run`, {
         command: 'git status --porcelain=v1 --untracked-files=all',
@@ -87,10 +91,13 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         if (parsed) next[parsed[1]] = parsed[0];
       });
       setGitStatuses(next);
+      setGitStatusError('');
       return next;
     } catch {
-      setGitStatuses({});
+      setGitStatusError('Git status unavailable. The project tree remains usable.');
       return {};
+    } finally {
+      gitStatusRefreshing.current = false;
     }
   }, [host]);
 
@@ -169,6 +176,13 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openedFile]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void refreshGitStatus();
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [refreshGitStatus]);
 
   useEffect(() => {
     if (skipNextPersist.current) {
@@ -483,6 +497,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         </section>
       </div>}
       <div role="status" aria-live="polite" className="project-status">{status}</div>
+      {gitStatusError && <div role="status" aria-live="polite" className="project-git-status-error">{gitStatusError}</div>}
       {error && <div role="alert" className="project-error">
         <p>{error}</p>
         <p><a href="/settings.html#settings-project-root">Change project</a>{' · '}<button type="button" onClick={async () => { setError(''); setChildren({}); const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus(); }}>Retry</button></p>
