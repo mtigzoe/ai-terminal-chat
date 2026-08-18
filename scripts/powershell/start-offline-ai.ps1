@@ -8,11 +8,12 @@ param(
 # Python uv virtual environment automatically.
 #
 # Override the defaults when needed:
-#   .\scripts\start-offline-ai.ps1 -LinuxOllamaHost "http://192.168.1.100:11434" -OllamaModel "qwen3.5:9b"
+#   .\scripts\powershell\start-offline-ai.ps1 -LinuxOllamaHost "http://192.168.1.100:11434" -OllamaModel "qwen3.5:9b"
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+# scripts/powershell -> scripts -> repository root
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $serverDir = Join-Path $repoRoot "server-python"
 $clientDir = Join-Path $repoRoot "client-react"
 $venvDir = Join-Path $serverDir ".venv"
@@ -24,6 +25,13 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
   throw "npm is required but was not found in PATH. Install Node.js/npm and run this script again."
+}
+
+if (-not (Test-Path (Join-Path $serverDir "app.py"))) {
+  throw "server-python/app.py not found. Expected repository root at: $repoRoot"
+}
+if (-not (Test-Path (Join-Path $clientDir "package.json"))) {
+  throw "client-react/package.json not found. Expected repository root at: $repoRoot"
 }
 
 $ollamaHost = $LinuxOllamaHost.TrimEnd('/')
