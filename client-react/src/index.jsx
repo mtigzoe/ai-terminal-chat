@@ -3,16 +3,17 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import './accessibility.css';
 import App from './App.jsx';
+import ProjectTreeContextMenu from './components/ProjectTreeContextMenu.jsx';
 import reportWebVitals from './reportWebVitals';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
     <App />
+    <ProjectTreeContextMenu />
   </React.StrictMode>
 );
 
 // If you want to start measuring performance in your app, pass a function
-// to log results (for example, reportWebVitals(console.log))
-// or send it to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
+// to log results (for example, send them to an analytics endpoint).
 reportWebVitals();
