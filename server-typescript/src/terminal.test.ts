@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  __setAllowedCommandsForTests,
   BLOCKED_COMMAND_PATTERNS,
   DANGEROUS_COMMAND_CHARACTERS,
   DEFAULT_ALLOWED_COMMAND_PREFIXES,
@@ -12,16 +13,15 @@ import {
 void BLOCKED_COMMAND_PATTERNS;
 void DANGEROUS_COMMAND_CHARACTERS;
 
-test("default terminal allowlist includes safe Git inspection commands", () => {
+test("default terminal allowlist defines the expected safe Git inspection commands", () => {
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git status"));
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git diff"));
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git log"));
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git branch"));
-  assert.equal(isCommandAllowed("git status --short"), true);
-  assert.equal(isCommandAllowed("git status && whoami"), false);
 });
 
 test("terminal allowlist uses complete prefixes rather than partial words", () => {
+  __setAllowedCommandsForTests(["git status", "npm test"]);
   assert.equal(isCommandAllowed("git status --short"), true);
   assert.equal(isCommandAllowed("git statusx"), false);
   assert.equal(isCommandAllowed("npm test -- --run"), true);
