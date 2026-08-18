@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
 /**
@@ -15,6 +15,18 @@ export default function ProjectRootManager({ host }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('Loading active project.');
   const [error, setError] = useState(false);
+  const chooseFolderButtonRef = useRef(null);
+
+  /**
+   * Restore keyboard focus to the native folder button after the OS dialog
+   * closes (success, cancel, or error). The button is disabled while busy,
+   * so focus is restored on the next task after React re-enables it.
+   */
+  const restoreChooseFolderFocus = () => {
+    window.setTimeout(() => {
+      chooseFolderButtonRef.current?.focus();
+    }, 0);
+  };
 
   const loadProjectRoot = useCallback(async () => {
     setLoading(true);
@@ -85,6 +97,7 @@ export default function ProjectRootManager({ host }) {
       );
     } finally {
       setBusy(false);
+      restoreChooseFolderFocus();
     }
   };
 
@@ -102,7 +115,6 @@ export default function ProjectRootManager({ host }) {
         <output
           className="project-path"
           aria-labelledby="active-project-path-label"
-          aria-live="polite"
         >
           {loading ? 'Loading…' : projectRoot || 'No project selected'}
         </output>
@@ -111,6 +123,7 @@ export default function ProjectRootManager({ host }) {
       <div className="settings-allowed-commands-buttons">
         <button
           type="button"
+          ref={chooseFolderButtonRef}
           className="settings-folder-button"
           onClick={chooseAndApply}
           disabled={busy || loading}

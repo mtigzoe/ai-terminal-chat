@@ -78,4 +78,97 @@ describe('ProjectRootManager accessibility and project switching', () => {
     });
     expect(axios.post).not.toHaveBeenCalled();
   });
+
+  test('Choose and use project folder button is keyboard accessible', async () => {
+    render(<ProjectRootManager host="http://localhost:9000" />);
+    await waitFor(() => expect(screen.getByText('C:\\Projects\\current')).toBeInTheDocument());
+
+    const button = screen.getByRole('button', { name: /choose and use project folder/i });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-describedby', 'active-project-help');
+  });
+
+  test('restores focus after a successful native selection', async () => {
+    window.electronAPI.chooseFolder.mockResolvedValue('C:\\Projects\\new-project');
+    axios.post.mockResolvedValue({ data: { path: 'C:\\Projects\\new-project' } });
+
+    render(<ProjectRootManager host="http://localhost:9000" />);
+    await waitFor(() => expect(screen.getByText('C:\\Projects\\current')).toBeInTheDocument());
+
+    const button = screen.getByRole('button', { name: /choose and use project folder/i });
+    button.focus();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active project changed to C:\\Projects\\new-project.')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /choose and use project folder/i })
+      );
+    });
+  });
+
+  test('restores focus after native picker cancellation', async () => {
+    window.electronAPI.chooseFolder.mockResolvedValue(null);
+
+    render(<ProjectRootManager host="http://localhost:9000" />);
+    await waitFor(() => expect(screen.getByText('C:\\Projects\\current')).toBeInTheDocument());
+
+    const button = screen.getByRole('button', { name: /choose and use project folder/i });
+    button.focus();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText('Folder selection cancelled.')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /choose and use project folder/i })
+      );
+    });
+  });
+
+  test('restores focus after a native selection error', async () => {
+    window.electronAPI.chooseFolder.mockRejectedValue(new Error('Native dialog failed'));
+
+    render(<ProjectRootManager host="http://localhost:9000" />);
+    await waitFor(() => expect(screen.getByText('C:\\Projects\\current')).toBeInTheDocument());
+
+    const button = screen.getByRole('button', { name: /choose and use project folder/i });
+    button.focus();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText(/native dialog failed/i)).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /choose and use project folder/i })
+      );
+    });
+  });
+
+  test('status region announces outcomes without a second live path region', async () => {
+    window.electronAPI.chooseFolder.mockResolvedValue('C:\\Projects\\new-project');
+    axios.post.mockResolvedValue({ data: { path: 'C:\\Projects\\new-project' } });
+
+    render(<ProjectRootManager host="http://localhost:9000" />);
+    await waitFor(() => expect(screen.getByText('C:\\Projects\\current')).toBeInTheDocument());
+
+    const pathOutput = screen.getByText('C:\\Projects\\current');
+    expect(pathOutput.closest('output')).not.toHaveAttribute('aria-live');
+
+    fireEvent.click(screen.getByRole('button', { name: /choose and use project folder/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Active project changed to C:\\Projects\\new-project.')).toBeInTheDocument();
+    });
+
+    const status = screen.getByText('Active project changed to C:\\Projects\\new-project.');
+    expect(status).toHaveAttribute('role', 'status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveAttribute('aria-atomic', 'true');
+  });
 });
