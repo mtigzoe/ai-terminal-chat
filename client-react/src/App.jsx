@@ -9,7 +9,7 @@ import MessageInput from './components/MessageInput.jsx';
 import ProviderSelector from './components/ProviderSelector.jsx';
 import ProjectExplorer from './components/ProjectExplorer.jsx';
 import TerminalPanel from './components/TerminalPanel.jsx';
-import WorkspaceTabs from './components/WorkspaceTabs.jsx';
+import WorkspaceSplit from './components/WorkspaceSplit.jsx';
 import {
   statusFromProgressEvent,
   statusFromPendingConfirmation,
@@ -127,6 +127,7 @@ function App() {
   const [projectRootError, setProjectRootError] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
+  const [pathForTerminal, setPathForTerminal] = useState(null);
   const is_stream = toggled;
 
   const refreshProjectRoot = useCallback(() => {
@@ -377,16 +378,52 @@ function App() {
         </div>
         <aside id="workspace-panels" className="workspace-panels" aria-label="Project and terminal">
           <section className="current-project" aria-labelledby="current-project-heading">
-            <div><h2 id="current-project-heading">Current project</h2>{projectRootError ? <p role="status" aria-live="polite">Unable to determine current project.</p> : <p>{projectRoot || 'Loading current project…'}</p>}</div>
+            <div>
+              <h2 id="current-project-heading">Current project</h2>
+              {projectRootError ? (
+                <p role="status" aria-live="polite">Unable to determine current project.</p>
+              ) : (
+                <p>{projectRoot || 'Loading current project…'}</p>
+              )}
+            </div>
             <a href="/settings.html#settings-project-root">Change project</a>
           </section>
-          <WorkspaceTabs
+          <p className="workspace-integration-hint" id="workspace-integration-hint">
+            Project and terminal stay visible together. Use the tabs or F6 to move focus; insert a path from the project tree into the terminal, or send terminal results to chat.
+          </p>
+          <WorkspaceSplit
             ariaLabel="Project and terminal"
             activePanelId={workspacePanel}
             onActivePanelChange={setWorkspacePanel}
             panels={[
-              { id: 'project', label: 'Project', content: <ProjectExplorer key={projectRoot || 'default'} host={host} projectRoot={projectRoot} onUseSelectedFiles={handleSelectedFiles} /> },
-              { id: 'terminal', label: 'Terminal', content: <TerminalPanel host={host} onSendToChat={handleClick} /> },
+              {
+                id: 'project',
+                label: 'Project',
+                content: (
+                  <ProjectExplorer
+                    key={projectRoot || 'default'}
+                    host={host}
+                    projectRoot={projectRoot}
+                    onUseSelectedFiles={handleSelectedFiles}
+                    onInsertPathIntoTerminal={(path) => {
+                      setPathForTerminal(path);
+                      setWorkspacePanel('terminal');
+                    }}
+                  />
+                ),
+              },
+              {
+                id: 'terminal',
+                label: 'Terminal',
+                content: (
+                  <TerminalPanel
+                    host={host}
+                    onSendToChat={handleClick}
+                    pathToInsert={pathForTerminal}
+                    onPathInserted={() => setPathForTerminal(null)}
+                  />
+                ),
+              },
             ]}
           />
         </aside>
