@@ -1,10 +1,40 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import './GitStatusBadge.css';
 
 const VIRTUALIZATION_THRESHOLD = 200;
 const TREE_ROW_HEIGHT = 32;
 const TREE_VIEWPORT_HEIGHT = 360;
 const VIRTUALIZATION_OVERSCAN = 8;
+
+const GIT_STATUS_INFO = {
+  modified: { short: 'M', label: 'modified' },
+  staged: { short: 'S', label: 'staged' },
+  untracked: { short: 'U', label: 'untracked' },
+  added: { short: 'A', label: 'added' },
+  deleted: { short: 'D', label: 'deleted' },
+  renamed: { short: 'R', label: 'renamed' },
+  conflict: { short: 'C', label: 'conflict' },
+};
+
+const gitStatusFromLine = (line) => {
+  if (!line || line.length < 3) return null;
+  const code = line.slice(0, 2);
+  let path = line.slice(3).trim();
+  if (!path) return null;
+  if (path.includes(' -> ')) path = path.split(' -> ').pop();
+  path = path.replace(/\\/g, '/');
+
+  if (code === '??') return ['untracked', path];
+  if (code.includes('U')) return ['conflict', path];
+  if (code.includes('R')) return ['renamed', path];
+  if (code.includes('D')) return ['deleted', path];
+  if (code.includes('A')) return ['added', path];
+  if (code.includes('M')) return [code[0] === ' ' ? 'modified' : 'staged', path];
+  return null;
+};
+
+const statusPriority = ['conflict', 'untracked', 'staged', 'added', 'modified', 'deleted', 'renamed'];
 
 export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles, onInsertPathIntoTerminal }) {
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
@@ -29,6 +59,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   const [filterQuery, setFilterQuery] = useState('');
   const [lastSelectedPath, setLastSelectedPath] = useState(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const [gitStatuses, setGitStatuses] = useState({});
   const treeRef = useRef(null);
   const previewCloseRef = useRef(null);
   const filterRef = useRef(null);
@@ -42,6 +73,35 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     if (entry?.path) return entry.path;
     if (!parentPath || parentPath === '.') return name;
     return `${parentPath.replace(/[\\/]$/, '')}/${name}`;
+  };
+
+  const refreshGitStatus = useCallback(async () => {
+    try {
+      const response = await axios.post(`${host}/terminal/run`, {
+        command: 'git status --porcelain=v1 --untracked-files=all',
+      });
+      const stdout = String(response.data?.stdout || '');
+      const next = {};
+      stdout.split(/\r?\n/).forEach((line) => {
+        const parsed = gitStatusFromLine(line);
+        if (parsed) next[parsed[1]] = parsed[0];
+      });
+      setGitStatuses(next);
+      return next;
+    } catch {
+      setGitStatuses({});
+      return {};
+    }
+  }, [host]);
+
+  const getGitStatus = (path, directory) => {
+    const normalizedPath = path.replace(/\\/g, '/').replace(/^\.\//, '');
+    const matching = Object.entries(gitStatuses)
+      .filter(([candidate]) => candidate === normalizedPath || (directory && candidate.startsWith(`${normalizedPath}/`)))
+      .map(([, value]) => value);
+    if (!matching.length) return null;
+    const kind = statusPriority.find((candidate) => matching.includes(candidate)) || matching[0];
+    return GIT_STATUS_INFO[kind] ? { kind, ...GIT_STATUS_INFO[kind] } : null;
   };
 
   const loadDirectory = useCallback(async (path, announce = true) => {
@@ -72,6 +132,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
       setChildren((current) => ({ ...current, '.': nextEntries }));
       setError('');
       setStatus(`${response.data?.path || '.'}: ${nextEntries.length} items.`);
+      void refreshGitStatus();
       const paths = Array.from(expanded).filter((path) => path && path !== '.');
       if (paths.length) {
         const loaded = {};
@@ -365,7 +426,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         <button type="button" onClick={async () => {
           setChildren({}); setExpanded(new Set()); setActivePath(null);
           try { sessionStorage.removeItem(`${storageKey}:expanded`); } catch { /* ignore */ }
-          const entries = await loadDirectory('.', true); setRootEntries(entries);
+          const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus();
         }}>Refresh</button>
         <button type="button" onClick={selectAllVisible}>Select all visible</button>
         <button type="button" onClick={clearSelection} disabled={selectedFiles.size === 0}>Clear selection</button>
@@ -401,16 +462,18 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
           const name = entryName(entry);
           const selected = selectedFiles.has(path);
           const isActive = activePath === path;
-          const treeItemLabel = directory ? `${expanded.has(path) ? 'Expanded' : 'Collapsed'} ${name}, directory` : `${name}, file${selected ? ', selected' : ''}`;
+          const gitStatus = getGitStatus(path, directory);
+          const statusDescription = gitStatus ? `, ${gitStatus.label}` : '';
+          const treeItemLabel = directory ? `${expanded.has(path) ? 'Expanded' : 'Collapsed'} ${name}, directory${statusDescription}` : `${name}, file${selected ? ', selected' : ''}${statusDescription}`;
           return <div key={path} role="treeitem" tabIndex={isActive || (!activePath && logicalIndex === 0) ? 0 : -1} aria-level={level} aria-posinset={logicalIndex + 1} aria-setsize={visibleItems.length} aria-expanded={directory ? expanded.has(path) : undefined} aria-selected={isActive} aria-label={treeItemLabel} data-tree-path={path} onFocus={() => setActivePath(path)} onKeyDown={(event) => handleTreeKeyDown(event, item)} onClick={() => directory ? toggleDirectory(path, name) : openFile(entry, path)} className="project-entry" style={shouldVirtualize ? { position: 'absolute', top: `${logicalIndex * TREE_ROW_HEIGHT}px`, insetInline: 0, height: `${TREE_ROW_HEIGHT}px`, paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` } : { paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` }}>
             {directory ? <span aria-hidden="true">{expanded.has(path) ? '▾' : '▸'}</span> : <input type="checkbox" checked={selected} onChange={(event) => toggleFile(item.entry, path, { shiftKey: event.nativeEvent?.shiftKey || event.shiftKey })} aria-label={`Select ${name} for the agent`} onClick={(event) => event.stopPropagation()} />}
-            {' '}{name}
+            {' '}{name}{gitStatus && <span className={`project-git-status project-git-status-${gitStatus.kind}`} aria-hidden="true" title={`Git status: ${gitStatus.label}`}>[{gitStatus.short}]</span>}
           </div>;
         })}
       </div>
       {visibleItems.length === 0 && !error && <div className="project-empty" aria-live="polite">
         <p>{normalizedFilter ? `No entries match "${filterQuery.trim()}".` : 'No entries in this project.'}</p>
-        {!normalizedFilter && <p><a href="/settings.html#settings-project-root">Change project</a>{' · '}<button type="button" onClick={async () => { setChildren({}); setExpanded(new Set()); const entries = await loadDirectory('.', true); setRootEntries(entries); }}>Retry</button></p>}
+        {!normalizedFilter && <p><a href="/settings.html#settings-project-root">Change project</a>{' · '}<button type="button" onClick={async () => { setChildren({}); setExpanded(new Set()); const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus(); }}>Retry</button></p>}
       </div>}
       {openedFile && <div className="confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpenedFile(null); }}>
         <section className="confirmation-dialog file-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="project-file-preview-heading">
@@ -422,7 +485,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
       <div role="status" aria-live="polite" className="project-status">{status}</div>
       {error && <div role="alert" className="project-error">
         <p>{error}</p>
-        <p><a href="/settings.html#settings-project-root">Change project</a>{' · '}<button type="button" onClick={async () => { setError(''); setChildren({}); const entries = await loadDirectory('.', true); setRootEntries(entries); }}>Retry</button></p>
+        <p><a href="/settings.html#settings-project-root">Change project</a>{' · '}<button type="button" onClick={async () => { setError(''); setChildren({}); const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus(); }}>Retry</button></p>
       </div>}
     </section>
   );
