@@ -7,6 +7,7 @@ const SettingsPage = ({ host }) => {
   const [model, setModel] = useState('');
   const [models, setModels] = useState([]);
   const [modelsSupported, setModelsSupported] = useState(false);
+  const [modelsError, setModelsError] = useState('');
   const [projectRoot, setProjectRoot] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -37,19 +38,28 @@ const SettingsPage = ({ host }) => {
   const loadModels = async (providerName, preserveModel = '') => {
     if (!providerName) return;
     setLoadingModels(true);
+    setModelsError('');
     try {
       const response = await axios.get(`${host}/providers/${providerName}/models`);
       const availableModels = response.data.models || [];
       setModels(availableModels);
       setModelsSupported(Boolean(response.data.supports_listing));
+      if (response.data.error) {
+        setModelsError(String(response.data.error));
+      }
       if (preserveModel) {
         setModel(preserveModel);
       } else if (availableModels.length > 0) {
         setModel(availableModels[0].id || '');
       }
-    } catch {
+    } catch (error) {
       setModels([]);
       setModelsSupported(false);
+      setModelsError(
+        error?.response?.data?.error ||
+          error?.message ||
+          'Could not load models for this provider.'
+      );
     } finally {
       setLoadingModels(false);
     }
@@ -94,6 +104,7 @@ const SettingsPage = ({ host }) => {
     const nextProvider = event.target.value;
     setProvider(nextProvider);
     setModel('');
+    setModelsError('');
     await loadModels(nextProvider);
   };
 
@@ -179,9 +190,21 @@ const SettingsPage = ({ host }) => {
       setModel(providerResponse.data.model || model);
       setProjectRoot(projectRootResponse.data.path || projectRoot.trim());
       setApiKey('');
-      setStatusMessage(
-        `Settings saved for ${providerResponse.data.name || provider}. Project path saved.`
-      );
+
+      const notes = providerResponse.data.capabilities?.notes;
+      const available = providerResponse.data.available;
+      if (available === false || notes) {
+        setStatusIsError(true);
+        setStatusMessage(
+          notes ||
+            providerResponse.data.error ||
+            `Settings saved for ${providerResponse.data.name || provider}, but the provider is not fully available.`
+        );
+      } else {
+        setStatusMessage(
+          `Settings saved for ${providerResponse.data.name || provider}. Project path saved.`
+        );
+      }
     } catch (error) {
       setStatusIsError(true);
       setStatusMessage(
@@ -320,6 +343,7 @@ const SettingsPage = ({ host }) => {
               value={model}
               onChange={(event) => setModel(event.target.value)}
               disabled={saving || choosingFolder || loadingModels}
+              aria-describedby="settings-model-help"
             >
               {models.map((item) => (
                 <option key={item.id} value={item.id}>{item.id}</option>
@@ -333,8 +357,19 @@ const SettingsPage = ({ host }) => {
               onChange={(event) => setModel(event.target.value)}
               disabled={saving || choosingFolder}
               placeholder={loadingModels ? 'Loading models…' : 'Enter model name'}
+              aria-describedby="settings-model-help"
             />
           )}
+          <p id="settings-model-help" className="settings-help">
+            {provider === 'ollama'
+              ? 'For Ollama, choose a model from the list of installed models, or type a model name and pull it with `ollama pull <name>` if it is missing.'
+              : 'Select a model when the provider supports listing, or type a model identifier.'}
+          </p>
+          {modelsError ? (
+            <p className="settings-status settings-status--error" role="status" aria-live="polite">
+              {modelsError}
+            </p>
+          ) : null}
         </div>
 
         <div className="settings-field">
@@ -350,7 +385,7 @@ const SettingsPage = ({ host }) => {
             aria-describedby="settings-api-key-help"
           />
           <p id="settings-api-key-help" className="settings-help">
-            The key is sent to the local backend only and is not displayed after saving. Leave it blank to keep the existing server-side key.
+            The key is sent to the local backend only and is not displayed after saving. Leave it blank to keep the existing server-side key. Ollama does not require an API key.
           </p>
         </div>
 
