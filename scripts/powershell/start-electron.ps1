@@ -1,18 +1,19 @@
-# Development helper for the Electron desktop app.
+# Launch the Electron desktop development environment for AI Terminal Chat.
 #
 # Starts the Flask backend and Vite automatically when they are not already
-# running, then launches Electron. This keeps the development workflow to one
-# command while preserving any services that were already running.
+# listening, then launches Electron. The Electron renderer uses Vite at
+# http://localhost:3000 while the backend serves the API at port 9000.
 #
 # Python setup uses uv only. If uv is not available in PATH, the script stops
 # instead of silently falling back to pip.
 #
 # Usage (from repository root):
-#   .\scripts\start-electron-dev.ps1
+#   .\scripts\powershell\start-electron.ps1
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+# scripts/powershell -> scripts -> repository root
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $serverDir = Join-Path $repoRoot "server-python"
 $clientDir = Join-Path $repoRoot "client-react"
 $venvDir = Join-Path $serverDir ".venv"
@@ -47,11 +48,14 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
   throw "npm is required but was not found in PATH. Install Node.js/npm and run this script again."
 }
 if (-not (Test-Path (Join-Path $serverDir "app.py"))) {
-  throw "server-python/app.py not found."
+  throw "server-python/app.py not found. Expected repository root at: $repoRoot"
 }
 if (-not (Test-Path (Join-Path $clientDir "package.json"))) {
-  throw "client-react/package.json not found."
+  throw "client-react/package.json not found. Expected repository root at: $repoRoot"
 }
+
+Write-Host "AI Terminal Chat - Electron"
+Write-Host ""
 
 if (-not (Test-Path $venvPython)) {
   Write-Host "Creating Python virtual environment with uv..."
@@ -98,12 +102,14 @@ try {
     Write-Host "Vite is already running on port 3000."
   }
 
+  Write-Host ""
   Write-Host "Launching Electron..."
   Push-Location $clientDir
   try { npm run electron:dev } finally { Pop-Location }
   if ($LASTEXITCODE -ne 0) { throw "Electron exited with code $LASTEXITCODE." }
 }
 finally {
+  # Only stop processes started by this script. Existing services are left alone.
   if ($frontendStarted -and $frontendProcess) {
     taskkill /PID $frontendProcess.Id /T /F 2>$null | Out-Null
   }

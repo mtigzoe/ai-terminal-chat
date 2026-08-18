@@ -5,7 +5,7 @@
 # http://localhost:3000 rather than the production dist/ build.
 #
 # Usage (from repository root):
-#   .\scripts\run-electron.ps1
+#   .\scripts\powershell\run-electron.ps1
 
 $ErrorActionPreference = "Stop"
 

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start AI Terminal Chat on Linux with a local Ollama server.
+# Start AI Terminal Chat on Linux/macOS with a local Ollama server.
 # The script installs frontend dependencies when needed and creates/updates the
 # Python uv virtual environment automatically.
 #
 # Override the model when needed:
-#   ./scripts/start-offline-ai.sh qwen3.5:9b
+#   ./scripts/sh/start-offline-ai.sh qwen3.5:9b
+# Or set environment variables:
+#   OLLAMA_HOST=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:9b ./scripts/sh/start-offline-ai.sh
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+# scripts/sh -> scripts -> repository root
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 SERVER_DIR="$REPO_ROOT/server-python"
 CLIENT_DIR="$REPO_ROOT/client-react"
 VENV_DIR="$SERVER_DIR/.venv"
@@ -25,6 +28,15 @@ if ! command -v npm >/dev/null 2>&1; then
     exit 1
 fi
 
+if [[ ! -f "$SERVER_DIR/app.py" ]]; then
+    printf 'Error: server-python/app.py was not found. Expected repository root at: %s\n' "$REPO_ROOT" >&2
+    exit 1
+fi
+if [[ ! -f "$CLIENT_DIR/package.json" ]]; then
+    printf 'Error: client-react/package.json was not found. Expected repository root at: %s\n' "$REPO_ROOT" >&2
+    exit 1
+fi
+
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 OLLAMA_HOST="${OLLAMA_HOST%/}"
 OLLAMA_MODEL="${1:-${OLLAMA_MODEL:-qwen3.5:9b}}"
@@ -35,7 +47,7 @@ export OLLAMA_HOST
 export OLLAMA_BASE_URL
 export OLLAMA_MODEL
 
-printf 'AI Terminal Chat - Linux + local Ollama\n'
+printf 'AI Terminal Chat - Linux/macOS + local Ollama\n'
 printf 'Ollama server: %s\n' "$OLLAMA_HOST"
 printf 'Ollama model:  %s\n\n' "$OLLAMA_MODEL"
 
