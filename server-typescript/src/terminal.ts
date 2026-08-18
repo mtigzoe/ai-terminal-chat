@@ -162,6 +162,11 @@ export function removeAllowedCommand(prefix: string): string[] {
   return getAllowedCommands();
 }
 
+/** Test-only reset; does not write to the user's configuration file. */
+export function __setAllowedCommandsForTests(prefixes: string[]): void {
+  allowedCommandPrefixes = [...prefixes];
+}
+
 /** True when a command is exactly a prefix or starts with the prefix plus whitespace. */
 export function isCommandAllowed(command: string): boolean {
   return allowedCommandPrefixes.some(
@@ -226,10 +231,11 @@ function commandBlocked(command: string): string | null {
 }
 
 function executableForCommand(args: string[]): { file: string; args: string[] } {
-  if (process.platform === "win32" && args.length > 0 && ["ls", "dir"].includes(args[0].toLowerCase())) {
+  const executable = args[0];
+  if (executable && process.platform === "win32" && ["ls", "dir"].includes(executable.toLowerCase())) {
     return { file: "cmd", args: ["/c", "dir", ...args.slice(1)] };
   }
-  return { file: args[0], args: args.slice(1) };
+  return { file: executable ?? "", args: args.slice(1) };
 }
 
 function capOutput(value: string): { value: string; truncated: boolean } {
@@ -259,6 +265,7 @@ export async function runCommand(command: string): Promise<RunCommandResult> {
   if (args.length === 0) return { error: "No command was provided." };
 
   const { file, args: fileArgs } = executableForCommand(args);
+  if (!file) return { error: "No command was provided." };
 
   try {
     const { stdout, stderr } = await execFileAsync(file, fileArgs, {
@@ -295,7 +302,7 @@ export async function runCommand(command: string): Promise<RunCommandResult> {
       return { error: `Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds.` };
     }
     if (error.code === "ENOENT") {
-      return { error: `${args[0]} is not installed or not on PATH.` };
+      return { error: `${args[0] ?? "command"} is not installed or not on PATH.` };
     }
 
     const stdout = String(error.stdout ?? "");
