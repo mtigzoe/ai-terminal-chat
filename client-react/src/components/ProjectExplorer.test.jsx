@@ -6,6 +6,7 @@ import ProjectExplorer from './ProjectExplorer';
 vi.mock('axios', () => ({
   default: {
     get: vi.fn(),
+    post: vi.fn(),
   },
 }));
 
@@ -13,6 +14,8 @@ const host = 'http://localhost:9000';
 
 beforeEach(() => {
   axios.get.mockReset();
+  axios.post.mockReset();
+  axios.post.mockResolvedValue({ data: { stdout: '' } });
 });
 
 test('lists directory entries and exposes accessible file checkboxes', async () => {
@@ -32,6 +35,35 @@ test('lists directory entries and exposes accessible file checkboxes', async () 
   expect(await screen.findByRole('checkbox', { name: /select readme\.md for the agent/i })).toBeInTheDocument();
   expect(screen.getByRole('treeitem', { name: /src, directory/i })).toBeInTheDocument();
   expect(screen.getByRole('tree', { name: /project files and directories/i })).toBeInTheDocument();
+});
+
+test('shows Git status indicators and includes the status in accessible tree labels', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'README.md', type: 'file' },
+        { name: 'new.txt', type: 'file' },
+        { name: 'src', type: 'directory' },
+      ],
+    },
+  });
+  axios.post.mockResolvedValueOnce({
+    data: {
+      stdout: ' M README.md\n?? new.txt\n M src/App.jsx\n',
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('treeitem', { name: /README\.md, file, modified/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /new\.txt, file, untracked/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /src, directory, modified/i })).toBeInTheDocument();
+  expect(screen.getByText('[M]', { selector: 'span' })).toHaveAttribute('title', 'Git status: modified');
+  expect(screen.getByText('[U]', { selector: 'span' })).toHaveAttribute('title', 'Git status: untracked');
+  expect(axios.post).toHaveBeenCalledWith(`${host}/terminal/run`, {
+    command: 'git status --porcelain=v1 --untracked-files=all',
+  });
 });
 
 test('opens a file for local preview without supplying it to the agent', async () => {
