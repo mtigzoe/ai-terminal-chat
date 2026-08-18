@@ -104,6 +104,41 @@ describe('loading settings', () => {
     expect(screen.getByRole('option', { name: 'llama3.1' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'qwen3.5' })).toBeInTheDocument();
   });
+
+  test('surfaces Ollama model listing errors from the backend', async () => {
+    axios.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers?probe=0`) {
+        return Promise.resolve({
+          data: { providers: ['ollama'], name: 'ollama', model: 'llama3.1' },
+        });
+      }
+      if (url === `${HOST}/project-root`) {
+        return Promise.resolve({ data: { path: '/tmp/project' } });
+      }
+      if (url === `${HOST}/allowed-commands`) {
+        return Promise.resolve({ data: { commands: [] } });
+      }
+      if (url === `${HOST}/providers/ollama/models`) {
+        return Promise.resolve({
+          data: {
+            supports_listing: true,
+            models: [],
+            available: false,
+            error: 'Could not reach Ollama at http://localhost:11434. Is Ollama running?',
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    expect(
+      screen.getByText(/could not reach ollama at http:\/\/localhost:11434/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/for ollama, choose a model/i)).toBeInTheDocument();
+  });
 });
 
 describe('saving settings', () => {
@@ -149,6 +184,32 @@ describe('saving settings', () => {
 
     await screen.findByText(/network error/i);
     expect(screen.getByRole('button', { name: /^save$/i })).not.toBeDisabled();
+  });
+
+  test('saving Ollama with capability notes surfaces them as status feedback', async () => {
+    await renderLoaded({ provider: 'ollama', model: 'llama3.1' });
+    axios.post.mockImplementation((url, payload) => {
+      if (url === `${HOST}/providers/select`) {
+        return Promise.resolve({
+          data: {
+            name: 'ollama',
+            model: payload.model,
+            available: true,
+            capabilities: {
+              notes: "Ollama is reachable but model 'llama3.1' is not installed.",
+            },
+          },
+        });
+      }
+      if (url === `${HOST}/project-root`) {
+        return Promise.resolve({ data: { path: payload.path } });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await screen.findByText(/is not installed/i);
   });
 });
 

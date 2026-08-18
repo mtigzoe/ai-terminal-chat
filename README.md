@@ -223,22 +223,63 @@ Switching providers or models at runtime is done through the `/providers/select`
 
 ## Local and offline AI
 
-Ollama is supported as a local provider (`PROVIDER=ollama`). Typical environment settings:
+Ollama is supported as a fully local provider (`PROVIDER=ollama`). No cloud API key is required. The backend talks to a running `ollama serve` process over HTTP and uses the same agent/tool layer as the cloud providers.
+
+### Configuration
+
+Typical environment settings in `server-python/.env`:
 
 ```text
 PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434/v1
 OLLAMA_MODEL=llama3.1
+OLLAMA_TIMEOUT=120
 ```
 
-Helper scripts automate environment setup and startup for an offline-oriented workflow:
+Notes:
+
+- `OLLAMA_BASE_URL` may be given with or without the trailing `/v1`. The provider normalizes both forms.
+- `OLLAMA_HOST` is accepted as an alternative to `OLLAMA_BASE_URL` (useful for scripts and remote hosts).
+- The constructor never contacts the network, so the Flask app can start even when Ollama is not running. Reachability is checked on demand (provider status, model listing, and the first chat turn).
+
+### Selecting a local model
+
+1. Install and start Ollama (`ollama serve`).
+2. Pull at least one model, for example `ollama pull llama3.1` or `ollama pull qwen3.5:9b`.
+3. In the application **Settings** page, choose provider `ollama`. The model dropdown lists models reported by Ollama’s native `/api/tags` endpoint.
+4. If the list is empty or Ollama is unreachable, Settings shows an actionable error (start the server, pull a model, or correct the URL). You can still type a model name manually and save; chat will then report a clear error if that model is not installed.
+
+Cloud providers remain available and unchanged. Switching back to Gemini, OpenAI, xAI, OpenRouter, Anthropic, or Kilo is done through the same Settings flow and does not require restarting the backend.
+
+### Helper scripts
+
+Scripts under `scripts/` automate an offline-oriented development startup:
 
 - Windows: `scripts/start-offline-ai.ps1`
-- Linux: `scripts/start-offline-ai.sh`
+- Linux/macOS: `scripts/start-offline-ai.sh`
 
-These scripts require `uv` and `npm`, create or update the Python virtual environment, install dependencies when needed, verify that Ollama is reachable, and start the Flask backend plus the React development server. You can pass a model name as an argument (or set `OLLAMA_MODEL`).
+These scripts require `uv` and `npm`. They create or update the Python virtual environment, install dependencies when needed, verify that Ollama is reachable at `OLLAMA_HOST` (default `http://127.0.0.1:11434`), warn if the requested model is not listed by the Ollama CLI, and start the Flask backend plus the React development server. Pass a model name as the first argument, or set `OLLAMA_MODEL`.
 
-Ollama may run on the same machine or on a reachable host (for example a Linux machine serving models to a Windows backend). The application continues to enforce its normal backend tool and permission controls regardless of where the model runs.
+Example:
+
+```bash
+./scripts/start-offline-ai.sh qwen3.5:9b
+```
+
+### Remote Ollama hosts
+
+Ollama may run on the same machine or on a reachable host (for example a Linux machine serving models to a Windows backend). Point `OLLAMA_BASE_URL` / `OLLAMA_HOST` at that host’s port 11434. The application continues to enforce its normal backend tool and permission controls regardless of where the model runs.
+
+### Troubleshooting
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| Settings shows “Could not reach Ollama…” | `ollama serve` is not running, wrong host/port, or firewall | Start Ollama; confirm `OLLAMA_BASE_URL`; check connectivity |
+| Settings shows “no models are installed” | Server is up but the model catalog is empty | `ollama pull <model>` then refresh Settings |
+| Chat error: model is not installed | Configured model name does not match an installed tag | Pull the model or select an installed one in Settings |
+| Tool calling disabled for a model | Model does not advertise tools (or rejected a tools request) | Chat continues in chat-only mode; try a tools-capable model such as `llama3.1` or `qwen3.5` |
+
+Provider status (`GET /providers`) and model listing (`GET /providers/ollama/models`) include these diagnostics so the UI and scripts can surface them without reading server logs.
 
 ## Terminal and Git integration
 
