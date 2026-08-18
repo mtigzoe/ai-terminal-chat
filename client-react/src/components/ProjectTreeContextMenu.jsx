@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './ProjectTreeContextMenu.css';
 
 const getTreeItem = (target) => {
@@ -63,7 +63,7 @@ export default function ProjectTreeContextMenu() {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!target) return undefined;
     const onPointerDown = (event) => {
       if (!menuRef.current?.contains(event.target)) closeMenu();
@@ -76,7 +76,7 @@ export default function ProjectTreeContextMenu() {
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
-    window.setTimeout(() => menuRef.current?.querySelector('[role="menuitem"]')?.focus(), 0);
+    menuRef.current?.querySelector('[role="menuitem"]')?.focus();
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
