@@ -1,9 +1,9 @@
 import { Provider, ProviderResponse } from "./providers/base.ts";
 
-const MAX_TOOL_ROUNDS = 10;
-const MAX_CONSECUTIVE_IDENTICAL_CALLS = 3;
-const HARD_ABORT_CONSECUTIVE_CALLS = 6;
-const MAX_CONSECUTIVE_ERRORS = 5;
+export const MAX_TOOL_ROUNDS = 10;
+export const MAX_CONSECUTIVE_IDENTICAL_CALLS = 3;
+export const HARD_ABORT_CONSECUTIVE_CALLS = 6;
+export const MAX_CONSECUTIVE_ERRORS = 5;
 
 const _INSPECT_TOOLS = new Set([
   "list_files",
@@ -250,16 +250,16 @@ export async function* runAgentLoop(
       const toolFn = toolFunctions[functionName];
 
       if (!toolFn) {
-        yield {
-          type: "error",
-          message: `Unknown tool requested: ${functionName}. Use only the tools that are available.`,
-        };
+        const unknownResult = { error: `Unknown tool requested: ${functionName}.` };
         toolResults.push({
           name: functionName,
-          result: {
-            error: `Unknown tool requested: ${functionName}.`,
-          },
+          result: unknownResult,
         });
+        yield {
+          type: "tool_result",
+          name: functionName,
+          result: unknownResult,
+        };
         continue;
       }
 
@@ -280,12 +280,20 @@ export async function* runAgentLoop(
       }
 
       if (consecutiveRepeatCount > MAX_CONSECUTIVE_IDENTICAL_CALLS) {
+        const softBlockResult = {
+          error: `${functionName} has already been called with these exact arguments ${
+            consecutiveRepeatCount - 1
+          } time(s) in a row.`,
+        };
         toolResults.push({
           name: functionName,
-          result: {
-            error: `${functionName} has already been called with these exact arguments ${consecutiveRepeatCount - 1} time(s) in a row.`,
-          },
+          result: softBlockResult,
         });
+        yield {
+          type: "tool_result",
+          name: functionName,
+          result: softBlockResult,
+        };
         continue;
       }
 
