@@ -1,6 +1,38 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { StubProvider } from "../src/providers/stub.ts";
 
 const gitStatusMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../src/providers/factory.ts", () => {
+  const SUPPORTED_PROVIDERS = [
+    "gemini",
+    "ollama",
+    "kilo",
+    "openai",
+    "xai",
+    "openrouter",
+    "anthropic",
+  ];
+
+  return {
+    getProvider: vi.fn((name?: string, overrides?: { model?: string }) => {
+      const providerName = name || process.env.PROVIDER || "gemini";
+      const model = overrides?.model || "test-model";
+      return new StubProvider(providerName, model);
+    }),
+    buildProviderStatus: vi.fn(async (provider, probe = true) => {
+      return {
+        name: provider.name,
+        model: provider.model,
+        capabilities: provider.capabilities,
+        available: true,
+        error: null,
+        current: provider.name,
+        providers: SUPPORTED_PROVIDERS,
+      };
+    }),
+  };
+});
 
 vi.mock("../src/git.ts", () => ({
   gitStatus: gitStatusMock,
