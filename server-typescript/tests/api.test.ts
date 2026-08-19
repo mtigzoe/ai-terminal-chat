@@ -1,4 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+const gitStatusMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../src/git.ts", () => ({
+  gitStatus: gitStatusMock,
+  gitDiff: vi.fn(),
+  gitLog: vi.fn(),
+  gitBranch: vi.fn(),
+}));
+
 import { app } from "../src/routes.js";
 import { clear as clearPending } from "../src/pending.js";
 import { clear as clearCancellation } from "../src/cancellation.js";
@@ -265,6 +275,7 @@ describe("POST /chat", () => {
   beforeEach(() => {
     clearPending();
     clearCancellation();
+    gitStatusMock.mockClear();
   });
 
   it("returns error for empty message", async () => {
@@ -305,10 +316,48 @@ describe("POST /chat", () => {
     const data = await res.json();
     expect(data.request_id).toBeDefined();
   }, 10000);
+
+  it.each([
+    "git status",
+    "What's my Git status?",
+    "Did I commit everything?",
+  ])("routes Git-status requests through the stub provider: %s", async (chat) => {
+    gitStatusMock.mockReturnValue({
+      status:
+        "## git-status-badge...origin/git-status-badge [ahead 2, behind 1]\nM  staged.ts\n M modified.ts\n?? untracked.ts\n",
+      truncated: false,
+    });
+    await createTestApp().request("http://localhost/providers/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "gemini" }),
+    });
+
+    const res = await createTestApp().request("http://localhost/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat, history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(gitStatusMock).toHaveBeenCalledOnce();
+    expect(data.tool_activity).toContainEqual(
+      expect.objectContaining({ type: "tool_call", name: "git_status" })
+    );
+    expect(data.text).toContain("You have 3 uncommitted files.");
+    expect(data.text).toContain("1 file is staged for the next commit.");
+    expect(data.text).toContain("2 commits not pushed");
+    expect(data.text).toContain("1 commit behind the remote.");
+    expect(data.text).toContain("staged.ts — modified, staged");
+    expect(data.text).toContain("modified.ts — modified, not staged");
+    expect(data.text).toContain("untracked.ts — new file, not tracked by Git");
+  });
 });
 
 describe("POST /stream", () => {
   beforeEach(async () => {
+    gitStatusMock.mockClear();
     process.env.PROVIDER = "gemini";
     await createTestApp().request("http://localhost/providers/select", {
       method: "POST",
@@ -343,6 +392,25 @@ describe("POST /stream", () => {
       .split("\n")
       .map((line) => JSON.parse(line));
     expect(events.some((event) => event.type === "final")).toBe(true);
+  });
+
+  it("returns a plain-language Git status instead of the stub greeting", async () => {
+    gitStatusMock.mockReturnValue({
+      status: "## main...origin/main\n",
+      truncated: false,
+    });
+    const res = await createTestApp().request("http://localhost/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat: "What's my Git status?", history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(gitStatusMock).toHaveBeenCalledOnce();
+    expect(text).toContain(
+      "Your working tree is clean. Your local branch is synchronized with its remote branch."
+    );
   });
 });
 

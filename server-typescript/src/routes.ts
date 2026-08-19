@@ -5,7 +5,8 @@ import type { Provider } from "./providers/base.ts";
 import { SUPPORTED_PROVIDERS } from "./providers/config.ts";
 import { getProjectRoot, setProjectRoot } from "./security.ts";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
-import { gitStatus, gitDiff, gitLog, gitBranch } from "./git.ts";
+import { gitDiff, gitLog, gitBranch } from "./git.ts";
+import { gitStatusSummary } from "./git-status-summary.ts";
 import {
   getAllowedCommands,
   addAllowedCommand,
@@ -542,7 +543,7 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>) => u
     search_files: (args) =>
       searchFiles(String(args.query || ""), String(args.path || ".")),
     run_command: (args) => runCommand(String(args.command || "")),
-    git_status: () => gitStatus(),
+    git_status: () => gitStatusSummary(),
     git_diff: (args) =>
       gitDiff(String(args.path || ""), Boolean(args.staged)),
     git_log: (args) => gitLog(Number(args.max_count || 10)),
