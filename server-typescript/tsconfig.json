@@ -15,6 +15,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "types": ["node", "@types/node"]
   },
   "include": ["src/**/*"],

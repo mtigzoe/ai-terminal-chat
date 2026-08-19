@@ -80,30 +80,8 @@ function _loadConfig(): Record<string, unknown> {
 
 function _persistConfig(payload: Record<string, unknown>): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-
-  const fd = fs.openSync(CONFIG_FILE + ".tmp", "w");
-  let persistError: unknown;
-  try {
-    fs.writeFileSync(fd, JSON.stringify(payload, undefined, 2) + "\n", "utf-8");
-    fs.fsyncSync(fd);
-    fs.renameSync(CONFIG_FILE + ".tmp", CONFIG_FILE);
-  } catch (exc) {
-    persistError = exc;
-    try {
-      fs.unlinkSync(CONFIG_FILE + ".tmp");
-    } catch {
-      // ignore
-    }
-  } finally {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      // ignore
-    }
-  }
-  if (persistError !== undefined) {
-    throw persistError;
-  }
+  const json = JSON.stringify(payload, undefined, 2) + "\n";
+  fs.writeFileSync(CONFIG_FILE, json, "utf-8");
 }
 
 function _persistProjectRoot(root: string): void {
