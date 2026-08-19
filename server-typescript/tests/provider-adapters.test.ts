@@ -5,6 +5,8 @@ import { StubProvider, isGitStatusRequest, isGitBranchRequest, isGitLogRequest, 
 import { getProvider, buildProviderStatus } from "../src/providers/factory.ts";
 import { loadProviderEnvConfig, SUPPORTED_PROVIDERS } from "../src/providers/config.ts";
 import { SYSTEM_INSTRUCTION, CHAT_ONLY_INSTRUCTION } from "../src/prompts.ts";
+import { GeminiProvider } from "../src/providers/gemini.ts";
+import { AnthropicProvider } from "../src/providers/anthropic.ts";
 
 // ---------------------------------------------------------------------------
 // Env var isolation helpers
@@ -770,16 +772,16 @@ describe("getProvider", () => {
     expect(() => getProvider("not-real")).toThrow(/Unknown PROVIDER 'not-real'/);
   });
 
-  it("builds gemini as a stub provider requiring an api key, not local", () => {
+  it("builds gemini as a native gemini provider requiring an api key, not local", () => {
     const provider = getProvider("gemini");
-    expect(provider).toBeInstanceOf(StubProvider);
+    expect(provider).toBeInstanceOf(GeminiProvider);
     expect(provider.displayName).toBe("Gemini");
     expect(provider.capabilities).toMatchObject({ requires_api_key: true, local: false, tools: true });
   });
 
-  it("builds anthropic as a stub provider requiring an api key, not local", () => {
+  it("builds anthropic as a native anthropic provider requiring an api key, not local", () => {
     const provider = getProvider("anthropic");
-    expect(provider).toBeInstanceOf(StubProvider);
+    expect(provider).toBeInstanceOf(AnthropicProvider);
     expect(provider.displayName).toBe("Anthropic");
     expect(provider.capabilities).toMatchObject({ requires_api_key: true, local: false });
   });
