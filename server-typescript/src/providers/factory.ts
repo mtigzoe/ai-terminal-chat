@@ -1,6 +1,7 @@
 import { Provider, ProviderConfig, ProviderStatus } from "./base.ts";
 import { OpenAICompatibleProvider } from "./openai-compatible.ts";
-import { StubProvider } from "./stub.ts";
+import { GeminiProvider } from "./gemini.ts";
+import { AnthropicProvider } from "./anthropic.ts";
 import { loadProviderEnvConfig, SUPPORTED_PROVIDERS } from "./config.ts";
 
 export function getProvider(
@@ -13,19 +14,18 @@ export function getProvider(
 
   switch (lower) {
     case "gemini": {
-      const provider = new StubProvider("gemini", model, {
-        tools: true,
-        streaming: true,
-        model_listing: false,
-        requires_api_key: true,
-        local: false,
+      const provider = new GeminiProvider({
+        model,
+        api_key: envConfig.api_key,
+        base_url: envConfig.base_url,
+        timeout: envConfig.timeout,
       });
-      provider.displayName = "Gemini";
       provider.providerConfig = {
         provider: "gemini",
         model,
         api_key: envConfig.api_key,
-        timeout: 120,
+        base_url: envConfig.base_url,
+        timeout: envConfig.timeout,
       };
       return provider;
     }
@@ -122,14 +122,12 @@ export function getProvider(
       return provider;
     }
     case "anthropic": {
-      const provider = new StubProvider("anthropic", model, {
-        tools: true,
-        streaming: true,
-        model_listing: false,
-        requires_api_key: true,
-        local: false,
+      const provider = new AnthropicProvider({
+        model,
+        api_key: envConfig.api_key,
+        base_url: envConfig.base_url,
+        timeout: envConfig.timeout,
       });
-      provider.displayName = "Anthropic";
       provider.providerConfig = {
         provider: "anthropic",
         model,
