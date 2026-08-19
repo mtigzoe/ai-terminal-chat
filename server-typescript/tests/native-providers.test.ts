@@ -53,31 +53,54 @@ describe("GeminiProvider", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("/models/gemini-test:generateContent");
   });
 
-  it("round-trips a Gemini function result using the model call id", () => {
+  it("round-trips multiple Gemini function results in call order", () => {
     const provider = new GeminiProvider({ model: "gemini-test", api_key: "key" });
     const response = {
       text: null,
-      tool_calls: [{ name: "read_file", args: { path: "README.md" }, id: "gem-1" }],
+      tool_calls: [
+        { name: "read_file", args: { path: "README.md" }, id: "gem-1" },
+        { name: "read_file", args: { path: "package.json" }, id: "gem-2" },
+      ],
       raw: {
         role: "model",
-        parts: [{ functionCall: { name: "read_file", args: { path: "README.md" }, id: "gem-1" } }],
+        parts: [
+          { functionCall: { name: "read_file", args: { path: "README.md" }, id: "gem-1" } },
+          { functionCall: { name: "read_file", args: { path: "package.json" }, id: "gem-2" } },
+        ],
       },
     };
     const withModel = provider.appendModelTurn([], response);
     const withResult = provider.appendToolResults(withModel, [
-      { name: "read_file", result: { contents: "hello" } },
+      { name: "read_file", result: { contents: "README" } },
+      { name: "read_file", result: { contents: "package" } },
     ]);
 
     expect(withResult.at(-1)).toEqual({
       role: "user",
-      parts: [{
-        functionResponse: {
-          name: "read_file",
-          response: { result: { contents: "hello" } },
-          id: "gem-1",
+      parts: [
+        {
+          functionResponse: {
+            name: "read_file",
+            response: { result: { contents: "README" } },
+            id: "gem-1",
+          },
         },
-      }],
+        {
+          functionResponse: {
+            name: "read_file",
+            response: { result: { contents: "package" } },
+            id: "gem-2",
+          },
+        },
+      ],
     });
+  });
+
+  it("rejects a Gemini tool result when there is no matching function call", () => {
+    const provider = new GeminiProvider({ model: "gemini-test", api_key: "key" });
+    expect(() => provider.appendToolResults([], [
+      { name: "read_file", result: { contents: "hello" } },
+    ])).toThrow(/no matching function call/);
   });
 
   it("reports a missing API key without making a request", async () => {
@@ -133,26 +156,47 @@ describe("AnthropicProvider", () => {
     });
   });
 
-  it("round-trips an Anthropic tool result using the tool_use id", () => {
+  it("round-trips multiple Anthropic tool results using their tool_use ids", () => {
     const provider = new AnthropicProvider({ model: "claude-test", api_key: "key" });
     const response = {
       text: null,
-      tool_calls: [{ name: "read_file", args: { path: "README.md" }, id: "tool-1" }],
-      raw: [{ type: "tool_use", id: "tool-1", name: "read_file", input: { path: "README.md" } }],
+      tool_calls: [
+        { name: "read_file", args: { path: "README.md" }, id: "tool-1" },
+        { name: "read_file", args: { path: "package.json" }, id: "tool-2" },
+      ],
+      raw: [
+        { type: "tool_use", id: "tool-1", name: "read_file", input: { path: "README.md" } },
+        { type: "tool_use", id: "tool-2", name: "read_file", input: { path: "package.json" } },
+      ],
     };
     const withModel = provider.appendModelTurn([], response);
     const withResult = provider.appendToolResults(withModel, [
-      { name: "read_file", result: { contents: "hello" } },
+      { name: "read_file", result: { contents: "README" } },
+      { name: "read_file", result: { contents: "package" } },
     ]);
 
     expect(withResult.at(-1)).toEqual({
       role: "user",
-      content: [{
-        type: "tool_result",
-        tool_use_id: "tool-1",
-        content: JSON.stringify({ contents: "hello" }),
-      }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool-1",
+          content: JSON.stringify({ contents: "README" }),
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "tool-2",
+          content: JSON.stringify({ contents: "package" }),
+        },
+      ],
     });
+  });
+
+  it("rejects an Anthropic tool result when there is no matching tool_use id", () => {
+    const provider = new AnthropicProvider({ model: "claude-test", api_key: "key" });
+    expect(() => provider.appendToolResults([], [
+      { name: "read_file", result: { contents: "hello" } },
+    ])).toThrow(/no matching tool_use id/);
   });
 
   it("reports a missing API key without making a request", async () => {
