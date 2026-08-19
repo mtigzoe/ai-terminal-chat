@@ -26,11 +26,11 @@ export class AnthropicProvider extends Provider {
 
   protected _capabilities: ProviderCapabilities = {
     tools: true,
-    streaming: true,
+    streaming: false,
     model_listing: true,
     requires_api_key: true,
     local: false,
-    notes: "",
+    notes: "Native Anthropic messages API; streaming is not implemented yet.",
   };
 
   constructor(config: {
@@ -109,14 +109,23 @@ export class AnthropicProvider extends Provider {
     const previous = contents.at(-1) as AnthropicMessage | undefined;
     const blocks = Array.isArray(previous?.content) ? previous.content : [];
     const toolUses = blocks.filter(
-      (block): block is AnthropicContentBlock => block.type === "tool_use" && typeof block.id === "string"
+      (block): block is AnthropicContentBlock =>
+        block.type === "tool_use" && typeof block.id === "string"
     );
 
-    const content = results.map((result, index) => ({
-      type: "tool_result",
-      tool_use_id: toolUses[index]?.id || `tool-${index}`,
-      content: JSON.stringify(result.result),
-    }));
+    const content = results.map((result, index) => {
+      const toolUse = toolUses[index];
+      if (!toolUse?.id) {
+        throw new Error(
+          `Anthropic tool result '${result.name}' has no matching tool_use id.`
+        );
+      }
+      return {
+        type: "tool_result",
+        tool_use_id: toolUse.id,
+        content: JSON.stringify(result.result),
+      };
+    });
 
     return [...contents, { role: "user", content }];
   }
