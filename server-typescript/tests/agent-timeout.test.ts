@@ -35,14 +35,6 @@ class TimeoutProvider implements Provider {
   }
 }
 
-async function collectEvents<T extends { type: string }>(generator: AsyncGenerator<T, void, unknown>): Promise<T[]> {
-  const events: T[] = [];
-  for await (const event of generator) {
-    events.push(event);
-  }
-  return events;
-}
-
 describe("agent tool timeout", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -72,34 +64,44 @@ describe("agent tool timeout", () => {
       createPending: () => ({ action_id: "" }),
     });
 
-    // Consume the initial planning event, then start the round containing
-    // the hanging tool. The second next() remains pending until the tool
-    // timeout fires.
-    await generator.next();
-    const pendingRound = generator.next();
+    // Advance through the events emitted before executeTool() awaits the
+    // hanging function. The fourth next() is the one blocked on the tool.
+    const planning = await generator.next();
+    expect(planning.value).toMatchObject({ type: "progress", phase: "plan" });
 
-    await vi.advanceTimersByTimeAsync(10_000);
-    const firstResult = await pendingRound;
-
-    expect(firstResult.value).toMatchObject({
+    const inspect = await generator.next();
+    expect(inspect.value).toMatchObject({
       type: "progress",
       phase: "inspect",
       tool: "git_status",
     });
 
-    const events = [firstResult.value, ...(await collectEvents(generator))];
-    const timeoutResult = events.find(
-      (event) => event.type === "tool_result" && event.name === "git_status"
-    );
+    const toolCall = await generator.next();
+    expect(toolCall.value).toEqual({
+      type: "tool_call",
+      name: "git_status",
+      args: {},
+    });
 
-    expect(timeoutResult).toBeDefined();
-    expect(timeoutResult).toMatchObject({
+    const blockedResult = generator.next();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const toolResult = await blockedResult;
+
+    expect(toolResult.value).toMatchObject({
       type: "tool_result",
       name: "git_status",
       result: {
         error: expect.stringContaining("exceeded its 10s execution limit"),
       },
     });
-    expect(events[events.length - 1]).toEqual({ type: "final", text: "timeout recovered" });
+
+    const nextPlan = await generator.next();
+    expect(nextPlan.value).toMatchObject({ type: "progress", phase: "plan" });
+
+    const final = await generator.next();
+    expect(final.value).toEqual({ type: "final", text: "timeout recovered" });
+
+    const done = await generator.next();
+    expect(done.done).toBe(true);
   });
 });
