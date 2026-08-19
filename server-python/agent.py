@@ -26,6 +26,7 @@ _INSPECT_TOOLS = {
     "read_file",
     "search_files",
     "git_status",
+    "git_committed_file_count",
     "git_diff",
     "git_log",
     "git_branch",
@@ -98,6 +99,8 @@ def _describe_tool_progress(function_name: str, function_args: dict) -> tuple:
             return "inspect", f"Searching project{q}"
         if function_name == "git_status":
             return "inspect", "Checking git status"
+        if function_name == "git_committed_file_count":
+            return "inspect", "Counting files in the current commit"
         if function_name == "git_diff":
             return "inspect", f"Inspecting git diff{path_label}"
         if function_name == "git_log":

@@ -377,45 +377,81 @@ function generateUnifiedDiff(
   diff.push(`--- ${fromfile}`);
   diff.push(`+++ ${tofile}`);
 
+  const oldCount = oldLines.length;
+  const newCount = newLines.length;
+
+  let oldIndex = 1;
+  let newIndex = 1;
+
   let i = 0;
   let j = 0;
 
-  while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
-      diff.push(` ${oldLines[i]}`);
+  while (i < oldCount || j < newCount) {
+    while (
+      i < oldCount &&
+      j < newCount &&
+      oldLines[i] === newLines[j]
+    ) {
       i++;
       j++;
-    } else {
-      const oldRemaining = oldLines.slice(i);
-      const newRemaining = newLines.slice(j);
+    }
 
-      const oldNext = oldRemaining.findIndex((l) => newRemaining.includes(l));
-      const newNext = newRemaining.findIndex((l) => oldRemaining.includes(l));
+    const oldRemaining = oldCount - i;
+    const newRemaining = newCount - j;
 
-      if (oldNext === -1 && newNext === -1) {
-        while (i < oldLines.length) {
-          diff.push(`-${oldLines[i]}`);
-          i++;
+    if (oldRemaining === 0 && newRemaining === 0) {
+      break;
+    }
+
+    let oldMatch = oldCount;
+    let newMatch = newCount;
+
+    if (oldRemaining > 0 && newRemaining > 0) {
+      for (let k = 1; k <= Math.min(oldRemaining, newRemaining); k++) {
+        if (oldLines[i + k - 1] === newLines[j + k - 1]) {
+          oldMatch = i + k - 1;
+          newMatch = j + k - 1;
+          break;
         }
-        while (j < newLines.length) {
-          diff.push(`+${newLines[j]}`);
-          j++;
+      }
+    } else if (oldRemaining > 0) {
+      for (let k = 1; k <= oldRemaining; k++) {
+        if (oldLines[i + k - 1] === newLines[j + newRemaining - 1]) {
+          oldMatch = i + k - 1;
+          newMatch = j + newRemaining - 1;
+          break;
         }
-        break;
       }
-
-      const oldMatch = oldNext === -1 ? oldLines.length : i + oldNext;
-      const newMatch = newNext === -1 ? newLines.length : j + newNext;
-
-      while (i < oldMatch) {
-        diff.push(`-${oldLines[i]}`);
-        i++;
-      }
-      while (j < newMatch) {
-        diff.push(`+${newLines[j]}`);
-        j++;
+    } else if (newRemaining > 0) {
+      for (let k = 1; k <= newRemaining; k++) {
+        if (oldLines[i + oldRemaining - 1] === newLines[j + k - 1]) {
+          oldMatch = i + oldRemaining - 1;
+          newMatch = j + k - 1;
+          break;
+        }
       }
     }
+
+    const hunkOldStart = oldIndex + (oldMatch - i);
+    const hunkOldCount = Math.max(0, oldMatch - i);
+    const hunkNewStart = newIndex + (newMatch - j);
+    const hunkNewCount = Math.max(0, newMatch - j);
+
+    diff.push(
+      `@@ -${hunkOldStart},${hunkOldCount} +${hunkNewStart},${hunkNewCount} @@`
+    );
+
+    for (let k = i; k < oldMatch; k++) {
+      diff.push(`-${oldLines[k]}`);
+    }
+    for (let k = j; k < newMatch; k++) {
+      diff.push(`+${newLines[k]}`);
+    }
+
+    oldIndex = hunkOldStart + hunkOldCount;
+    newIndex = hunkNewStart + hunkNewCount;
+    i = oldMatch;
+    j = newMatch;
   }
 
   return diff.join("\n");
