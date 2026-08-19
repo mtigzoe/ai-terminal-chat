@@ -98,6 +98,15 @@ describe("agent tool timeout", () => {
     const nextPlan = await generator.next();
     expect(nextPlan.value).toMatchObject({ type: "progress", phase: "plan" });
 
+    const complete = await generator.next();
+    expect(complete.value).toMatchObject({
+      type: "progress",
+      phase: "complete",
+      message: "Task completed",
+      round: 2,
+      max_rounds: 10,
+    });
+
     const final = await generator.next();
     expect(final.value).toEqual({ type: "final", text: "timeout recovered" });
 
