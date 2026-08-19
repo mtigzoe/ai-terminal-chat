@@ -457,23 +457,33 @@ async function executeTool(
   name: string,
   timeoutSeconds: number
 ): Promise<unknown> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
-
   try {
-    return await Promise.resolve(fn(args));
+    return await Promise.race([
+      Promise.resolve(fn(args)),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
+              )
+            ),
+          timeoutSeconds * 1000
+        )
+      ),
+    ]);
   } catch (exc) {
-    if (exc instanceof Error && exc.name === "AbortError") {
-      return {
-        error: `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`,
-      };
+    if (
+      exc instanceof Error &&
+      exc.message.includes("exceeded its") &&
+      exc.message.includes("execution limit")
+    ) {
+      return { error: exc.message };
     }
     if (exc instanceof TypeError) {
       return { error: `Malformed arguments for ${name}: ${exc}` };
     }
     return { error: `Tool ${name} failed: ${exc}` };
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
