@@ -13,3 +13,5 @@
 
 # TypeScript dependencies
 /server-typescript/node_modules/
+
+/server-typescript/dist/
