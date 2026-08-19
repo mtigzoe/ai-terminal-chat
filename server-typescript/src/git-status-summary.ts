@@ -10,11 +10,14 @@ export interface GitStatusSummary {
   changed: number;
   untracked: number;
   staged: number;
+  hasRemote: boolean;
+  synchronized: boolean;
 }
 
 /**
- * Turn git status --short --branch into a small, provider-friendly summary.
- * The AI can use the structured counts to answer Git questions in plain language.
+ * Turn `git status --short --branch` into concise, plain-language information.
+ * This is deliberately deterministic so users do not have to decode Git's
+ * two-column status codes or guess whether commits have been pushed.
  */
 export function gitStatusSummary(): GitStatusSummary | { error: string } {
   const result = gitStatus();
@@ -23,8 +26,10 @@ export function gitStatusSummary(): GitStatusSummary | { error: string } {
   const status = String(result.status || "");
   const lines = status.split(/\r?\n/).filter(Boolean);
   const branchLine = lines.find((line) => line.startsWith("## ")) || "";
-  const branchMatch = branchLine.match(/^##\s+([^.\s]+(?:\/[^.\s]+)?)\b/);
-  const branch = branchMatch?.[1] || null;
+
+  const branchMatch = branchLine.match(/^##\s+(.+?)(?:\.\.\.|$)/);
+  const branch = branchMatch?.[1]?.trim() || null;
+  const hasRemote = branchLine.includes("...");
 
   let ahead = 0;
   let behind = 0;
@@ -44,6 +49,7 @@ export function gitStatusSummary(): GitStatusSummary | { error: string } {
 
   for (const line of lines) {
     if (line.startsWith("## ") || line.length < 3) continue;
+
     const x = line[0];
     const y = line[1];
     const file = line.slice(3).trim();
@@ -68,28 +74,40 @@ export function gitStatusSummary(): GitStatusSummary | { error: string } {
   }
 
   const clean = changed === 0 && untracked === 0;
+  const synchronized = hasRemote && ahead === 0 && behind === 0;
   const totalChanges = changed + untracked;
   const parts: string[] = [];
 
-  if (clean) parts.push("Your working tree is clean.");
-  else {
+  if (clean) {
+    parts.push("Your working tree is clean.");
+  } else {
     parts.push(
       `You have ${totalChanges} uncommitted file${totalChanges === 1 ? "" : "s"}.`
     );
   }
 
-  if (ahead > 0) {
+  if (staged > 0) {
     parts.push(
-      `Your branch has ${ahead} commit${ahead === 1 ? "" : "s"} that have not been pushed to the remote.`
+      `${staged} file${staged === 1 ? " is" : "s are"} staged for the next commit.`
     );
   }
-  if (behind > 0) {
+
+  if (ahead > 0 && behind > 0) {
+    parts.push(
+      `Your branch has ${ahead} commit${ahead === 1 ? "" : "s"} not pushed and is ${behind} commit${behind === 1 ? "" : "s"} behind the remote.`
+    );
+  } else if (ahead > 0) {
+    parts.push(
+      `Your branch has ${ahead} commit${ahead === 1 ? "" : "s"} not pushed to the remote.`
+    );
+  } else if (behind > 0) {
     parts.push(
       `Your branch is ${behind} commit${behind === 1 ? "" : "s"} behind the remote.`
     );
-  }
-  if (ahead === 0 && behind === 0 && branch && !clean) {
-    parts.push("Your local branch and its remote tracking branch are synchronized.");
+  } else if (synchronized) {
+    parts.push("Your local branch is synchronized with its remote branch.");
+  } else if (!hasRemote && branch) {
+    parts.push("This branch is not tracking a remote branch, so Git cannot tell whether it has been pushed.");
   }
 
   return {
@@ -102,5 +120,7 @@ export function gitStatusSummary(): GitStatusSummary | { error: string } {
     changed,
     untracked,
     staged,
+    hasRemote,
+    synchronized,
   };
 }
