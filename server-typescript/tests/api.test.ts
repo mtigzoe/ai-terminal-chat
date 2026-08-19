@@ -321,6 +321,10 @@ describe("POST /chat", () => {
     "git status",
     "What's my Git status?",
     "Did I commit everything?",
+    "Did I git commit?",
+    "Did I git push?",
+    "Am I safe to git push?",
+    "Can I git push?",
   ])("routes Git-status requests through the stub provider: %s", async (chat) => {
     gitStatusMock.mockReturnValue({
       status:

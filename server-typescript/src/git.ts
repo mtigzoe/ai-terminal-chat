@@ -61,6 +61,26 @@ export function gitStatus(): Record<string, unknown> {
   return payload;
 }
 
+/** Count files recorded in the current commit without changing repository state. */
+export function gitCommittedFileCount(): Record<string, unknown> {
+  const result = runGit(["ls-tree", "-r", "--name-only", "HEAD"], GIT_STATUS_TIMEOUT);
+
+  if (result.code === 127) {
+    return { error: "git is not installed or not on PATH." };
+  }
+  if (result.code !== 0) {
+    return {
+      error:
+        result.stderr.trim() ||
+        "Could not count files in the current commit. The repository may not have a commit yet.",
+    };
+  }
+
+  return {
+    committed_files: result.stdout.split(/\r?\n/).filter(Boolean).length,
+  };
+}
+
 export function gitDiff(
   relPath = "",
   staged = false

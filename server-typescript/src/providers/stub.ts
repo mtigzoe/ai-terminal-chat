@@ -24,6 +24,13 @@ export class StubProvider extends Provider {
 
   async generate(_contents: unknown[]): Promise<ProviderResponse> {
     const toolResult = _contents.at(-1);
+    if (isGitCommittedFileCountToolResult(toolResult)) {
+      return {
+        text: formatCommittedFileCountResponse(toolResult.result),
+        tool_calls: [],
+        raw: null,
+      };
+    }
     if (isGitStatusToolResult(toolResult)) {
       return {
         text: formatGitStatusResponse(toolResult.result),
@@ -33,6 +40,13 @@ export class StubProvider extends Provider {
     }
 
     const message = latestUserMessage(_contents);
+    if (isCommittedFileCountRequest(message)) {
+      return {
+        text: null,
+        tool_calls: [{ name: "git_committed_file_count", args: {} }],
+        raw: null,
+      };
+    }
     if (isGitStatusRequest(message)) {
       return {
         text: null,
@@ -82,8 +96,15 @@ export function isGitStatusRequest(message: string): boolean {
     /\bgit\s+status\b/.test(normalized) ||
     /\b(?:what(?:'s| is)|show|check|tell me|can you tell me).{0,80}\b(?:git|repository|repo|working tree)\b.{0,80}\b(?:status|state)\b/.test(normalized) ||
     /\b(?:did|have) i commit (?:everything|all(?: of)? (?:my )?changes)\b/.test(normalized) ||
+    /\bdid i (?:git )?(?:commit|push)\b/.test(normalized) ||
+    /\bcan i (?:git )?push\b/.test(normalized) ||
+    /\b(?:am i|is it|can i).{0,40}\b(?:safe|ready|okay|ok)\b.{0,40}\b(?:to )?git push\b/.test(normalized) ||
     /\b(?:is|are) (?:everything|all(?: of)? (?:my )?changes) committed\b/.test(normalized)
   );
+}
+
+export function isCommittedFileCountRequest(message: string): boolean {
+  return /\bhow many files (?:are )?committ?ed\b/.test(message.trim().toLowerCase());
 }
 
 function latestUserMessage(contents: unknown[]): string {
@@ -112,6 +133,17 @@ function isGitStatusToolResult(
   );
 }
 
+function isGitCommittedFileCountToolResult(
+  item: unknown
+): item is { role: "tool"; name: "git_committed_file_count"; result: unknown } {
+  return !!(
+    item &&
+    typeof item === "object" &&
+    (item as Record<string, unknown>).role === "tool" &&
+    (item as Record<string, unknown>).name === "git_committed_file_count"
+  );
+}
+
 function formatGitStatusResponse(result: unknown): string {
   if (!result || typeof result !== "object") {
     return "Git status could not be determined.";
@@ -128,4 +160,17 @@ function formatGitStatusResponse(result: unknown): string {
   return details.length > 0
     ? `${summary}\n\nFiles:\n${details.map((detail) => `- ${detail}`).join("\n")}`
     : summary;
+}
+
+function formatCommittedFileCountResponse(result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "Git could not count files in the current commit.";
+  }
+
+  const response = result as Record<string, unknown>;
+  if (typeof response.error === "string") return response.error;
+  const count = response.committed_files;
+  if (typeof count !== "number") return "Git could not count files in the current commit.";
+
+  return `The current commit contains ${count} tracked file${count === 1 ? "" : "s"}.`;
 }
