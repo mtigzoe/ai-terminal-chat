@@ -18,8 +18,8 @@ export class StubProvider extends Provider {
     };
   }
 
-  buildContents(msg: string, _history: unknown[]): unknown[] {
-    return [{ role: "user", content: msg }];
+  buildContents(msg: string, history: unknown[]): unknown[] {
+    return [...history, { role: "user", content: msg }];
   }
 
   async generate(_contents: unknown[]): Promise<ProviderResponse> {
@@ -40,6 +40,27 @@ export class StubProvider extends Provider {
         raw: null,
       };
     }
+    if (isGitBranchToolResult(toolResult)) {
+      return {
+        text: formatGitBranchResponse(toolResult.result),
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    if (isGitLogToolResult(toolResult)) {
+      return {
+        text: formatGitLogResponse(toolResult.result),
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    if (isGitDiffToolResult(toolResult)) {
+      return {
+        text: formatGitDiffResponse(toolResult.result),
+        tool_calls: [],
+        raw: null,
+      };
+    }
 
     if (isCommittedFileCountRequest(originalQuestion)) {
       return {
@@ -52,6 +73,27 @@ export class StubProvider extends Provider {
       return {
         text: null,
         tool_calls: [{ name: "git_status", args: {} }],
+        raw: null,
+      };
+    }
+    if (isGitBranchRequest(originalQuestion)) {
+      return {
+        text: null,
+        tool_calls: [{ name: "git_branch", args: {} }],
+        raw: null,
+      };
+    }
+    if (isGitLogRequest(originalQuestion)) {
+      return {
+        text: null,
+        tool_calls: [{ name: "git_log", args: {} }],
+        raw: null,
+      };
+    }
+    if (isGitDiffRequest(originalQuestion)) {
+      return {
+        text: null,
+        tool_calls: [{ name: "git_diff", args: {} }],
         raw: null,
       };
     }
@@ -84,11 +126,6 @@ export class StubProvider extends Provider {
   }
 }
 
-/**
- * The stub has no model to decide when to call a tool. Keep its small amount
- * of routing explicit so Git-status questions exercise the same agent/tool
- * path as a tool-capable provider.
- */
 export function isGitStatusRequest(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
@@ -101,6 +138,39 @@ export function isGitStatusRequest(message: string): boolean {
     /\bcan i (?:git )?push\b/.test(normalized) ||
     /\b(?:am i|is it|can i).{0,40}\b(?:safe|ready|okay|ok)\b.{0,40}\b(?:to )?git push\b/.test(normalized) ||
     /\b(?:is|are) (?:everything|all(?: of)? (?:my )?changes) committed\b/.test(normalized)
+  );
+}
+
+export function isGitBranchRequest(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+
+  return (
+    /\bgit\s+branch\b/.test(normalized) ||
+    /\b(?:what|which|show|list|tell me).{0,40}\bbranch(?:es)?\b/.test(normalized) ||
+    /\bcurrent\s+branch\b/.test(normalized)
+  );
+}
+
+export function isGitLogRequest(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+
+  return (
+    /\bgit\s+log\b/.test(normalized) ||
+    /\brecent\s+commits?\b/.test(normalized) ||
+    /\bshow\s+.*\bcommit\s+history\b/.test(normalized)
+  );
+}
+
+export function isGitDiffRequest(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+
+  return (
+    /\bgit\s+diff\b/.test(normalized) ||
+    /\bwhat\s+changed\b/.test(normalized) ||
+    /\bshow\s+.*\bdiff\b/.test(normalized)
   );
 }
 
@@ -145,11 +215,39 @@ function isGitCommittedFileCountToolResult(
   );
 }
 
-/**
- * Produce a plain-language answer that matches the user's question.
- * Generic status queries keep the full summary; commit/push questions
- * receive an explicit yes/no grounded in the structured tool result.
- */
+function isGitBranchToolResult(
+  item: unknown
+): item is { role: "tool"; name: "git_branch"; result: unknown } {
+  return !!(
+    item &&
+    typeof item === "object" &&
+    (item as Record<string, unknown>).role === "tool" &&
+    (item as Record<string, unknown>).name === "git_branch"
+  );
+}
+
+function isGitLogToolResult(
+  item: unknown
+): item is { role: "tool"; name: "git_log"; result: unknown } {
+  return !!(
+    item &&
+    typeof item === "object" &&
+    (item as Record<string, unknown>).role === "tool" &&
+    (item as Record<string, unknown>).name === "git_log"
+  );
+}
+
+function isGitDiffToolResult(
+  item: unknown
+): item is { role: "tool"; name: "git_diff"; result: unknown } {
+  return !!(
+    item &&
+    typeof item === "object" &&
+    (item as Record<string, unknown>).role === "tool" &&
+    (item as Record<string, unknown>).name === "git_diff"
+  );
+}
+
 function formatGitStatusResponse(
   result: unknown,
   originalQuestion = ""
@@ -243,10 +341,67 @@ function formatGitStatusResponse(
     return parts.join(" ");
   }
 
-  // Generic status / "what's my git status?" – keep the existing summary.
   return details.length > 0
     ? `${summary}\n\nFiles:\n${details.map((detail) => `- ${detail}`).join("\n")}`
     : summary;
+}
+
+function formatGitBranchResponse(result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "Git branch could not be determined.";
+  }
+
+  const response = result as Record<string, unknown>;
+  if (typeof response.error === "string") return response.error;
+
+  const branches = typeof response.branches === "string" ? response.branches : "";
+  if (!branches.trim()) {
+    return "This repository has no branches.";
+  }
+
+  return branches.trim();
+}
+
+function formatGitLogResponse(result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "Git log could not be determined.";
+  }
+
+  const response = result as Record<string, unknown>;
+  if (typeof response.error === "string") return response.error;
+
+  const log = typeof response.log === "string" ? response.log : "";
+  if (!log.trim()) {
+    return "This repository has no commits.";
+  }
+
+  const note =
+    typeof response.truncation_note === "string"
+      ? `\n\n${response.truncation_note}`
+      : "";
+
+  return log.trim() + note;
+}
+
+function formatGitDiffResponse(result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "Git diff could not be determined.";
+  }
+
+  const response = result as Record<string, unknown>;
+  if (typeof response.error === "string") return response.error;
+
+  const diff = typeof response.diff === "string" ? response.diff : "";
+  if (!diff.trim()) {
+    return "No differences found.";
+  }
+
+  const note =
+    typeof response.truncation_note === "string"
+      ? `\n\n${response.truncation_note}`
+      : "";
+
+  return diff.trim() + note;
 }
 
 function formatCommittedFileCountResponse(result: unknown): string {
