@@ -317,18 +317,110 @@ describe("POST /chat", () => {
     expect(data.request_id).toBeDefined();
   }, 10000);
 
-  it.each([
-    "git status",
-    "What's my Git status?",
-    "Did I commit everything?",
-    "Did I git commit?",
-    "Did I git push?",
-    "Am I safe to git push?",
-    "Can I git push?",
-  ])("routes Git-status requests through the stub provider: %s", async (chat) => {
+  const dirtyStatus = {
+    status:
+      "## git-status-badge...origin/git-status-badge [ahead 2, behind 1]\nM  staged.ts\n M modified.ts\n?? untracked.ts\n",
+    truncated: false,
+  };
+
+  it.each(["git status", "What's my Git status?"])(
+    "answers generic Git-status questions with the full summary: %s",
+    async (chat) => {
+      gitStatusMock.mockReturnValue(dirtyStatus);
+      await createTestApp().request("http://localhost/providers/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "gemini" }),
+      });
+
+      const res = await createTestApp().request("http://localhost/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat, history: [] }),
+      });
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(gitStatusMock).toHaveBeenCalledOnce();
+      expect(data.tool_activity).toContainEqual(
+        expect.objectContaining({ type: "tool_call", name: "git_status" })
+      );
+      expect(data.text).toContain("You have 3 uncommitted files.");
+      expect(data.text).toContain("1 file is staged for the next commit.");
+      expect(data.text).toContain("2 commits not pushed");
+      expect(data.text).toContain("1 commit behind the remote.");
+      expect(data.text).toContain("staged.ts — modified, staged");
+      expect(data.text).toContain("modified.ts — modified, not staged");
+      expect(data.text).toContain("untracked.ts — new file, not tracked by Git");
+    }
+  );
+
+  it.each(["Did I commit everything?", "Did I git commit?"])(
+    "answers commit questions with an explicit yes/no: %s",
+    async (chat) => {
+      gitStatusMock.mockReturnValue(dirtyStatus);
+      await createTestApp().request("http://localhost/providers/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "gemini" }),
+      });
+
+      const res = await createTestApp().request("http://localhost/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat, history: [] }),
+      });
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(gitStatusMock).toHaveBeenCalledOnce();
+      expect(data.tool_activity).toContainEqual(
+        expect.objectContaining({ type: "tool_call", name: "git_status" })
+      );
+      expect(data.text).toMatch(/^No\./);
+      expect(data.text).toContain("3 uncommitted file");
+      expect(data.text).toContain("1 file is already staged");
+      expect(data.text).toContain("staged.ts — modified, staged");
+      expect(data.text).toContain("modified.ts — modified, not staged");
+      expect(data.text).toContain("untracked.ts — new file, not tracked by Git");
+    }
+  );
+
+  it.each(["Did I git push?", "Am I safe to git push?", "Can I git push?"])(
+    "answers push questions with an explicit yes/no: %s",
+    async (chat) => {
+      gitStatusMock.mockReturnValue(dirtyStatus);
+      await createTestApp().request("http://localhost/providers/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "gemini" }),
+      });
+
+      const res = await createTestApp().request("http://localhost/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat, history: [] }),
+      });
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(gitStatusMock).toHaveBeenCalledOnce();
+      expect(data.tool_activity).toContainEqual(
+        expect.objectContaining({ type: "tool_call", name: "git_status" })
+      );
+      expect(data.text).toMatch(/^No\./);
+      expect(data.text).toContain("2 commits that have not been pushed");
+      expect(data.text).toContain("1 commit behind the remote");
+      expect(data.text).toContain("3 uncommitted change");
+      expect(data.text).toContain("staged.ts — modified, staged");
+      expect(data.text).toContain("modified.ts — modified, not staged");
+      expect(data.text).toContain("untracked.ts — new file, not tracked by Git");
+    }
+  );
+
+  it("answers commit questions affirmatively when the working tree is clean", async () => {
     gitStatusMock.mockReturnValue({
-      status:
-        "## git-status-badge...origin/git-status-badge [ahead 2, behind 1]\nM  staged.ts\n M modified.ts\n?? untracked.ts\n",
+      status: "## main...origin/main\n",
       truncated: false,
     });
     await createTestApp().request("http://localhost/providers/select", {
@@ -340,22 +432,40 @@ describe("POST /chat", () => {
     const res = await createTestApp().request("http://localhost/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat, history: [] }),
+      body: JSON.stringify({ chat: "Did I git commit?", history: [] }),
     });
 
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(gitStatusMock).toHaveBeenCalledOnce();
-    expect(data.tool_activity).toContainEqual(
-      expect.objectContaining({ type: "tool_call", name: "git_status" })
+    expect(data.text).toBe(
+      "Yes. Your working tree is clean; all changes have been committed."
     );
-    expect(data.text).toContain("You have 3 uncommitted files.");
-    expect(data.text).toContain("1 file is staged for the next commit.");
-    expect(data.text).toContain("2 commits not pushed");
-    expect(data.text).toContain("1 commit behind the remote.");
-    expect(data.text).toContain("staged.ts — modified, staged");
-    expect(data.text).toContain("modified.ts — modified, not staged");
-    expect(data.text).toContain("untracked.ts — new file, not tracked by Git");
+  });
+
+  it("answers push questions affirmatively when the branch is synchronized", async () => {
+    gitStatusMock.mockReturnValue({
+      status: "## main...origin/main\n",
+      truncated: false,
+    });
+    await createTestApp().request("http://localhost/providers/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "gemini" }),
+    });
+
+    const res = await createTestApp().request("http://localhost/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat: "Did I git push?", history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(gitStatusMock).toHaveBeenCalledOnce();
+    expect(data.text).toBe(
+      "Yes. Your local branch is synchronized with the remote and the working tree is clean; there is nothing to push."
+    );
   });
 });
 

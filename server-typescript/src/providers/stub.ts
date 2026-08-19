@@ -24,6 +24,8 @@ export class StubProvider extends Provider {
 
   async generate(_contents: unknown[]): Promise<ProviderResponse> {
     const toolResult = _contents.at(-1);
+    const originalQuestion = latestUserMessage(_contents);
+
     if (isGitCommittedFileCountToolResult(toolResult)) {
       return {
         text: formatCommittedFileCountResponse(toolResult.result),
@@ -33,21 +35,20 @@ export class StubProvider extends Provider {
     }
     if (isGitStatusToolResult(toolResult)) {
       return {
-        text: formatGitStatusResponse(toolResult.result),
+        text: formatGitStatusResponse(toolResult.result, originalQuestion),
         tool_calls: [],
         raw: null,
       };
     }
 
-    const message = latestUserMessage(_contents);
-    if (isCommittedFileCountRequest(message)) {
+    if (isCommittedFileCountRequest(originalQuestion)) {
       return {
         text: null,
         tool_calls: [{ name: "git_committed_file_count", args: {} }],
         raw: null,
       };
     }
-    if (isGitStatusRequest(message)) {
+    if (isGitStatusRequest(originalQuestion)) {
       return {
         text: null,
         tool_calls: [{ name: "git_status", args: {} }],
@@ -144,7 +145,15 @@ function isGitCommittedFileCountToolResult(
   );
 }
 
-function formatGitStatusResponse(result: unknown): string {
+/**
+ * Produce a plain-language answer that matches the user's question.
+ * Generic status queries keep the full summary; commit/push questions
+ * receive an explicit yes/no grounded in the structured tool result.
+ */
+function formatGitStatusResponse(
+  result: unknown,
+  originalQuestion = ""
+): string {
   if (!result || typeof result !== "object") {
     return "Git status could not be determined.";
   }
@@ -152,11 +161,89 @@ function formatGitStatusResponse(result: unknown): string {
   const response = result as Record<string, unknown>;
   if (typeof response.error === "string") return response.error;
 
-  const summary = typeof response.summary === "string" ? response.summary : "Git status could not be determined.";
+  const summary =
+    typeof response.summary === "string"
+      ? response.summary
+      : "Git status could not be determined.";
   const details = Array.isArray(response.details)
     ? response.details.filter((detail): detail is string => typeof detail === "string")
     : [];
 
+  const clean = Boolean(response.clean);
+  const synchronized = Boolean(response.synchronized);
+  const ahead = Number(response.ahead) || 0;
+  const behind = Number(response.behind) || 0;
+  const staged = Number(response.staged) || 0;
+  const changed = Number(response.changed) || 0;
+  const untracked = Number(response.untracked) || 0;
+  const totalUncommitted = changed + untracked;
+
+  const q = originalQuestion.trim().toLowerCase();
+
+  const isCommitQuestion =
+    /\b(?:did|have) i (?:git )?commit\b/.test(q) ||
+    /\b(?:did|have) i commit (?:everything|all(?: of)? (?:my )?changes)\b/.test(q) ||
+    /\b(?:is|are) (?:everything|all(?: of)? (?:my )?changes) committed\b/.test(q);
+
+  const isPushQuestion =
+    /\bdid i (?:git )?push\b/.test(q) ||
+    /\bcan i (?:git )?push\b/.test(q) ||
+    /\b(?:am i|is it|can i).{0,40}\b(?:safe|ready|okay|ok)\b.{0,40}\b(?:to )?git push\b/.test(q);
+
+  if (isCommitQuestion) {
+    if (clean) {
+      return "Yes. Your working tree is clean; all changes have been committed.";
+    }
+    const parts = [
+      `No. You still have ${totalUncommitted} uncommitted file${totalUncommitted === 1 ? "" : "s"}.`,
+    ];
+    if (staged > 0) {
+      parts.push(
+        `${staged} file${staged === 1 ? " is" : "s are"} already staged for the next commit.`
+      );
+    }
+    if (details.length > 0) {
+      parts.push(
+        "\n\nFiles:\n" + details.map((detail) => `- ${detail}`).join("\n")
+      );
+    }
+    return parts.join(" ");
+  }
+
+  if (isPushQuestion) {
+    if (synchronized && clean) {
+      return "Yes. Your local branch is synchronized with the remote and the working tree is clean; there is nothing to push.";
+    }
+    if (ahead === 0 && clean) {
+      return "Your branch is not ahead of the remote, so there is nothing to push. The working tree is clean.";
+    }
+    const parts: string[] = [];
+    if (ahead > 0) {
+      parts.push(
+        `No. Your branch has ${ahead} commit${ahead === 1 ? "" : "s"} that have not been pushed.`
+      );
+    } else {
+      parts.push("There are no local commits waiting to be pushed.");
+    }
+    if (behind > 0) {
+      parts.push(
+        `Your branch is also ${behind} commit${behind === 1 ? "" : "s"} behind the remote.`
+      );
+    }
+    if (!clean) {
+      parts.push(
+        `In addition the working tree still contains ${totalUncommitted} uncommitted change${totalUncommitted === 1 ? "" : "s"}.`
+      );
+    }
+    if (details.length > 0) {
+      parts.push(
+        "\n\nFiles:\n" + details.map((detail) => `- ${detail}`).join("\n")
+      );
+    }
+    return parts.join(" ");
+  }
+
+  // Generic status / "what's my git status?" – keep the existing summary.
   return details.length > 0
     ? `${summary}\n\nFiles:\n${details.map((detail) => `- ${detail}`).join("\n")}`
     : summary;
