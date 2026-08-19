@@ -6,6 +6,7 @@ import ProjectExplorer from './ProjectExplorer';
 vi.mock('axios', () => ({
   default: {
     get: vi.fn(),
+    post: vi.fn(),
   },
 }));
 
@@ -13,6 +14,8 @@ const host = 'http://localhost:9000';
 
 beforeEach(() => {
   axios.get.mockReset();
+  axios.post.mockReset();
+  axios.post.mockResolvedValue({ data: { stdout: '' } });
 });
 
 test('lists directory entries and exposes accessible file checkboxes', async () => {
@@ -32,6 +35,38 @@ test('lists directory entries and exposes accessible file checkboxes', async () 
   expect(await screen.findByRole('checkbox', { name: /select readme\.md for the agent/i })).toBeInTheDocument();
   expect(screen.getByRole('treeitem', { name: /src, directory/i })).toBeInTheDocument();
   expect(screen.getByRole('tree', { name: /project files and directories/i })).toBeInTheDocument();
+});
+
+test('shows Git status indicators and includes the status in accessible tree labels', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'README.md', type: 'file' },
+        { name: 'new.txt', type: 'file' },
+        { name: 'src', type: 'directory' },
+      ],
+    },
+  });
+  axios.post.mockResolvedValueOnce({
+    data: {
+      stdout: ' M README.md\n?? new.txt\n M src/App.jsx\n',
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('treeitem', { name: /README\.md, file, modified/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /new\.txt, file, untracked/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /src, directory, modified/i })).toBeInTheDocument();
+
+  const modifiedBadges = screen.getAllByText('[M]', { selector: 'span' });
+  expect(modifiedBadges).toHaveLength(2);
+  expect(modifiedBadges[0]).toHaveAttribute('title', 'Git status: modified');
+  expect(screen.getByText('[U]', { selector: 'span' })).toHaveAttribute('title', 'Git status: untracked');
+  expect(axios.post).toHaveBeenCalledWith(`${host}/terminal/run`, {
+    command: 'git status --porcelain=v1 --untracked-files=all',
+  });
 });
 
 test('opens a file for local preview without supplying it to the agent', async () => {
@@ -142,4 +177,90 @@ test('virtualized tree keeps keyboard navigation accessible to offscreen rows', 
     expect(screen.getByRole('treeitem', { name: /file-250\.txt, file/i })).toHaveFocus();
   });
   expect(screen.queryByRole('treeitem', { name: /file-1\.txt, file/i })).not.toBeInTheDocument();
+});
+
+test('git status failure does not break the project tree', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'README.md', type: 'file' },
+        { name: 'src', type: 'directory' },
+      ],
+    },
+  });
+  axios.post.mockRejectedValueOnce(new Error('git not found'));
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('heading', { name: 'Project' })).toBeInTheDocument();
+  expect(await screen.findByRole('treeitem', { name: /README\.md, file/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /src, directory/i })).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+test('git status failure produces an accessible non-blocking status message', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [{ name: 'README.md', type: 'file' }],
+    },
+  });
+  axios.post.mockRejectedValueOnce(new Error('git not found'));
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('treeitem', { name: /README\.md, file/i })).toBeInTheDocument();
+  expect(screen.getByText(/git status unavailable/i)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+test('git status success clears the git status error', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [{ name: 'README.md', type: 'file' }],
+    },
+  });
+  axios.post
+    .mockRejectedValueOnce(new Error('git not found'))
+    .mockResolvedValueOnce({ data: { stdout: '' } });
+
+  render(<ProjectExplorer host={host} />);
+
+  await screen.findByRole('treeitem', { name: /README\.md, file/i });
+  expect(screen.getByText(/git status unavailable/i)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+
+  await waitFor(() => {
+    expect(screen.queryByText(/git status unavailable/i)).not.toBeInTheDocument();
+  });
+});
+
+test('periodic refresh triggers another git status request after approximately 5 seconds', async () => {
+  const setIntervalSpy = vi.spyOn(window, 'setInterval');
+  const clearIntervalSpy = vi.spyOn(window, 'clearInterval');
+
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [{ name: 'README.md', type: 'file' }],
+    },
+  });
+  axios.post.mockResolvedValue({ data: { stdout: '' } });
+
+  const { unmount } = render(<ProjectExplorer host={host} />);
+
+  await screen.findByRole('treeitem', { name: /README\.md, file/i });
+  expect(axios.post).toHaveBeenCalledTimes(1);
+
+  const intervalCall = setIntervalSpy.mock.calls.find(([callback, delay]) => typeof callback === 'function' && delay === 5000);
+  expect(intervalCall).toBeTruthy();
+
+  unmount();
+  expect(clearIntervalSpy).toHaveBeenCalled();
+
+  setIntervalSpy.mockRestore();
+  clearIntervalSpy.mockRestore();
 });

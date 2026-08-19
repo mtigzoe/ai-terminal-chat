@@ -45,6 +45,27 @@ def is_local_url(url: str) -> bool:
     return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
+def model_ids_match(requested: str, installed: str) -> bool:
+    """True when an installed Ollama tag satisfies the configured model.
+
+    Ollama accepts both short names (``llama3.1``) and full tags
+    (``llama3.1:latest``). Treat a bare name as matching the same
+    name with the default ``:latest`` tag, and vice versa.
+    """
+
+    req = (requested or "").strip().lower()
+    inst = (installed or "").strip().lower()
+    if not req or not inst:
+        return False
+    if req == inst:
+        return True
+    if ":" not in req and inst == f"{req}:latest":
+        return True
+    if ":" not in inst and req == f"{inst}:latest":
+        return True
+    return False
+
+
 class OllamaProvider(OpenAICompatibleProvider):
     """Ollama local server with native catalog and capability APIs."""
 
@@ -81,6 +102,14 @@ class OllamaProvider(OpenAICompatibleProvider):
         return (
             f"Could not reach Ollama at {self.native_base_url}.{hint} {exc}"
         ).strip()
+
+    def _missing_model_message(self, model: str = None) -> str:
+        name = model or self.model
+        return (
+            f"Ollama is reachable at {self.native_base_url}, but model "
+            f"'{name}' is not installed. Pull it with `ollama pull {name}` "
+            "or choose an installed model in Settings."
+        )
 
     def _native_request(self, method: str, path: str, **kwargs):
         kwargs.setdefault("headers", self._headers())
@@ -133,6 +162,15 @@ class OllamaProvider(OpenAICompatibleProvider):
                 "details": item.get("details") or {},
             })
         return models
+
+    def has_model(self, model: str = None) -> bool:
+        """Return True if the configured (or given) model is installed."""
+
+        target = model or self.model
+        for item in self.list_models():
+            if model_ids_match(target, item.get("id") or ""):
+                return True
+        return False
 
     def show_model(self, model: str = None) -> dict:
         """Return `/api/show` data for a model, or {} if unavailable."""
@@ -196,6 +234,26 @@ class OllamaProvider(OpenAICompatibleProvider):
             )
             return self._capabilities
 
+        installed = self.list_models()
+        if not installed:
+            self._capabilities = replace(
+                self._capabilities,
+                notes=(
+                    f"Ollama is reachable at {self.native_base_url}, but no "
+                    "models are installed. Pull one with `ollama pull "
+                    f"{self.model}` (or another model name) and select it "
+                    "in Settings."
+                ),
+            )
+            return self._capabilities
+
+        if not any(model_ids_match(self.model, item.get("id") or "") for item in installed):
+            self._capabilities = replace(
+                self._capabilities,
+                notes=self._missing_model_message(),
+            )
+            return self._capabilities
+
         detected = self.capabilities_for_model(self.model)
         self._capabilities = detected
         return self._capabilities
@@ -205,6 +263,14 @@ class OllamaProvider(OpenAICompatibleProvider):
         # never receives a `tools` array that would 400 the request.
         if not self._capabilities.notes and self._capabilities.tools:
             self.refresh_capabilities()
+
+        # Surface a missing-model error before the OpenAI-compatible
+        # path produces a less actionable HTTP 404 from /v1.
+        if self._capabilities.notes and "is not installed" in self._capabilities.notes:
+            raise RuntimeError(self._capabilities.notes)
+        if self._capabilities.notes and "no models are installed" in self._capabilities.notes:
+            raise RuntimeError(self._capabilities.notes)
+
         try:
             return super().generate(contents)
         except Exception as exc:
@@ -218,4 +284,11 @@ class OllamaProvider(OpenAICompatibleProvider):
                     ),
                 )
                 return super().generate(contents)
+
+            message = str(exc).lower()
+            if (
+                "not found" in message
+                or ("model" in message and ("pull" in message or "404" in message))
+            ):
+                raise RuntimeError(self._missing_model_message()) from exc
             raise

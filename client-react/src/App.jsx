@@ -113,7 +113,7 @@ function App() {
   const inputRef = useRef();
   const abortControllerRef = useRef(null);
   const requestIdRef = useRef(null);
-  const host = import.meta.env.VITE_API_URL || "http://localhost:9000";
+  const host = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/+$/, "");
   const url = host + "/chat";
   const streamUrl = host + "/stream";
   const [data, setData] = useState([]);
@@ -239,7 +239,7 @@ function App() {
       const base = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/$/, "");
       const code = error?.code ? ` (${error.code})` : "";
       const detail = error?.message && error.message !== "Network Error" ? ` ${error.message}` : "";
-      return (`Cannot reach the backend at ${base}${code}.${detail} Confirm the Flask server is running (for example: python app.py in server-python) and that VITE_API_URL matches its address if you changed the default.`).replace(/\s+/g, " ").trim();
+      return (`Cannot reach the backend at ${base}${code}.${detail} Confirm the backend server is running (for example: npm run dev in server-typescript) and that VITE_API_URL matches its address if you changed the default.`).replace(/\s+/g, " ").trim();
     }
     if (error?.message) return error.message;
     return fallback;

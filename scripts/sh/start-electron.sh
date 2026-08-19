@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start the Electron desktop development environment on Linux.
+# Start the Electron desktop development environment on Linux/macOS.
 # Starts Flask and Vite when needed, then launches Electron.
 #
 # Usage (from repository root):
-#   ./scripts/start-electron.sh
+#   ./scripts/sh/start-electron.sh
 #
-# If this file is invoked with `bash scripts/start-electron.sh`, ensure the
+# If this file is invoked with `bash scripts/sh/start-electron.sh`, ensure the
 # executable bit is restored for future direct invocations.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+# scripts/sh -> scripts -> repository root
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 SERVER_DIR="$REPO_ROOT/server-python"
 CLIENT_DIR="$REPO_ROOT/client-react"
 VENV_DIR="$SERVER_DIR/.venv"
@@ -29,11 +30,11 @@ if ! command -v npm >/dev/null 2>&1; then
     exit 1
 fi
 if [[ ! -f "$SERVER_DIR/app.py" ]]; then
-    printf 'Error: server-python/app.py was not found.\n' >&2
+    printf 'Error: server-python/app.py was not found. Expected repository root at: %s\n' "$REPO_ROOT" >&2
     exit 1
 fi
 if [[ ! -f "$CLIENT_DIR/package.json" ]]; then
-    printf 'Error: client-react/package.json was not found.\n' >&2
+    printf 'Error: client-react/package.json was not found. Expected repository root at: %s\n' "$REPO_ROOT" >&2
     exit 1
 fi
 
@@ -92,10 +93,13 @@ trap cleanup EXIT INT TERM
 
 if ! port_in_use 9000; then
     printf 'Starting Flask backend with the project virtual environment...\n'
-    BACKEND_PID=$(
-        bash -c 'cd "$1" && source .venv/bin/activate && exec uv run app.py' _ "$SERVER_DIR" &
-        echo $!
-    )
+    (
+        cd "$SERVER_DIR"
+        # shellcheck disable=SC1091
+        source .venv/bin/activate
+        exec uv run app.py
+    ) &
+    BACKEND_PID=$!
     BACKEND_STARTED=1
     wait_for_url "http://127.0.0.1:9000/providers?probe=0" "Flask backend"
 else
