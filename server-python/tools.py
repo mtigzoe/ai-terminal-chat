@@ -574,15 +574,8 @@ GIT_BRANCH_MAX_CHARS = 20_000
 GIT_DIFF_MAX_CHARS = 50_000
 
 
-def git_status() -> dict:
-    """Show the current git status of the project.
-
-    Equivalent to `git status --short --branch`. Always use this instead
-    of guessing what has changed in the repository.
-
-    Returns:
-        A dictionary with the short-form status output.
-    """
+def _git_status_raw() -> dict:
+    """Run `git status --short --branch` and return raw text (or error)."""
 
     try:
         result = subprocess.run(
@@ -618,6 +611,181 @@ def git_status() -> dict:
             f"characters."
         )
     return payload
+
+
+def git_status() -> dict:
+    """Show the current git status of the project in plain language.
+
+    Equivalent to parsing `git status --short --branch` into a concise
+    summary (clean/dirty, staged counts, ahead/behind) so the model and
+    user do not have to decode Git's two-column status codes. Always use
+    this instead of guessing what has changed in the repository.
+
+    Returns:
+        A dictionary with summary, details, and structured fields
+        (clean, ahead, behind, staged, etc.), or an error.
+    """
+
+    raw = _git_status_raw()
+    if "error" in raw:
+        return raw
+
+    status = str(raw.get("status") or "")
+    lines = [line for line in status.splitlines() if line]
+    branch_line = next((line for line in lines if line.startswith("## ")), "")
+
+    branch = None
+    if branch_line.startswith("## "):
+        # "## main...origin/main [ahead 1]" or "## main"
+        rest = branch_line[3:]
+        if "..." in rest:
+            branch = rest.split("...", 1)[0].strip() or None
+        else:
+            branch = rest.split()[0].strip() if rest.strip() else None
+
+    has_remote = "..." in branch_line
+    ahead = 0
+    behind = 0
+    tracking_start = branch_line.find("[")
+    tracking_end = branch_line.find("]")
+    if tracking_start != -1 and tracking_end > tracking_start:
+        tracking = branch_line[tracking_start + 1 : tracking_end]
+        if "ahead " in tracking:
+            try:
+                ahead = int(tracking.split("ahead ", 1)[1].split(",", 1)[0].split()[0])
+            except (ValueError, IndexError):
+                ahead = 0
+        if "behind " in tracking:
+            try:
+                behind = int(tracking.split("behind ", 1)[1].split(",", 1)[0].split()[0])
+            except (ValueError, IndexError):
+                behind = 0
+
+    changed = 0
+    untracked = 0
+    staged = 0
+    details: list[str] = []
+
+    for line in lines:
+        if line.startswith("## ") or len(line) < 3:
+            continue
+        x, y = line[0], line[1]
+        file_path = line[3:].strip()
+
+        if x == "?" and y == "?":
+            untracked += 1
+            details.append(f"{file_path} — new file, not tracked by Git")
+            continue
+
+        changed += 1
+        if x != " ":
+            staged += 1
+
+        description = "changed"
+        if x in ("A",) or y in ("A",):
+            description = "added"
+        elif x in ("D",) or y in ("D",):
+            description = "deleted"
+        elif x in ("R",) or y in ("R",):
+            description = "renamed"
+        elif x in ("M",) or y in ("M",):
+            description = "modified"
+
+        stage_note = ", staged" if x != " " else ", not staged"
+        details.append(f"{file_path} — {description}{stage_note}")
+
+    clean = changed == 0 and untracked == 0
+    synchronized = has_remote and ahead == 0 and behind == 0
+    total_changes = changed + untracked
+    parts: list[str] = []
+
+    if clean:
+        parts.append("Your working tree is clean.")
+    else:
+        noun = "file" if total_changes == 1 else "files"
+        parts.append(f"You have {total_changes} uncommitted {noun}.")
+
+    if staged > 0:
+        verb = "is" if staged == 1 else "are"
+        noun = "file" if staged == 1 else "files"
+        parts.append(f"{staged} {noun} {verb} staged for the next commit.")
+
+    if ahead > 0 and behind > 0:
+        parts.append(
+            f"Your branch has {ahead} commit{'s' if ahead != 1 else ''} not "
+            f"pushed and is {behind} commit{'s' if behind != 1 else ''} behind "
+            f"the remote."
+        )
+    elif ahead > 0:
+        parts.append(
+            f"Your branch has {ahead} commit{'s' if ahead != 1 else ''} not "
+            f"pushed to the remote."
+        )
+    elif behind > 0:
+        parts.append(
+            f"Your branch is {behind} commit{'s' if behind != 1 else ''} behind "
+            f"the remote."
+        )
+    elif synchronized:
+        parts.append("Your local branch is synchronized with its remote branch.")
+    elif not has_remote and branch:
+        parts.append(
+            "This branch is not tracking a remote branch, so Git cannot tell "
+            "whether it has been pushed."
+        )
+
+    return {
+        "summary": " ".join(parts),
+        "details": details,
+        "branch": branch,
+        "clean": clean,
+        "ahead": ahead,
+        "behind": behind,
+        "changed": changed,
+        "untracked": untracked,
+        "staged": staged,
+        "hasRemote": has_remote,
+        "synchronized": synchronized,
+    }
+
+
+def git_committed_file_count() -> dict:
+    """Count files recorded in the current commit without changing state.
+
+    Returns:
+        A dictionary with committed_files count, or an error.
+    """
+
+    try:
+        result = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=GIT_STATUS_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {
+            "error": (
+                f"git ls-tree timed out after {GIT_STATUS_TIMEOUT} seconds."
+            )
+        }
+    except Exception as exc:
+        return {"error": f"Could not count committed files: {exc}"}
+
+    if result.returncode != 0:
+        return {
+            "error": (
+                result.stderr.strip()
+                or "Could not count files in the current commit. "
+                "The repository may not have a commit yet."
+            )
+        }
+
+    names = [line for line in (result.stdout or "").splitlines() if line.strip()]
+    return {"committed_files": len(names)}
 
 
 def git_diff(path: str = "", staged: bool = False) -> dict:
@@ -1296,6 +1464,7 @@ TOOL_FUNCTIONS = {
     "search_files": search_files,
     "run_command": run_command,
     "git_status": git_status,
+    "git_committed_file_count": git_committed_file_count,
     "git_diff": git_diff,
     "git_log": git_log,
     "git_branch": git_branch,
@@ -1315,6 +1484,7 @@ READ_ONLY_TOOL_NAMES = {
     "search_files",
     "run_command",
     "git_status",
+    "git_committed_file_count",
     "git_diff",
     "git_log",
     "git_branch",
@@ -1358,6 +1528,7 @@ TOOL_TIMEOUTS = {
     "search_files": 15,
     "run_command": 65,
     "git_status": 10,
+    "git_committed_file_count": 10,
     "git_diff": 10,
     "git_log": 10,
     "git_branch": 10,
@@ -1480,9 +1651,24 @@ TOOL_SCHEMAS = {
     },
     "git_status": {
         "description": (
-            "Shows the current git status (branch and changed files) "
-            "of the project. Always call this instead of guessing or "
-            "assuming the repository state."
+            "Shows the current git status of the project as plain-language "
+            "summary and structured fields (clean, staged, ahead/behind, "
+            "file details). Always call this instead of guessing or "
+            "assuming the repository state. Use the structured fields to "
+            "answer questions such as whether changes are committed or "
+            "whether the branch is synchronized with the remote."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    "git_committed_file_count": {
+        "description": (
+            "Counts how many files are recorded in the current HEAD commit "
+            "without modifying the repository. Use when the user asks how "
+            "many files are committed or tracked in the current commit."
         ),
         "parameters": {
             "type": "object",

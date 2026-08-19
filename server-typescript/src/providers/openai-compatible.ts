@@ -1,4 +1,5 @@
 import { Provider, ProviderCapabilities, ProviderResponse, ToolCall } from "./base.ts";
+import { CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION } from "../prompts.ts";
 
 export class OpenAICompatibleProvider extends Provider {
   readonly baseUrl: string;
@@ -147,8 +148,8 @@ export class OpenAICompatibleProvider extends Provider {
       {
         role: "system",
         content: this._capabilities.tools
-          ? "You are a helpful assistant with access to tools."
-          : "You are a helpful assistant.",
+          ? SYSTEM_INSTRUCTION
+          : CHAT_ONLY_INSTRUCTION,
       },
     ];
 
