@@ -22,11 +22,11 @@ export class GeminiProvider extends Provider {
 
   protected _capabilities: ProviderCapabilities = {
     tools: true,
-    streaming: true,
+    streaming: false,
     model_listing: true,
     requires_api_key: true,
     local: false,
-    notes: "",
+    notes: "Native Gemini generateContent API; streaming is not implemented yet.",
   };
 
   constructor(config: {
@@ -120,11 +120,14 @@ export class GeminiProvider extends Provider {
 
     const parts = results.map((result, index) => {
       const call = calls[index];
+      if (!call) {
+        throw new Error(`Gemini tool result '${result.name}' has no matching function call.`);
+      }
       return {
         functionResponse: {
           name: result.name,
           response: { result: result.result },
-          ...(call?.id ? { id: call.id } : {}),
+          ...(call.id ? { id: call.id } : {}),
         },
       };
     });
