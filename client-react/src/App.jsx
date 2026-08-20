@@ -9,7 +9,6 @@ import MessageInput from './components/MessageInput.jsx';
 import ProviderSelector from './components/ProviderSelector.jsx';
 import ProjectExplorer from './components/ProjectExplorer.jsx';
 import TerminalPanel from './components/TerminalPanel.jsx';
-import WorkspaceSplit from './components/WorkspaceSplit.jsx';
 import {
   statusFromProgressEvent,
   statusFromPendingConfirmation,
@@ -31,7 +30,6 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
 
   useEffect(() => {
     if (!pending) return undefined;
-    // Safer default: focus Deny first so accidental Enter does not approve.
     denyRef.current?.focus();
 
     const handleKeyDown = (event) => {
@@ -40,7 +38,6 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
         onResolve(false);
         return;
       }
-      // Simple focus trap between the two action buttons.
       if (event.key === 'Tab') {
         const focusables = [denyRef.current, allowRef.current].filter(Boolean);
         if (focusables.length < 2) return;
@@ -87,20 +84,10 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
         {previewText && <p id="confirmation-dialog-preview">{previewText}</p>}
         <p id="confirmation-dialog-safety">Nothing will be changed unless you choose Allow.</p>
         <div className="confirmation-dialog-actions">
-          <button
-            ref={denyRef}
-            type="button"
-            onClick={() => onResolve(false)}
-            disabled={resolving}
-          >
+          <button ref={denyRef} type="button" onClick={() => onResolve(false)} disabled={resolving}>
             Deny
           </button>
-          <button
-            ref={allowRef}
-            type="button"
-            onClick={() => onResolve(true)}
-            disabled={resolving}
-          >
+          <button ref={allowRef} type="button" onClick={() => onResolve(true)} disabled={resolving}>
             {resolving ? 'Processing…' : 'Allow'}
           </button>
         </div>
@@ -144,8 +131,6 @@ function App() {
     refreshProjectRoot();
   }, [refreshProjectRoot]);
 
-  // Re-read the project root when the window becomes visible again
-  // (for example after returning from the Settings page).
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshProjectRoot();
@@ -159,47 +144,27 @@ function App() {
     };
   }, [refreshProjectRoot]);
 
-  // F6 / Shift+F6 cycles focus between major regions (desktop-style).
-  // Order: message input → project tree → terminal input → …
-  const [workspacePanel, setWorkspacePanel] = useState(() => {
-    try {
-      const stored = localStorage.getItem('workspace-panel');
-      return stored === 'terminal' || stored === 'project' ? stored : 'project';
-    } catch {
-      return 'project';
-    }
-  });
-
+  // F6 / Shift+F6 cycles through the major regions in visual/document order:
+  // chat → terminal → project → chat.
   useEffect(() => {
-    try {
-      localStorage.setItem('workspace-panel', workspacePanel);
-    } catch {
-      // ignore
-    }
-  }, [workspacePanel]);
-
-  useEffect(() => {
-    const regions = ['chat', 'project', 'terminal'];
+    const regions = ['chat', 'terminal', 'project'];
 
     const focusRegion = (id) => {
       if (id === 'chat') {
         inputRef.current?.focus();
         return;
       }
+      if (id === 'terminal') {
+        window.setTimeout(() => {
+          document.querySelector('[data-focus-target="terminal-input"]')?.focus?.();
+        }, 0);
+        return;
+      }
       if (id === 'project') {
-        flushSync(() => setWorkspacePanel('project'));
         window.setTimeout(() => {
           const tree = document.querySelector('[data-focus-target="project-tree"]');
           const firstItem = tree?.querySelector('[role="treeitem"]');
           (firstItem || tree)?.focus?.();
-        }, 0);
-        return;
-      }
-      if (id === 'terminal') {
-        flushSync(() => setWorkspacePanel('terminal'));
-        window.setTimeout(() => {
-          const input = document.querySelector('[data-focus-target="terminal-input"]');
-          input?.focus?.();
         }, 0);
       }
     };
@@ -209,10 +174,10 @@ function App() {
       event.preventDefault();
       const active = document.activeElement;
       let current = 'chat';
-      if (active?.closest?.('[data-focus-region="project"]') || active?.getAttribute?.('data-focus-target') === 'project-tree') {
-        current = 'project';
-      } else if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') {
+      if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') {
         current = 'terminal';
+      } else if (active?.closest?.('[data-focus-region="project"]') || active?.getAttribute?.('data-focus-target') === 'project-tree') {
+        current = 'project';
       } else if (active === inputRef.current || active?.closest?.('.chat-app')) {
         current = 'chat';
       }
@@ -359,14 +324,14 @@ function App() {
 
   return (
     <div style={{ textAlign: 'center' }}>
-      {/* Skip links for keyboard and screen-reader navigation */}
       <nav className="skip-links" aria-label="Skip links">
         <a className="skip-link" href="#main-conversation">Skip to conversation</a>
         <a className="skip-link" href="#message-input-region">Skip to message input</a>
-        <a className="skip-link" href="#workspace-panels">Skip to project and terminal</a>
+        <a className="skip-link" href="#terminal-region">Skip to terminal</a>
+        <a className="skip-link" href="#project-region">Skip to project</a>
       </nav>
       <div className="app-shell">
-        <div className="chat-app">
+        <div className="chat-app" data-focus-region="chat">
           <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
           <ProviderSelector host={host} waiting={waiting} />
           <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
@@ -376,56 +341,38 @@ function App() {
           </div>
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
-        <aside id="workspace-panels" className="workspace-panels" aria-label="Project and terminal">
-          <section className="current-project" aria-labelledby="current-project-heading">
-            <div>
-              <h2 id="current-project-heading">Current project</h2>
-              {projectRootError ? (
-                <p role="status" aria-live="polite">Unable to determine current project.</p>
-              ) : (
-                <p>{projectRoot || 'Loading current project…'}</p>
-              )}
-            </div>
-            <a href="/settings.html#settings-project-root">Change project</a>
+
+        <aside id="workspace-panels" className="workspace-panels" aria-label="Terminal and project">
+          <section id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-region-heading">
+            <h2 id="terminal-region-heading" className="sr-only">Terminal</h2>
+            <TerminalPanel
+              host={host}
+              onSendToChat={handleClick}
+              pathToInsert={pathForTerminal}
+              onPathInserted={() => setPathForTerminal(null)}
+            />
           </section>
-          <p className="workspace-integration-hint" id="workspace-integration-hint">
-            Project and terminal stay visible together. Use the tabs or F6 to move focus; insert a path from the project tree into the terminal, or send terminal results to chat.
-          </p>
-          <WorkspaceSplit
-            ariaLabel="Project and terminal"
-            activePanelId={workspacePanel}
-            onActivePanelChange={setWorkspacePanel}
-            panels={[
-              {
-                id: 'project',
-                label: 'Project',
-                content: (
-                  <ProjectExplorer
-                    key={projectRoot || 'default'}
-                    host={host}
-                    projectRoot={projectRoot}
-                    onUseSelectedFiles={handleSelectedFiles}
-                    onInsertPathIntoTerminal={(path) => {
-                      setPathForTerminal(path);
-                      setWorkspacePanel('terminal');
-                    }}
-                  />
-                ),
-              },
-              {
-                id: 'terminal',
-                label: 'Terminal',
-                content: (
-                  <TerminalPanel
-                    host={host}
-                    onSendToChat={handleClick}
-                    pathToInsert={pathForTerminal}
-                    onPathInserted={() => setPathForTerminal(null)}
-                  />
-                ),
-              },
-            ]}
-          />
+
+          <section id="project-region" className="workspace-region" data-focus-region="project" aria-labelledby="current-project-heading">
+            <section className="current-project">
+              <div>
+                <h2 id="current-project-heading">Current project</h2>
+                {projectRootError ? (
+                  <p role="status" aria-live="polite">Unable to determine current project.</p>
+                ) : (
+                  <p>{projectRoot || 'Loading current project…'}</p>
+                )}
+              </div>
+              <a href="/settings.html#settings-project-root">Change project</a>
+            </section>
+            <ProjectExplorer
+              key={projectRoot || 'default'}
+              host={host}
+              projectRoot={projectRoot}
+              onUseSelectedFiles={handleSelectedFiles}
+              onInsertPathIntoTerminal={(path) => setPathForTerminal(path)}
+            />
+          </section>
         </aside>
       </div>
     </div>
