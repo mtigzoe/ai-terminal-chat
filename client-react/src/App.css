@@ -507,3 +507,24 @@ body {
   outline: 3px solid #fff;
   outline-offset: 2px;
 }
+
+/* Chat workspace regions are now always visible in document order. */
+.workspace-region {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace-region[data-focus-region="terminal"] {
+  flex: 1 1 0;
+}
+
+.workspace-region[data-focus-region="project"] {
+  flex: 1 1 0;
+}
+
+.workspace-region .project-explorer,
+.workspace-region .terminal-panel {
+  flex: 1;
+  min-height: 0;
+}
