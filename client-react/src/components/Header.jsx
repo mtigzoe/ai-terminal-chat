@@ -32,6 +32,12 @@ const Header = ({ toggled, setToggled, waiting }) => {
         if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last.focus();
+        } else if (event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        } else if (!event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
           event.preventDefault();
           first.focus();
