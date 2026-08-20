@@ -3,6 +3,17 @@ import React, { useEffect, useRef, useState } from 'react';
 const Header = ({ toggled, setToggled, waiting }) => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const cancelRef = useRef(null);
+  const triggerRef = useRef(null);
+
+  const openConfirm = () => {
+    triggerRef.current = document.activeElement;
+    setConfirmOpen(true);
+  };
+
+  const closeConfirm = () => {
+    setConfirmOpen(false);
+    window.setTimeout(() => triggerRef.current?.focus(), 0);
+  };
 
   useEffect(() => {
     if (!confirmOpen) return undefined;
@@ -10,7 +21,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        setConfirmOpen(false);
+        closeConfirm();
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -49,7 +60,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
         <button
           type="button"
           className="clear-conversation-btn"
-          onClick={() => setConfirmOpen(true)}
+          onClick={openConfirm}
           disabled={waiting}
           aria-label="Clear conversation"
         >
@@ -62,7 +73,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
           className="confirmation-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setConfirmOpen(false);
+            if (event.target === event.currentTarget) closeConfirm();
           }}
         >
           <div
@@ -77,7 +88,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
               This will remove the current conversation from the chat view.
             </p>
             <div className="confirmation-actions">
-              <button type="button" ref={cancelRef} onClick={() => setConfirmOpen(false)}>
+              <button type="button" ref={cancelRef} onClick={closeConfirm}>
                 Cancel
               </button>
               <button type="button" onClick={clearConversation}>

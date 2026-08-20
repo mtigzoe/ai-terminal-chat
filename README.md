@@ -411,7 +411,95 @@ npm test -- --run
 
 ### Manual screen-reader testing
 
-The application is designed to be tested with keyboard-only workflows and screen readers including JAWS, NVDA, and Orca.
+Test the application with keyboard-only workflows and screen readers including JAWS, NVDA, and Orca.
+
+#### Prerequisites
+
+- Start the backend (`python app.py` from `server-python` or `server-typescript`) and frontend (`npm run dev` from `client-react`).
+- Open the app in a browser or the Electron shell.
+- Ensure the screen reader is running before interacting with the page.
+
+#### Keyboard-only testing
+
+- **Tab** moves between interactive controls.
+- **Shift+Tab** moves backward.
+- **Enter** activates buttons, submits forms, and opens files in the project tree.
+- **Space** toggles checkboxes and expands/collapses folders in the project tree.
+- **Arrow keys** navigate the project tree (Up/Down between items, Right to expand, Left to collapse).
+- **Home/End** move to the first/last visible item in the project tree.
+- **F6 / Shift+F6** cycles focus between the chat input, project tree, and terminal command field.
+- **Escape** closes dialogs (clear conversation, file preview, context menu) and cancels a streaming response when the Cancel button is focused.
+
+#### What to verify
+
+1. **Navigation and landmarks**
+   - Skip links ("Skip to conversation", "Skip to message input", "Skip to project and terminal") appear at the top of the page and move focus to the correct region.
+   - Major regions are announced: conversation (`<main>`), workspace panels (`<aside>`), terminal (`<section>`), project tree (`role="tree"`).
+
+2. **Headings**
+   - Heading levels are logical: "Chat" (h1), "Project" (h2), "Terminal" (h2), section headings within panels.
+
+3. **Buttons and form controls**
+   - Stream response toggle announces its state (`aria-pressed`).
+   - Send message, Clear conversation, Run, Cancel response, and settings buttons have clear accessible names.
+   - Disabled states are announced (send button while waiting, Run while a command is executing, Clear conversation while waiting).
+   - Form fields have visible or screen-reader-only labels (`htmlFor` / `id` association).
+
+4. **Focus movement**
+   - After sending a message, focus returns to the message input.
+   - After running a terminal command, focus returns to the terminal command input.
+   - After choosing a project folder, focus returns to the "Choose a folder" button.
+   - When a confirmation dialog opens, focus moves to the Deny button; after dismissing, focus returns to the trigger.
+
+5. **Chat messages and dynamically generated content**
+   - Each message is announced as "Your message, message N" or "Assistant message, message N".
+   - Agent status changes (Planning, Inspecting, Completed, Error) are announced via a polite or assertive live region.
+   - Streaming tool-activity items are announced as they appear without requiring the user to leave the input.
+
+6. **Status and error messages**
+   - Terminal exit codes and line counts are announced concisely.
+   - Terminal stderr is announced with `role="alert"`.
+   - Settings save errors and model-loading errors are announced with `role="alert"`.
+   - Git status errors (for example, "Git status unavailable") are announced politely.
+
+7. **Terminal output**
+   - The terminal output region uses `role="log"` with `aria-live="polite"` so new output is announced.
+   - Standard output and standard error are distinguished with screen-reader-only text ("Standard output, N lines.").
+
+8. **Provider selection and other interactive controls**
+   - Provider and model dropdowns are labelled.
+   - Model-loading errors are announced.
+   - The Allowed Commands list and add/remove controls are labelled and announce status changes.
+
+#### JAWS / NVDA on Windows
+
+- Use **Insert+Down Arrow** (JAWS) or **NVDA+Down Arrow** to read continuous text.
+- Use **H** to move between headings.
+- Use **F** to move between form fields.
+- Use **T** to move through toolbars and button groups.
+- Use **X** to move through checkboxes.
+- Use **B** to move through buttons.
+- Use **D** to move through dialogs when one is open.
+- Use **E** to move through edit fields.
+- Use **Tab** and **Shift+Tab** for sequential focus movement.
+- When a live region updates, the screen reader should announce the new status. If identical text is repeated, the app clears and re-sets the live region to force re-announcement.
+
+#### Orca on Linux
+
+- Use **Tab** / **Shift+Tab** for sequential navigation.
+- Use **Space** to activate buttons and toggle checkboxes.
+- Use **Enter** to open files and confirm actions.
+- Use **Escape** to close dialogs.
+- Orca reads `aria-live` regions automatically when their content changes.
+
+#### Reporting issues
+
+If a screen reader skips an announcement, reads duplicate content, or loses focus after an action, note:
+- the screen reader and version,
+- the browser or Electron version,
+- the exact steps to reproduce,
+- whether the issue is specific to a dynamic update (chat response, tool activity, terminal output, settings save).
+
 
 ### Accessibility testing limitations
 

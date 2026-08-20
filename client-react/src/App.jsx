@@ -187,7 +187,7 @@ function App() {
         return;
       }
       if (id === 'project') {
-        setWorkspacePanel('project');
+        flushSync(() => setWorkspacePanel('project'));
         window.setTimeout(() => {
           const tree = document.querySelector('[data-focus-target="project-tree"]');
           const firstItem = tree?.querySelector('[role="treeitem"]');
@@ -196,7 +196,7 @@ function App() {
         return;
       }
       if (id === 'terminal') {
-        setWorkspacePanel('terminal');
+        flushSync(() => setWorkspacePanel('terminal'));
         window.setTimeout(() => {
           const input = document.querySelector('[data-focus-target="terminal-input"]');
           input?.focus?.();
