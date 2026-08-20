@@ -83,20 +83,32 @@ describe('ConfirmationDialog accessibility', () => {
 });
 
 describe('App-level focus and skip links', () => {
-  test('skip links are present and target major regions', () => {
+  test('skip links are present and target major regions in document order', () => {
     render(<App />);
     const skipLinks = screen.getAllByRole('link', { name: /skip to/i });
-    expect(skipLinks.length).toBeGreaterThanOrEqual(3);
+    expect(skipLinks).toHaveLength(4);
     expect(skipLinks[0]).toHaveAttribute('href', '#main-conversation');
     expect(skipLinks[1]).toHaveAttribute('href', '#message-input-region');
-    expect(skipLinks[2]).toHaveAttribute('href', '#workspace-panels');
+    expect(skipLinks[2]).toHaveAttribute('href', '#terminal-region');
+    expect(skipLinks[3]).toHaveAttribute('href', '#project-region');
   });
 
-  test('F6 moves focus from chat to project tree', async () => {
+  test('F6 moves focus from chat to terminal', async () => {
     render(<App />);
     const textarea = screen.getByLabelText(/^message$/i);
     textarea.focus();
     expect(document.activeElement).toBe(textarea);
+
+    fireEvent.keyDown(document, { key: 'F6' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(document.querySelector('[data-focus-target="terminal-input"]'));
+    });
+  });
+
+  test('F6 moves focus from terminal to project tree', async () => {
+    render(<App />);
+    const terminalInput = document.querySelector('[data-focus-target="terminal-input"]');
+    terminalInput?.focus();
 
     fireEvent.keyDown(document, { key: 'F6' });
     await waitFor(() => {
@@ -105,23 +117,10 @@ describe('App-level focus and skip links', () => {
     });
   });
 
-  test('F6 moves focus from project to terminal', async () => {
-    render(<App />);
-    const tree = document.querySelector('[data-focus-target="project-tree"]');
-    const treeItem = tree?.querySelector('[role="treeitem"]');
-    if (treeItem) treeItem.focus();
-
-    fireEvent.keyDown(document, { key: 'F6' });
-    await waitFor(() => {
-      const terminalInput = document.querySelector('[data-focus-target="terminal-input"]');
-      expect(document.activeElement).toBe(terminalInput);
-    });
-  });
-
   test('Shift+F6 moves focus from terminal to chat', async () => {
     render(<App />);
     const terminalInput = document.querySelector('[data-focus-target="terminal-input"]');
-    if (terminalInput) terminalInput.focus();
+    terminalInput?.focus();
 
     fireEvent.keyDown(document, { key: 'F6', shiftKey: true });
     await waitFor(() => {
