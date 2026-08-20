@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 const Header = ({ toggled, setToggled, waiting }) => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const cancelRef = useRef(null);
+  const clearRef = useRef(null);
   const triggerRef = useRef(null);
 
   const openConfirm = () => {
@@ -22,6 +23,19 @@ const Header = ({ toggled, setToggled, waiting }) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         closeConfirm();
+        return;
+      }
+      if (event.key === 'Tab') {
+        const first = cancelRef.current;
+        const last = clearRef.current;
+        if (!first || !last) return;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -91,7 +105,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
               <button type="button" ref={cancelRef} onClick={closeConfirm}>
                 Cancel
               </button>
-              <button type="button" onClick={clearConversation}>
+              <button type="button" ref={clearRef} onClick={clearConversation}>
                 Clear conversation
               </button>
             </div>
