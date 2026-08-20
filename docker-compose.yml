@@ -1,7 +1,42 @@
-# Backend-only Compose setup.
-# Frontend (Vite / Electron) remains on the host so the existing non-Docker
-# workflow is unchanged. Ollama is not containerized; point OLLAMA_* at the
-# host instance via host.docker.internal (Docker Desktop / Compose host-gateway).
+# Docker Compose for AI Terminal Chat.
+#
+# Default service: Python backend (`backend`).
+# Optional profiles:
+#   typescript — TypeScript/Hono backend instead of (or in addition to) Python
+#   frontend   — production React static site via nginx
+#
+# Electron is not containerized. Ollama stays on the host.
+# Only one backend should publish host port 9000 at a time.
+
+x-backend-env: &backend-env
+  HOST: "0.0.0.0"
+  PORT: "9000"
+  PROVIDER: "${PROVIDER:-ollama}"
+  OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}"
+  OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+  OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.1}"
+  OLLAMA_TIMEOUT: "${OLLAMA_TIMEOUT:-120}"
+  GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+  GEMINI_MODEL: "${GEMINI_MODEL:-}"
+  OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+  OPENAI_MODEL: "${OPENAI_MODEL:-}"
+  XAI_API_KEY: "${XAI_API_KEY:-}"
+  XAI_MODEL: "${XAI_MODEL:-}"
+  OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+  OPENROUTER_MODEL: "${OPENROUTER_MODEL:-}"
+  ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+  ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-}"
+  KILO_API_KEY: "${KILO_API_KEY:-}"
+  KILO_MODEL: "${KILO_MODEL:-}"
+  AI_TERMINAL_PROJECT_ROOT: "${AI_TERMINAL_PROJECT_ROOT:-/project}"
+
+x-backend-common: &backend-common
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - "${HOST_PROJECT_PATH:-.}:/project"
+    - ai-terminal-chat-config:/home/appuser/.ai-terminal-chat
+  restart: unless-stopped
 
 services:
   backend:
@@ -13,36 +48,34 @@ services:
     ports:
       - "${PORT:-9000}:9000"
     environment:
-      HOST: "0.0.0.0"
-      PORT: "9000"
-      PROVIDER: "${PROVIDER:-ollama}"
-      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}"
-      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.1}"
-      OLLAMA_TIMEOUT: "${OLLAMA_TIMEOUT:-120}"
-      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
-      GEMINI_MODEL: "${GEMINI_MODEL:-}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      OPENAI_MODEL: "${OPENAI_MODEL:-}"
-      XAI_API_KEY: "${XAI_API_KEY:-}"
-      XAI_MODEL: "${XAI_MODEL:-}"
-      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
-      OPENROUTER_MODEL: "${OPENROUTER_MODEL:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-}"
-      KILO_API_KEY: "${KILO_API_KEY:-}"
-      KILO_MODEL: "${KILO_MODEL:-}"
-      # Optional: mount a host project and set this so tools operate on it.
-      AI_TERMINAL_PROJECT_ROOT: "${AI_TERMINAL_PROJECT_ROOT:-/project}"
-    extra_hosts:
-      # Linux Docker Engine: map host.docker.internal to the host gateway.
-      # Docker Desktop (Windows/macOS) already provides this name.
-      - "host.docker.internal:host-gateway"
-    volumes:
-      # Host project directory for tool filesystem access (read/write).
-      - "${HOST_PROJECT_PATH:-.}:/project"
-      # Persist provider/project-root config outside the image.
-      - ai-terminal-chat-config:/home/appuser/.ai-terminal-chat
+      <<: *backend-env
+    <<: *backend-common
+
+  backend-ts:
+    profiles: ["typescript"]
+    build:
+      context: ./server-typescript
+      dockerfile: Dockerfile
+    image: ai-terminal-chat-backend-ts:local
+    container_name: ai-terminal-chat-backend-ts
+    ports:
+      - "${TS_PORT:-9000}:9000"
+    environment:
+      <<: *backend-env
+    <<: *backend-common
+
+  frontend:
+    profiles: ["frontend"]
+    build:
+      context: ./client-react
+      dockerfile: Dockerfile
+      args:
+        # Must be reachable from the user's browser, not from inside the network.
+        VITE_API_URL: "${VITE_API_URL:-http://localhost:9000}"
+    image: ai-terminal-chat-frontend:local
+    container_name: ai-terminal-chat-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
     restart: unless-stopped
 
 volumes:
