@@ -231,7 +231,11 @@ function App() {
       const response = await axios.post(`${host}/confirm`, { action_id: action.action_id, confirmed });
       const resultEvent = { type: 'tool_result', name: action.name, result: confirmed ? response.data.result : { cancelled: true, message: 'Action denied by user.' } };
       setStreamToolActivity((current) => [...current, resultEvent]);
-      setData((current) => current.map((message) => message.role !== 'model' ? message : { ...message, toolActivity: [...(message.toolActivity || []), resultEvent] }));
+      setData((current) => {
+        const lastModelIndex = current.map((message) => message.role).lastIndexOf('model');
+        if (lastModelIndex === -1) return current;
+        return current.map((message, index) => index !== lastModelIndex ? message : { ...message, toolActivity: [...(message.toolActivity || []), resultEvent] });
+      });
       setAgentStatus({ phase: confirmed ? 'complete' : 'cancelled', message: confirmed ? 'Action approved and completed.' : 'Action denied by user.', assertive: false });
       setPendingConfirmation(null);
     } catch (error) {

@@ -149,6 +149,28 @@ describe("runCommand", () => {
     const result = runCommand("node --version");
     expect(result.error).toBeUndefined();
     expect(result.returncode).toBe(0);
+    // Regression check: a naive implementation that fails to split the
+    // command into argv tokens silently "succeeds" with empty output
+    // instead of actually running the binary, so assert real output.
+    expect(String(result.stdout).trim()).toMatch(/^v?\d+\.\d+\.\d+/);
+  });
+
+  it("correctly splits multi-word allowed commands into argv", () => {
+    // "node --version" must be spawned as `node` with arg `--version`,
+    // not as a single executable literally named "node --version".
+    const result = runCommand("node --version");
+    expect(result.error).toBeUndefined();
+    expect(result.command).toBe("node --version");
+    expect(String(result.stdout)).not.toBe("");
+  });
+
+  it("surfaces an error instead of a fake success for a missing binary", () => {
+    // "wsl" is allowlisted by default but won't exist on this (Linux) test
+    // host, so it exercises the ENOENT path without mutating the shared
+    // allowlist config used by other tests.
+    const result = runCommand("wsl");
+    expect(result.error).toBeDefined();
+    expect(result.returncode).toBeUndefined();
   });
 });
 

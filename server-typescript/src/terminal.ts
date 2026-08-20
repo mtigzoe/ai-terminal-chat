@@ -214,6 +214,57 @@ export function isCommandAllowed(command: string): boolean {
 
 const MAX_OUTPUT = 20_000;
 
+/**
+ * Split a command string into argv-style tokens, mirroring the reference
+ * implementation's use of Python's `shlex.split(command, posix=False)`.
+ *
+ * Whitespace separates tokens; single/double quoted spans are kept intact
+ * (including the quote characters themselves, matching posix=False) so a
+ * quoted argument containing spaces is not split apart.
+ */
+function shlexSplit(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let hasToken = false;
+  let quoteChar: string | null = null;
+
+  for (const c of command) {
+    if (quoteChar) {
+      current += c;
+      hasToken = true;
+      if (c === quoteChar) {
+        quoteChar = null;
+      }
+      continue;
+    }
+
+    if (c === '"' || c === "'") {
+      quoteChar = c;
+      current += c;
+      hasToken = true;
+      continue;
+    }
+
+    if (/\s/.test(c)) {
+      if (hasToken) {
+        tokens.push(current);
+        current = "";
+        hasToken = false;
+      }
+      continue;
+    }
+
+    current += c;
+    hasToken = true;
+  }
+
+  if (hasToken) {
+    tokens.push(current);
+  }
+
+  return tokens;
+}
+
 export function runCommand(command: string): Record<string, unknown> {
   const trimmed = (command || "").trim();
   if (!trimmed) {
@@ -244,15 +295,20 @@ export function runCommand(command: string): Record<string, unknown> {
   }
 
   try {
+    const parsedArgs = shlexSplit(trimmed);
+    if (parsedArgs.length === 0) {
+      return { error: "No command was provided." };
+    }
+
     let args: string[];
     if (process.platform === "win32") {
-      if (trimmed.toLowerCase() === "ls") {
-        args = ["cmd", "/c", "dir"];
+      if (parsedArgs[0].toLowerCase() === "ls") {
+        args = ["cmd", "/c", "dir", ...parsedArgs.slice(1)];
       } else {
         args = ["cmd", "/c", trimmed];
       }
     } else {
-      args = [trimmed];
+      args = parsedArgs;
     }
 
     const result = spawnSync(args[0], args.slice(1), {
@@ -261,6 +317,14 @@ export function runCommand(command: string): Record<string, unknown> {
       timeout: 60_000,
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    if (result.error) {
+      const err = result.error as NodeJS.ErrnoException;
+      if (err.code === "ETIMEDOUT") {
+        return { error: "Command timed out after 60 seconds." };
+      }
+      return { error: `Could not execute command: ${err.message}` };
+    }
 
     const stdout = result.stdout || "";
     const stderr = result.stderr || "";

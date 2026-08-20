@@ -69,6 +69,38 @@ test('shows Git status indicators and includes the status in accessible tree lab
   });
 });
 
+test('labels every unmerged porcelain code as a conflict, including AA and DD which contain no "U"', async () => {
+  // Per `git status --porcelain=v1`, the full set of unmerged (conflict)
+  // codes is DD, AU, UD, UA, DU, AA, UU. "AA" (both added) and "DD" (both
+  // deleted) don't contain the character "U", so a naive `code.includes('U')`
+  // check misclassifies them as plain "added"/"deleted" instead of a
+  // conflict that still needs manual resolution.
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'both-added.txt', type: 'file' },
+        { name: 'both-deleted.txt', type: 'file' },
+        { name: 'both-modified.txt', type: 'file' },
+      ],
+    },
+  });
+  axios.post.mockResolvedValueOnce({
+    data: {
+      stdout: 'AA both-added.txt\nDD both-deleted.txt\nUU both-modified.txt\n',
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('treeitem', { name: /both-added\.txt, file, conflict/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /both-deleted\.txt, file, conflict/i })).toBeInTheDocument();
+  expect(screen.getByRole('treeitem', { name: /both-modified\.txt, file, conflict/i })).toBeInTheDocument();
+
+  const conflictBadges = screen.getAllByText('[C]', { selector: 'span' });
+  expect(conflictBadges).toHaveLength(3);
+});
+
 test('opens a file for local preview without supplying it to the agent', async () => {
   axios.get
     .mockResolvedValueOnce({

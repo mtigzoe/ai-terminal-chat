@@ -17,6 +17,12 @@ const GIT_STATUS_INFO = {
   conflict: { short: 'C', label: 'conflict' },
 };
 
+// The full set of `git status --porcelain=v1` XY codes that represent an
+// unresolved merge conflict. Most contain the literal character "U", but
+// "both added" (AA) and "both deleted" (DD) do not, so they must be
+// listed explicitly rather than detected with a substring check.
+const CONFLICT_STATUS_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
 const gitStatusFromLine = (line) => {
   if (!line || line.length < 3) return null;
   const code = line.slice(0, 2);
@@ -26,7 +32,7 @@ const gitStatusFromLine = (line) => {
   path = path.replace(/\\/g, '/');
 
   if (code === '??') return ['untracked', path];
-  if (code.includes('U')) return ['conflict', path];
+  if (CONFLICT_STATUS_CODES.has(code)) return ['conflict', path];
   if (code.includes('R')) return ['renamed', path];
   if (code.includes('D')) return ['deleted', path];
   if (code.includes('A')) return ['added', path];
