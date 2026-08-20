@@ -468,7 +468,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         </ul>}
         <p id="project-selection-help" className="project-selection-help">Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Use “Insert path into terminal” for a command workflow. Press F6 to move between the chat, project tree, and terminal.</p>
       </div>
-      <div ref={treeRef} role="tree" aria-label="Project files and directories" aria-describedby="project-selection-help" className="project-list" data-focus-target="project-tree" id="project-tree-list" onScroll={shouldVirtualize ? (event) => setScrollTop(event.currentTarget.scrollTop) : undefined} style={{ maxHeight: `${TREE_VIEWPORT_HEIGHT}px`, overflowY: 'auto' }}>
+      <div ref={treeRef} role="tree" tabIndex="-1" aria-label="Project files and directories" aria-describedby="project-selection-help" className="project-list" data-focus-target="project-tree" id="project-tree-list" onScroll={shouldVirtualize ? (event) => setScrollTop(event.currentTarget.scrollTop) : undefined} style={{ maxHeight: `${TREE_VIEWPORT_HEIGHT}px`, overflowY: 'auto' }}>
         {shouldVirtualize && <div aria-hidden="true" style={{ height: `${visibleItems.length * TREE_ROW_HEIGHT}px`, position: 'relative' }} />}
         {renderedItems.map((item, renderedIndex) => {
           const { entry, path, level, directory } = item;
