@@ -20,8 +20,6 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
   const [status, setStatus] = useState('Terminal ready.');
   const inputRef = useRef(null);
 
-  // When the project tree requests a path insertion, append it to the
-  // command field and move focus to the terminal for a cohesive workflow.
   useEffect(() => {
     if (!pathToInsert) return undefined;
     setCommand((current) => {
@@ -41,9 +39,6 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
     const value = command.trim();
     if (!value || running) return;
 
-    // Flask executes commands with shell=False. On Windows, `ls` is a
-    // PowerShell alias rather than an executable, so map the simple
-    // cross-platform `ls` command to the allowlisted `dir` executable.
     const commandForBackend = value.toLowerCase() === 'ls' && /Win/i.test(navigator.platform)
       ? 'dir'
       : value;
@@ -58,8 +53,6 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
       const stderr = result.stderr || '';
       const item = { command: value, stdout, stderr, exitCode };
       setOutput((current) => [...current, item]);
-      // Prefer a line-count summary over the raw exit-code string so that
-      // long output remains usable with a screen reader.
       setStatus(summarizeTerminalResult(item));
       setCommand('');
     } catch (err) {
@@ -87,7 +80,6 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
   return (
     <section
       className="terminal-panel"
-      role="region"
       aria-labelledby="terminal-panel-heading"
       data-focus-region="terminal"
     >
