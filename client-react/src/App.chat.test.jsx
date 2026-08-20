@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import App from './App';
 
@@ -246,6 +246,53 @@ describe('streaming chat lifecycle', () => {
     await sendMessage('hi');
 
     await screen.findByText(/Streaming stopped by user/i);
+  });
+});
+
+describe('tool confirmation resolution', () => {
+  test('appends the tool result only to the message that requested confirmation, not every past message', async () => {
+    // First turn: an ordinary answer with no tool activity at all.
+    axios.post.mockResolvedValueOnce({
+      data: { text: 'First answer', tool_activity: [], request_id: 'req-1' },
+    });
+
+    render(<App />);
+    await sendMessage('first question');
+    await screen.findByText('First answer');
+
+    // Second turn: the assistant wants to write a file and needs confirmation.
+    axios.post.mockResolvedValueOnce({
+      data: {
+        text: 'I need permission to write the file',
+        tool_activity: [
+          { type: 'pending_confirmation', action_id: 'abc123', name: 'write_file', args: { path: 'notes.txt' } },
+        ],
+        request_id: 'req-2',
+      },
+    });
+    await sendMessage('please write notes.txt');
+    await screen.findByText('I need permission to write the file');
+
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+    expect(dialog).toBeInTheDocument();
+
+    // Resolving the confirmation posts to /confirm and should attach the
+    // resulting tool_result to the second (most recent) assistant message
+    // only — not to every assistant message in the conversation so far.
+    axios.post.mockResolvedValueOnce({ data: { result: { written: true } } });
+    fireEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    const completedEntries = await screen.findAllByText(/write_file — completed/i);
+    expect(completedEntries).toHaveLength(1);
+
+    // "First answer" is the assistant's reply to the first (index 0) user
+    // message, so it renders as the second article overall.
+    const firstMessage = screen.getByRole('article', { name: 'Assistant message, message 2' });
+    expect(within(firstMessage).queryByText(/write_file/i)).not.toBeInTheDocument();
   });
 });
 

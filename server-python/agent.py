@@ -1,7 +1,8 @@
 """Provider-agnostic tool-calling loop with explicit write confirmation."""
 
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from threading import Event
+from queue import Empty, Queue
+from threading import Event, Thread
 from typing import Optional
 
 from providers.base import Provider
@@ -136,6 +137,54 @@ def _is_successful_write_result(result: dict) -> bool:
 
 def _cancelled_event():
     return {"type": "cancelled"}
+
+
+def _run_tool_with_timeout(function, function_name: str, function_args: dict, timeout_seconds: float) -> dict:
+    """Run a tool with a timeout without leaving a non-daemon worker behind.
+
+    Python cannot safely kill an arbitrary running thread. A timed-out tool
+    therefore remains in the background, but the worker is daemonized so a
+    hung tool cannot keep the server or test process alive indefinitely.
+    Tools that spawn subprocesses should enforce their own subprocess timeout
+    as well; run_command does that in tools.py.
+    """
+
+    result_queue: Queue = Queue(maxsize=1)
+
+    def worker():
+        try:
+            result_queue.put(function(**function_args))
+        except TypeError as exc:
+            result_queue.put({
+                "error": f"Malformed arguments for {function_name}: {exc}"
+            })
+        except Exception as exc:
+            result_queue.put({
+                "error": f"Tool {function_name} failed: {exc}"
+            })
+
+    thread = Thread(
+        target=worker,
+        name=f"ai-terminal-tool:{function_name}",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout_seconds)
+
+    if thread.is_alive():
+        return {
+            "error": (
+                f"Tool {function_name} exceeded its "
+                f"{timeout_seconds}s execution limit and was abandoned."
+            )
+        }
+
+    try:
+        return result_queue.get_nowait()
+    except Empty:
+        return {
+            "error": f"Tool {function_name} completed without returning a result."
+        }
 
 
 def run_agent_loop(
@@ -323,23 +372,9 @@ def run_agent_loop(
                 timeout_seconds = TOOL_TIMEOUTS.get(
                     function_name, DEFAULT_TOOL_TIMEOUT
                 )
-                future = TOOL_EXECUTOR.submit(function, **preview_args)
-
-                try:
-                    result = future.result(timeout=timeout_seconds)
-                except FutureTimeoutError:
-                    result = {
-                        "error": (
-                            f"Tool {function_name} exceeded its "
-                            f"{timeout_seconds}s execution limit and was abandoned."
-                        )
-                    }
-                except TypeError as exc:
-                    result = {
-                        "error": f"Malformed arguments for {function_name}: {exc}"
-                    }
-                except Exception as exc:
-                    result = {"error": f"Tool {function_name} failed: {exc}"}
+                result = _run_tool_with_timeout(
+                    function, function_name, preview_args, timeout_seconds
+                )
 
                 if not result.get("error") and result.get("requires_confirmation"):
                     action = create_pending(function_name, function_args, result)
@@ -384,23 +419,9 @@ def run_agent_loop(
                 timeout_seconds = TOOL_TIMEOUTS.get(
                     function_name, DEFAULT_TOOL_TIMEOUT
                 )
-                future = TOOL_EXECUTOR.submit(function, **function_args)
-
-                try:
-                    result = future.result(timeout=timeout_seconds)
-                except FutureTimeoutError:
-                    result = {
-                        "error": (
-                            f"Tool {function_name} exceeded its "
-                            f"{timeout_seconds}s execution limit and was abandoned."
-                        )
-                    }
-                except TypeError as exc:
-                    result = {
-                        "error": f"Malformed arguments for {function_name}: {exc}"
-                    }
-                except Exception as exc:
-                    result = {"error": f"Tool {function_name} failed: {exc}"}
+                result = _run_tool_with_timeout(
+                    function, function_name, function_args, timeout_seconds
+                )
 
             if isinstance(result, dict) and result.get("error"):
                 consecutive_error_count += 1
