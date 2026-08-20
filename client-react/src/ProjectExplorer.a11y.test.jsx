@@ -60,7 +60,7 @@ describe('ProjectExplorer accessibility', () => {
     render(<ProjectExplorer host={host} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('treeitem', { name: /README\.md, file/i })).toBeInTheDocument();
+      expect(screen.getByRole('treeitem', { name: /README\.md, file/i })).toHaveAccessibleName(/README\.md, file.*modified/i);
     });
   });
 
