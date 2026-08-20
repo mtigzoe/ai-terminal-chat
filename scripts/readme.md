@@ -9,24 +9,30 @@ Two backend implementations exist (`server-python` and `server-typescript`), so 
 ```text
 scripts/
 ├── powershell/                 # Windows PowerShell helpers
-│   ├── run-electron.ps1        # Convenience wrapper → start-electron-dev.ps1 (Python backend)
-│   ├── start-electron.ps1      # Python backend + Vite + Electron
-│   ├── start-electron-dev.ps1  # Same as above (kept for compatibility)
-│   ├── start-offline-ai.ps1    # Python backend + Vite with remote Linux Ollama
-│   ├── run-electron-ts.ps1     # Convenience wrapper → start-electron-ts.ps1 (TypeScript backend)
-│   ├── start-electron-ts.ps1   # TypeScript backend + Vite + Electron
-│   ├── start-offline-ai-ts.ps1 # TypeScript backend + Vite with remote Linux Ollama
-│   └── stop-services.ps1       # Stop listeners on ports 9000 and 3000 (either backend)
 ├── sh/                         # Linux / macOS Bash helpers
-│   ├── run-electron.sh         # Convenience wrapper → start-electron.sh (Python backend)
-│   ├── start-electron.sh       # Python backend + Vite + Electron
-│   ├── start-offline-ai.sh     # Python backend + Vite with local Ollama
-│   ├── run-electron-ts.sh      # Convenience wrapper → start-electron-ts.sh (TypeScript backend)
-│   ├── start-electron-ts.sh    # TypeScript backend + Vite + Electron
-│   ├── start-offline-ai-ts.sh  # TypeScript backend + Vite with local Ollama
-│   └── stop-services.sh        # Stop listeners on ports 9000 and 3000 (either backend)
+├── electron/                   # Application-focused Electron scripts
+│   ├── powershell/
+│   │   └── dev.ps1
+│   └── sh/
+│       └── dev.sh
+├── web/                        # Application-focused React web scripts
+│   ├── powershell/
+│   │   ├── dev.ps1
+│   │   ├── install.ps1
+│   │   └── build.ps1
+│   └── sh/
+│       ├── dev.sh
+│       ├── install.sh
+│       └── build.sh
+├── makefile/                   # Makefile test helpers
+│   ├── powershell/
+│   │   └── test.ps1
+│   └── sh/
+│       └── test.sh
 └── readme.md                   # This file
 ```
+
+The root `Makefile` remains at the repository root.
 
 ## Prerequisites
 
@@ -36,94 +42,130 @@ scripts/
 - For Electron scripts: the `electron` package (installed via `npm ci` / `npm install` when missing)
 - For `stop-services.sh`: `lsof` or `fuser` (usually present on Linux/macOS)
 
+## Existing compatibility scripts
+
+The original backend startup scripts remain under `scripts/powershell/` and `scripts/sh/` so existing commands are not broken. They include Python/Flask backend startup, TypeScript backend startup, full Electron development startup, offline-AI startup, and service-stop helpers.
+
+## Application-focused Electron scripts
+
+These scripts launch the Electron shell directly from the repository root without replacing the existing full-stack startup scripts.
+
+Windows PowerShell:
+
+```powershell
+.\scripts\electron\powershell\dev.ps1
+```
+
+Linux/macOS:
+
+```bash
+./scripts/electron/sh/dev.sh
+```
+
+## Application-focused web scripts
+
+These scripts operate on `client-react` only.
+
+Windows PowerShell:
+
+```powershell
+.\scripts\web\powershell\install.ps1
+.\scripts\web\powershell\dev.ps1
+.\scripts\web\powershell\build.ps1
+```
+
+Linux/macOS:
+
+```bash
+./scripts/web/sh/install.sh
+./scripts/web/sh/dev.sh
+./scripts/web/sh/build.sh
+```
+
+## Makefile test helpers
+
+Windows users do not need GNU Make to run the tests:
+
+```powershell
+.\scripts\makefile\powershell\test.ps1
+.\scripts\makefile\powershell\test.ps1 python
+.\scripts\makefile\powershell\test.ps1 typescript
+.\scripts\makefile\powershell\test.ps1 react
+```
+
+Linux/macOS:
+
+```bash
+bash ./scripts/makefile/sh/test.sh
+bash ./scripts/makefile/sh/test.sh python
+bash ./scripts/makefile/sh/test.sh typescript
+bash ./scripts/makefile/sh/test.sh react
+```
+
+On systems with `make`, the root Makefile provides the same common operations:
+
+```bash
+make test
+make test-python
+make test-typescript
+make test-react
+make typecheck-typescript
+make build-react
+```
+
 ## Usage (from repository root)
 
 ### Windows (PowerShell)
 
 ```powershell
-# Electron development, Python backend (backend + Vite + Electron)
+# Existing full-stack Electron workflow, Python backend
 .\scripts\powershell\run-electron.ps1
-# or use either implementation directly
-.\scripts\powershell\start-electron.ps1
-.\scripts\powershell\start-electron-dev.ps1
 
-# Electron development, TypeScript backend
+# Existing full-stack Electron workflow, TypeScript backend
 .\scripts\powershell\run-electron-ts.ps1
-# or directly
-.\scripts\powershell\start-electron-ts.ps1
 
-# Offline-oriented (Windows client + Linux Ollama), Python backend
-.\scripts\powershell\start-offline-ai.ps1
-.\scripts\powershell\start-offline-ai.ps1 -LinuxOllamaHost "http://192.168.1.100:11434" -OllamaModel "qwen3.5:9b"
+# Application-focused Electron shell
+.\scripts\electron\powershell\dev.ps1
 
-# Offline-oriented (Windows client + Linux Ollama), TypeScript backend
-.\scripts\powershell\start-offline-ai-ts.ps1
-.\scripts\powershell\start-offline-ai-ts.ps1 -LinuxOllamaHost "http://192.168.1.100:11434" -OllamaModel "qwen3.5:9b"
+# Web application only
+.\scripts\web\powershell\install.ps1
+.\scripts\web\powershell\dev.ps1
+.\scripts\web\powershell\build.ps1
 
-# Stop services on the default ports (works regardless of which backend is running)
+# Stop existing services
 .\scripts\powershell\stop-services.ps1
 ```
 
 ### Linux / macOS (Bash)
 
 ```bash
-# Make scripts executable once (if needed)
-chmod +x scripts/sh/*.sh
+# Make existing scripts executable once, if needed
+chmod +x scripts/sh/*.sh scripts/electron/sh/*.sh scripts/web/sh/*.sh
 
-# Electron development, Python backend (backend + Vite + Electron)
+# Existing full-stack Electron workflow, Python backend
 ./scripts/sh/run-electron.sh
-# or
-./scripts/sh/start-electron.sh
 
-# Electron development, TypeScript backend
+# Existing full-stack Electron workflow, TypeScript backend
 ./scripts/sh/run-electron-ts.sh
-# or
-./scripts/sh/start-electron-ts.sh
 
-# Offline-oriented (local Ollama), Python backend
-./scripts/sh/start-offline-ai.sh
-./scripts/sh/start-offline-ai.sh qwen3.5:9b
-# or via environment variables
-OLLAMA_HOST=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:9b ./scripts/sh/start-offline-ai.sh
+# Application-focused Electron shell
+./scripts/electron/sh/dev.sh
 
-# Offline-oriented (local Ollama), TypeScript backend
-./scripts/sh/start-offline-ai-ts.sh
-./scripts/sh/start-offline-ai-ts.sh qwen3.5:9b
-# or via environment variables
-OLLAMA_HOST=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:9b ./scripts/sh/start-offline-ai-ts.sh
+# Web application only
+./scripts/web/sh/install.sh
+./scripts/web/sh/dev.sh
+./scripts/web/sh/build.sh
 
-# Stop services on the default ports (works regardless of which backend is running)
+# Stop existing services
 ./scripts/sh/stop-services.sh
 ```
 
-## Top-level README references
-
-The repository-level `README.md` should use the organized paths shown below:
-
-- Electron development on Windows, Python backend: `scripts/powershell/run-electron.ps1` (or `start-electron.ps1` / `start-electron-dev.ps1`)
-- Electron development on Windows, TypeScript backend: `scripts/powershell/run-electron-ts.ps1` (or `start-electron-ts.ps1`)
-- Electron development on Linux/macOS, Python backend: `scripts/sh/run-electron.sh` (or `start-electron.sh`)
-- Electron development on Linux/macOS, TypeScript backend: `scripts/sh/run-electron-ts.sh` (or `start-electron-ts.sh`)
-- Offline AI on Windows, Python backend: `scripts/powershell/start-offline-ai.ps1`
-- Offline AI on Windows, TypeScript backend: `scripts/powershell/start-offline-ai-ts.ps1`
-- Offline AI on Linux/macOS, Python backend: `scripts/sh/start-offline-ai.sh`
-- Offline AI on Linux/macOS, TypeScript backend: `scripts/sh/start-offline-ai-ts.sh`
-- Stop services on Windows: `scripts/powershell/stop-services.ps1`
-- Stop services on Linux/macOS: `scripts/sh/stop-services.sh`
-
-For the full script layout, prerequisites, usage examples, convenience wrappers, and stop helpers, refer to this file from the top-level README as `scripts/readme.md`.
-
 ## Behaviour notes
 
-- Start scripts detect whether ports 9000 (backend — Flask or TypeScript) and 3000 (Vite) are already in use and only start the missing services.
-- Processes started by the Electron scripts are cleaned up when Electron exits (only those launched by the script itself).
+- Existing start scripts detect whether ports 9000 (backend — Flask or TypeScript) and 3000 (Vite) are already in use and only start the missing services.
+- Application-focused Electron scripts intentionally launch Electron directly and do not replace the full-stack startup scripts.
+- Application-focused web scripts only install, develop, or build the React client.
+- Processes started by the existing Electron scripts are cleaned up when Electron exits (only those launched by the script itself).
 - The offline-AI scripts open the backend and frontend in separate processes/windows and leave them running; they do not launch Electron.
 - Python start scripts refuse to run if `uv` or `npm` is missing from `PATH`. TypeScript start scripts (`-ts`) refuse to run if `npm` is missing from `PATH`; they don't need `uv`.
-- The TypeScript scripts install backend dependencies with `npm install` in `server-typescript` (mirroring the `uv venv` / `uv pip install` step in the Python scripts) and start the backend with `npm run dev` (`tsx watch`, matching the Python scripts' use of `uv run app.py` / the venv Python for hot-reload style development).
-- Path resolution is relative to the script location (`scripts/powershell` or `scripts/sh`) and walks up two directory levels to reach the repository root.
-- Stop scripts only terminate processes that are actively listening on ports 9000 and 3000; they do not perform a broad process-name search, so they work the same way regardless of which backend was running.
-- Both backends serve an identical API contract on port 9000 (see `server-typescript/README.md`), so the Vite frontend and Electron shell require no changes to work with either — the only difference between the plain and `-ts` scripts is how the backend itself is installed and started.
-
-## Duplication note
-
-`start-electron.ps1` and `start-electron-dev.ps1` are currently nearly identical. `run-electron.ps1` provides a convenience entry point to the development script. The Bash side provides a single implementation plus a `run-electron.sh` convenience wrapper. The TypeScript scripts intentionally don't replicate the `start-electron-ts.ps1` / `start-electron-dev-ts.ps1` split — there's just `start-electron-ts.ps1` plus its `run-electron-ts.ps1` wrapper, on both PowerShell and Bash, to avoid adding to the existing duplication.
+- Both backends serve an identical API contract on port 9000, so the Vite frontend and Electron shell require no changes to work with either.
