@@ -46,6 +46,12 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
         if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last.focus();
+        } else if (event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        } else if (!event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
           event.preventDefault();
           first.focus();
@@ -144,8 +150,6 @@ function App() {
     };
   }, [refreshProjectRoot]);
 
-  // F6 / Shift+F6 cycles through the major regions in visual/document order:
-  // chat → terminal → project → chat.
   useEffect(() => {
     const regions = ['chat', 'terminal', 'project'];
 
@@ -343,7 +347,7 @@ function App() {
         </div>
 
         <aside id="workspace-panels" className="workspace-panels" aria-label="Terminal and project">
-          <section id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-region-heading">
+          <div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-region-heading">
             <h2 id="terminal-region-heading" className="sr-only">Terminal</h2>
             <TerminalPanel
               host={host}
@@ -351,7 +355,7 @@ function App() {
               pathToInsert={pathForTerminal}
               onPathInserted={() => setPathForTerminal(null)}
             />
-          </section>
+          </div>
 
           <section id="project-region" className="workspace-region" data-focus-region="project" aria-labelledby="current-project-heading">
             <section className="current-project">
