@@ -12,6 +12,14 @@ The project combines a React/Vite frontend with a Flask/Python backend and a pro
 - [Quick start](#quick-start)
   - [Backend setup](#backend-setup)
   - [Frontend setup (web)](#frontend-setup-web)
+- [Docker](#docker)
+  - [Services and profiles](#services-and-profiles)
+  - [Python backend (default)](#python-backend-default)
+  - [TypeScript backend](#typescript-backend)
+  - [React frontend (production static)](#react-frontend-production-static)
+  - [Connecting to Ollama on the host](#connecting-to-ollama-on-the-host)
+  - [Project directory and configuration](#project-directory-and-configuration)
+  - [What is not containerized](#what-is-not-containerized)
 - [Running the Electron application](#running-the-electron-application)
 - [Environment and configuration](#environment-and-configuration)
 - [AI providers and models](#ai-providers-and-models)
@@ -61,13 +69,19 @@ The tool system is controlled by the backend. AI providers do not receive unrest
 
 ```text
 ai-terminal-chat/
-├── client-react/       # React/Vite chat frontend (+ Electron shell)
-├── server-python/      # Flask backend, providers, tools, security
+├── client-react/          # React/Vite chat frontend (+ Electron shell)
+│   ├── Dockerfile         # Production static image (nginx)
+│   └── nginx.conf
+├── server-python/         # Flask backend, providers, tools, security
+│   └── Dockerfile
+├── server-typescript/     # Hono/TypeScript API (same contract as Flask)
+│   └── Dockerfile
 ├── scripts/
-│   ├── powershell/     # Windows startup and stop helpers
-│   ├── sh/             # Linux/macOS startup and stop helpers
+│   ├── powershell/        # Windows startup and stop helpers
+│   ├── sh/                # Linux/macOS startup and stop helpers
 │   └── readme.md
-├── LICENSE             # Apache License 2.0
+├── docker-compose.yml     # Compose services and profiles
+├── LICENSE                # Apache License 2.0
 └── README.md
 ```
 
@@ -142,6 +156,130 @@ The Vite development server runs at `http://localhost:3000` by default.
 
 To point the client at a different backend URL, set `VITE_API_URL` in a `.env` file under `client-react` (default is `http://localhost:9000`).
 
+
+## Docker
+
+Docker support covers the Python backend, the TypeScript backend, and a production build of the React web client. Electron remains a host-only desktop shell. Ollama is not packaged in any image; containers reach a host (or remote) Ollama instance via configuration.
+
+The non-Docker workflow (`uv`, `python app.py`, `npm run dev` in either server, Vite, and the scripts under `scripts/`) is unchanged.
+
+### Services and profiles
+
+| Compose service | Profile | Host port (default) | Role |
+| --- | --- | --- | --- |
+| `backend` | (always on) | `9000` | Python Flask API |
+| `backend-ts` | `typescript` | `9000` (`TS_PORT`) | TypeScript Hono API (same HTTP contract) |
+| `frontend` | `frontend` | `3000` (`FRONTEND_PORT`) | nginx serving the Vite production build |
+
+Run only one backend on host port 9000 at a time. To use the TypeScript API instead of Python:
+
+```bash
+docker compose stop backend
+docker compose --profile typescript up -d backend-ts
+```
+
+### Python backend (default)
+
+```bash
+docker compose build backend
+docker compose up -d backend
+docker compose logs -f backend
+docker compose down
+```
+
+Equivalent without Compose:
+
+```bash
+docker build -t ai-terminal-chat-backend:local ./server-python
+docker run --rm -p 9000:9000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e PROVIDER=ollama \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e HOST=0.0.0.0 \
+  ai-terminal-chat-backend:local
+```
+
+Local (non-Docker) runs still bind to `127.0.0.1` unless you set `HOST`. Inside containers, `HOST=0.0.0.0`.
+
+### TypeScript backend
+
+```bash
+docker compose --profile typescript build backend-ts
+docker compose --profile typescript up -d backend-ts
+```
+
+Or:
+
+```bash
+docker build -t ai-terminal-chat-backend-ts:local ./server-typescript
+docker run --rm -p 9000:9000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e PROVIDER=ollama \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e HOST=0.0.0.0 \
+  ai-terminal-chat-backend-ts:local
+```
+
+The TypeScript image builds with `tsc` and runs `node dist/server.js`. Bind address uses the same `HOST` / `PORT` environment variables as the Python server.
+
+### React frontend (production static)
+
+The container serves the Vite production build with nginx. The API URL is compiled into the bundle at **build** time and must be reachable from the **browser** (typically `http://localhost:9000`), not the Docker service name.
+
+```bash
+# Backend already on host port 9000
+docker compose --profile frontend build frontend
+docker compose --profile frontend up -d frontend
+# Open http://localhost:3000
+```
+
+Override the baked-in API origin:
+
+```bash
+VITE_API_URL=http://localhost:9000 docker compose --profile frontend build frontend
+```
+
+For day-to-day development with hot reload, continue to run Vite on the host (`cd client-react && npm run dev`) against either a host or containerized backend.
+
+### Connecting to Ollama on the host
+
+Do not run Ollama inside these containers unless you have a project-specific reason; model weights and the Ollama process stay on the host.
+
+| Environment | How containers reach host Ollama |
+| --- | --- |
+| Docker Desktop (Windows / macOS) | `host.docker.internal` resolves automatically |
+| Docker Engine on Linux | Compose sets `extra_hosts: host.docker.internal:host-gateway` |
+
+Defaults for both backend images / Compose services:
+
+- `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`
+- `OLLAMA_HOST=http://host.docker.internal:11434`
+- `PROVIDER=ollama`
+
+Ensure Ollama is listening on the host (`ollama serve`, typically port `11434`). Override the URL if Ollama is remote:
+
+```bash
+OLLAMA_BASE_URL=http://192.168.1.50:11434/v1 docker compose up -d backend
+```
+
+Cloud providers work the same way as on the host: pass the relevant API key environment variables (for example `GOOGLE_API_KEY`, `OPENAI_API_KEY`) into Compose or `docker run`.
+
+### Project directory and configuration
+
+Tools that read or write project files operate relative to `AI_TERMINAL_PROJECT_ROOT`. Compose mounts the host path from `HOST_PROJECT_PATH` (default: repository root) at `/project` and sets `AI_TERMINAL_PROJECT_ROOT=/project` for both backend services.
+
+```bash
+HOST_PROJECT_PATH=/path/to/your/code docker compose up -d backend
+```
+
+Application configuration that would normally live under `~/.ai-terminal-chat` is stored in a named Docker volume (`ai-terminal-chat-config`) so it survives container recreation.
+
+### What is not containerized
+
+- **Electron** — desktop shell stays on the host (Windows and Linux development).
+- **Ollama** — host or remote process only.
+- **Vite dev server** — preferred for frontend development; the `frontend` image is for production-style static serving.
+
 ## Running the Electron application
 
 A minimal Electron shell is provided so the same React frontend can run as a desktop window while continuing to talk to the Flask backend.
@@ -205,6 +343,7 @@ Backend configuration is driven by `server-python/.env` (see `.env.example`). Im
 |---|---|
 | `PROVIDER` | Active provider id (`gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`) |
 | `PORT` | Flask listen port (default `9000`) |
+| `HOST` | Backend bind address (default `127.0.0.1`; Docker uses `0.0.0.0`) |
 | Provider-specific keys and models | See `.env.example` (for example `GOOGLE_API_KEY` / `GEMINI_MODEL`, `OLLAMA_*`, `OPENAI_*`, `XAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`) |
 
 API keys remain on the backend only. They are never returned by the provider status or selection endpoints.
