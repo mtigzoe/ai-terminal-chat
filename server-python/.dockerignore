@@ -1,0 +1,36 @@
+# Virtual environments and local Python state
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Local secrets and developer files
+.env
+.env.*
+!.env.example
+*.log
+
+# Tests are not required at runtime (run them on the host with uv)
+tests/
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore

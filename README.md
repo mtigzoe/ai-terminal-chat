@@ -12,6 +12,12 @@ The project combines a React/Vite frontend with a Flask/Python backend and a pro
 - [Quick start](#quick-start)
   - [Backend setup](#backend-setup)
   - [Frontend setup (web)](#frontend-setup-web)
+- [Docker (backend)](#docker-backend)
+  - [Why backend-only](#why-backend-only)
+  - [Build and run](#build-and-run)
+  - [Connecting to Ollama on the host](#connecting-to-ollama-on-the-host)
+  - [Project directory and configuration](#project-directory-and-configuration)
+  - [Frontend against a containerized backend](#frontend-against-a-containerized-backend)
 - [Running the Electron application](#running-the-electron-application)
 - [Environment and configuration](#environment-and-configuration)
 - [AI providers and models](#ai-providers-and-models)
@@ -63,10 +69,13 @@ The tool system is controlled by the backend. AI providers do not receive unrest
 ai-terminal-chat/
 ├── client-react/       # React/Vite chat frontend (+ Electron shell)
 ├── server-python/      # Flask backend, providers, tools, security
+│   ├── Dockerfile      # Backend container image
+│   └── .dockerignore
 ├── scripts/
 │   ├── powershell/     # Windows startup and stop helpers
 │   ├── sh/             # Linux/macOS startup and stop helpers
 │   └── readme.md
+├── docker-compose.yml  # Backend-only Compose service
 ├── LICENSE             # Apache License 2.0
 └── README.md
 ```
@@ -142,6 +151,98 @@ The Vite development server runs at `http://localhost:3000` by default.
 
 To point the client at a different backend URL, set `VITE_API_URL` in a `.env` file under `client-react` (default is `http://localhost:9000`).
 
+
+## Docker (backend)
+
+Docker support containerizes the Python Flask backend only. The React/Vite frontend and Electron shell continue to run on the host with the existing scripts and workflows. Ollama is not packaged in the image; the container reaches an Ollama instance running on the host (or elsewhere) via configuration.
+
+### Why backend-only
+
+- The frontend is primarily a Vite development server or an Electron desktop shell. Packaging Electron inside a container is a poor fit for local development on Windows and Linux.
+- Keeping the client on the host preserves hot-reload, accessibility tooling, and the existing PowerShell/Bash start scripts without change.
+- A backend-only image is the smallest useful first step: it isolates Python dependencies while remaining easy to point the existing client at (`VITE_API_URL`).
+
+The non-Docker workflow (`uv`, `python app.py`, `npm run dev`, and the scripts under `scripts/`) is unchanged.
+
+### Build and run
+
+Prerequisites: Docker Engine or Docker Desktop (Windows, macOS, or Linux).
+
+From the repository root:
+
+```bash
+# Build the backend image
+docker compose build
+
+# Start the backend (default provider: ollama)
+docker compose up -d
+
+# Follow logs
+docker compose logs -f backend
+
+# Stop
+docker compose down
+```
+
+Equivalent one-shot build without Compose:
+
+```bash
+docker build -t ai-terminal-chat-backend:local ./server-python
+docker run --rm -p 9000:9000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e PROVIDER=ollama \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e HOST=0.0.0.0 \
+  ai-terminal-chat-backend:local
+```
+
+The container listens on `0.0.0.0:9000` inside the network namespace and is published to the host as `localhost:9000` by default. Local (non-Docker) runs still bind to `127.0.0.1` unless you set `HOST` yourself.
+
+### Connecting to Ollama on the host
+
+Do not run Ollama inside this container unless you have a project-specific reason; the default design keeps model weights and the Ollama process on the host.
+
+| Environment | How the container reaches host Ollama |
+| --- | --- |
+| Docker Desktop (Windows / macOS) | `host.docker.internal` resolves automatically |
+| Docker Engine on Linux | Compose sets `extra_hosts: host.docker.internal:host-gateway` |
+
+Default environment inside the image / Compose service:
+
+- `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`
+- `OLLAMA_HOST=http://host.docker.internal:11434`
+- `PROVIDER=ollama`
+
+Ensure Ollama is listening on the host (`ollama serve`, typically port `11434`). Override the URL if Ollama is remote:
+
+```bash
+OLLAMA_BASE_URL=http://192.168.1.50:11434/v1 docker compose up -d
+```
+
+Cloud providers work the same way as on the host: pass the relevant API key environment variables (for example `GOOGLE_API_KEY`, `OPENAI_API_KEY`) into Compose or `docker run`.
+
+### Project directory and configuration
+
+Tools that read or write project files operate relative to `AI_TERMINAL_PROJECT_ROOT` (see `server-python/security.py`). Compose mounts the host path from `HOST_PROJECT_PATH` (default: repository root) at `/project` and sets `AI_TERMINAL_PROJECT_ROOT=/project`.
+
+```bash
+HOST_PROJECT_PATH=/path/to/your/code docker compose up -d
+```
+
+Application configuration that would normally live under `~/.ai-terminal-chat` is stored in a named Docker volume (`ai-terminal-chat-config`) so it survives container recreation.
+
+### Frontend against a containerized backend
+
+With the container running on port 9000, start the React client on the host as usual:
+
+```bash
+cd client-react
+npm install   # once
+npm run dev
+```
+
+The client defaults to `http://localhost:9000`. If you published a different host port, set `VITE_API_URL` in `client-react/.env` accordingly.
+
 ## Running the Electron application
 
 A minimal Electron shell is provided so the same React frontend can run as a desktop window while continuing to talk to the Flask backend.
@@ -205,6 +306,7 @@ Backend configuration is driven by `server-python/.env` (see `.env.example`). Im
 |---|---|
 | `PROVIDER` | Active provider id (`gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`) |
 | `PORT` | Flask listen port (default `9000`) |
+| `HOST` | Flask bind address (default `127.0.0.1`; Docker uses `0.0.0.0`) |
 | Provider-specific keys and models | See `.env.example` (for example `GOOGLE_API_KEY` / `GEMINI_MODEL`, `OLLAMA_*`, `OPENAI_*`, `XAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`) |
 
 API keys remain on the backend only. They are never returned by the provider status or selection endpoints.

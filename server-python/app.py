@@ -614,5 +614,8 @@ def terminal_run():
 
 
 if __name__ == "__main__":
+    # Default 127.0.0.1 keeps the non-Docker local workflow unchanged.
+    # Docker sets HOST=0.0.0.0 so the API is reachable from the host.
+    host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "9000"))
-    app.run(host="127.0.0.1", port=port)
+    app.run(host=host, port=port)
