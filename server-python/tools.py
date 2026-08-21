@@ -573,6 +573,13 @@ GIT_LOG_MAX_CHARS = 20_000
 GIT_BRANCH_MAX_CHARS = 20_000
 GIT_DIFF_MAX_CHARS = 50_000
 
+# The full set of `git status --short` XY codes that represent an
+# unresolved merge conflict (e.g. from `git merge` or `git rebase`).
+# "AA" (both added) and "DD" (both deleted) don't contain the letter
+# "M"/"A"/"D" in a way that's distinguishable from an ordinary staged
+# add/delete, so they must be checked explicitly rather than inferred.
+GIT_CONFLICT_STATUS_CODES = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
+
 
 def _git_status_raw() -> dict:
     """Run `git status --short --branch` and return raw text (or error)."""
@@ -664,17 +671,34 @@ def git_status() -> dict:
     changed = 0
     untracked = 0
     staged = 0
+    conflicts = 0
     details: list[str] = []
 
     for line in lines:
         if line.startswith("## ") or len(line) < 3:
             continue
         x, y = line[0], line[1]
+        code = line[0:2]
         file_path = line[3:].strip()
 
-        if x == "?" and y == "?":
+        if code == "??":
             untracked += 1
             details.append(f"{file_path} — new file, not tracked by Git")
+            continue
+
+        if code in GIT_CONFLICT_STATUS_CODES:
+            # An unresolved merge conflict (e.g. from `git merge` or
+            # `git rebase`). This must never be reported as an ordinary
+            # staged change: "AA" and "DD" in particular contain no "M"/
+            # "A"/"D" that uniquely identifies them as a conflict, so they
+            # need to be checked before the modified/added/deleted branch
+            # below, not folded into it.
+            changed += 1
+            conflicts += 1
+            details.append(
+                f"{file_path} — unresolved merge conflict, must be resolved "
+                f"before this can be committed"
+            )
             continue
 
         changed += 1
@@ -704,6 +728,14 @@ def git_status() -> dict:
     else:
         noun = "file" if total_changes == 1 else "files"
         parts.append(f"You have {total_changes} uncommitted {noun}.")
+
+    if conflicts > 0:
+        noun = "file" if conflicts == 1 else "files"
+        verb = "has" if conflicts == 1 else "have"
+        parts.append(
+            f"{conflicts} {noun} {verb} an unresolved merge conflict and "
+            f"must be resolved before you can commit."
+        )
 
     if staged > 0:
         verb = "is" if staged == 1 else "are"
@@ -744,6 +776,7 @@ def git_status() -> dict:
         "changed": changed,
         "untracked": untracked,
         "staged": staged,
+        "conflicts": conflicts,
         "hasRemote": has_remote,
         "synchronized": synchronized,
     }

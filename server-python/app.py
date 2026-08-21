@@ -70,7 +70,7 @@ def handle_unexpected_error(exc):
 def _provider_status(target=None, probe: bool = True) -> dict:
     """Build the status payload for one provider instance.
 
-    Never includes an api_key ΓÇö ProviderConfig.to_public_dict() omits
+    Never includes an api_key — ProviderConfig.to_public_dict() omits
     it entirely, and nothing below reads provider.api_key either, so
     this can't accidentally leak a Kilo/Gemini credential to the
     browser (see "Don't expose API keys to React" in the README).
@@ -112,7 +112,7 @@ def _diagnostics(target, error: str) -> dict:
     """Structured, actionable detail for an unreachable provider.
 
     Turns "Could not reach Ollama." into something a user can act on
-    without inspecting server logs ΓÇö useful for screen-reader users in
+    without inspecting server logs — useful for screen-reader users in
     particular, where a wall of log text is much harder to scan than a
     short list of concrete next steps.
     """
@@ -150,7 +150,7 @@ def providers():
     """Report the active provider's status and the supported provider names.
 
     Pass `?probe=0` to skip the network probe (faster, but `available`
-    will be omitted) ΓÇö useful for a UI that just wants to know what
+    will be omitted) — useful for a UI that just wants to know what
     provider/model is currently selected.
     """
 
@@ -227,7 +227,7 @@ def provider_models(name):
     configuration /providers/select would use, so the model list
     reflects the server the user would actually get if they switched.
     Returns an empty list (not an error) when the provider can't be
-    reached or doesn't support listing ΓÇö see Provider.list_models().
+    reached or doesn't support listing — see Provider.list_models().
 
     For local providers (Ollama), also reports reachability and a clear
     error string when the server is down so the Settings UI can show
@@ -335,7 +335,7 @@ def cancel_request(request_id):
     which run_agent_loop checks between rounds and tool calls. A
     request the server never registered (already finished, or the
     client never sent a request_id) returns cancelled=False rather
-    than an error ΓÇö the client's own abort of the HTTP connection is
+    than an error — the client's own abort of the HTTP connection is
     still effective either way.
     """
 
@@ -529,11 +529,11 @@ def stream():
                     # Plain-text progress for screen readers and terminals.
                     yield f"\n[{event.get('phase', 'progress')}] {event.get('message', '')}\n"
                 elif event["type"] == "tool_call":
-                    yield f"\nΓÜÖ∩╕Å {event['name']}({format_args(event['args'])})\n"
+                    yield f"\n⚙️ {event['name']}({format_args(event['args'])})\n"
                 elif event["type"] == "tool_result":
                     result = event["result"]
                     if isinstance(result, dict) and result.get("error"):
-                        yield f"ΓÜá∩╕Å {event['name']}: {result['error']}\n"
+                        yield f"⚠️ {event['name']}: {result['error']}\n"
                 elif event["type"] == "pending_confirmation":
                     yield (
                         f"\n[Confirmation required: {event['name']} "

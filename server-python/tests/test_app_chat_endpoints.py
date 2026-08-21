@@ -316,6 +316,41 @@ def test_stream_tool_result_errors_are_surfaced_inline(client, monkeypatch):
     assert "handled the missing file" in body
 
 
+def test_stream_tool_call_and_error_markers_are_correctly_encoded(client, monkeypatch):
+    """The plain-text /stream format prefixes tool calls and tool errors
+    with emoji markers (gear for tool_call, warning for a failed
+    tool_result). These must round-trip as the real ⚙️/⚠️ codepoints —
+    not as mojibake produced by a stray non-UTF-8 encode/decode
+    somewhere in the file's history, which previous substring-only
+    assertions (checking for "read_file" alone) failed to catch.
+    """
+    _set_provider(
+        monkeypatch,
+        FakeProvider(
+            [
+                ProviderResponse(
+                    text=None,
+                    tool_calls=[ToolCall("read_file", {"path": "missing.txt"})],
+                ),
+                ProviderResponse(text="handled the missing file"),
+            ]
+        ),
+    )
+
+    response = client.post("/stream", json={"chat": "read missing.txt", "history": []})
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    assert "⚙️ read_file(" in body
+    assert "⚠️ read_file:" in body
+
+    # Guard against regressing back into the specific mojibake this
+    # replaced (UTF-8 emoji bytes misread as CP437 and re-saved as UTF-8).
+    assert "\u0393\u00dc\u00d6" not in body  # mangled gear emoji ("ΓÜÖ")
+    assert "\u0393\u00dc\u00e1" not in body  # mangled warning emoji ("ΓÜá")
+
+
 # ---------------------------------------------------------
 # Global error handler (app.handle_unexpected_error)
 # ---------------------------------------------------------
