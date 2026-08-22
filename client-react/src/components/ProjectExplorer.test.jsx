@@ -16,6 +16,11 @@ beforeEach(() => {
   axios.get.mockReset();
   axios.post.mockReset();
   axios.post.mockResolvedValue({ data: { stdout: '' } });
+  try {
+    sessionStorage.clear();
+  } catch {
+    // ignore unavailable sessionStorage
+  }
 });
 
 test('lists directory entries and exposes accessible file checkboxes', async () => {
@@ -268,6 +273,131 @@ test('git status success clears the git status error', async () => {
   await waitFor(() => {
     expect(screen.queryByText(/git status unavailable/i)).not.toBeInTheDocument();
   });
+});
+
+test('"Select all files" recursively selects files inside collapsed/unloaded directories', async () => {
+  axios.get
+    .mockResolvedValueOnce({
+      data: {
+        path: '.',
+        entries: [
+          { name: 'a.txt', type: 'file' },
+          { name: 'sub', type: 'directory' },
+        ],
+      },
+    })
+    .mockResolvedValueOnce({
+      data: { path: 'sub', entries: [{ name: 'b.txt', type: 'file' }] },
+    });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /a\.txt, file/i });
+
+  // "sub" was never expanded/loaded, so its contents aren't in visibleItems.
+  expect(screen.queryByRole('treeitem', { name: /b\.txt, file/i })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /^select all files$/i }));
+
+  expect(await screen.findByRole('button', { name: /use selected files with agent \(2\)/i })).toBeInTheDocument();
+  expect(axios.get).toHaveBeenCalledWith(`${host}/project/list`, { params: { path: 'sub' } });
+  await waitFor(() => {
+    const stored = JSON.parse(sessionStorage.getItem(`project-explorer:${host}:selected`));
+    expect(stored.sort()).toEqual(['a.txt', 'sub/b.txt']);
+  });
+});
+
+test('"Select all files" preserves files that were already selected', async () => {
+  axios.get
+    .mockResolvedValueOnce({
+      data: {
+        path: '.',
+        entries: [
+          { name: 'a.txt', type: 'file' },
+          { name: 'sub', type: 'directory' },
+        ],
+      },
+    })
+    .mockResolvedValueOnce({
+      data: { path: 'sub', entries: [{ name: 'b.txt', type: 'file' }] },
+    });
+
+  render(<ProjectExplorer host={host} />);
+  const checkbox = await screen.findByRole('checkbox', { name: /select a\.txt for the agent/i });
+  fireEvent.click(checkbox);
+  expect(checkbox).toBeChecked();
+
+  fireEvent.click(screen.getByRole('button', { name: /^select all files$/i }));
+
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /use selected files with agent \(2\)/i })).toBeInTheDocument();
+  });
+  expect(checkbox).toBeChecked();
+});
+
+test('"Select all files" reuses already-loaded children instead of re-requesting them', async () => {
+  axios.get
+    .mockResolvedValueOnce({ data: { path: '.', entries: [{ name: 'sub', type: 'directory' }] } })
+    .mockResolvedValueOnce({ data: { path: 'sub', entries: [{ name: 'c.txt', type: 'file' }] } });
+
+  render(<ProjectExplorer host={host} />);
+  const subItem = await screen.findByRole('treeitem', { name: /sub, directory/i });
+  fireEvent.click(subItem);
+  await screen.findByRole('treeitem', { name: /c\.txt, file/i });
+  expect(axios.get).toHaveBeenCalledTimes(2);
+
+  fireEvent.click(screen.getByRole('button', { name: /^select all files$/i }));
+
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /use selected files with agent \(1\)/i })).toBeInTheDocument();
+  });
+  // No extra /project/list request for "sub" since it was already cached in `children`.
+  expect(axios.get).toHaveBeenCalledTimes(2);
+});
+
+test('"Select all files" handles a failing subdirectory gracefully and still selects readable files', async () => {
+  axios.get
+    .mockResolvedValueOnce({
+      data: {
+        path: '.',
+        entries: [
+          { name: 'good.txt', type: 'file' },
+          { name: 'bad', type: 'directory' },
+        ],
+      },
+    })
+    .mockRejectedValueOnce(new Error('permission denied'));
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /good\.txt, file/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /^select all files$/i }));
+
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /use selected files with agent \(1\)/i })).toBeInTheDocument();
+  });
+  expect(await screen.findByRole('alert')).toHaveTextContent(/folders could not be listed/i);
+  expect(screen.getByText(/1 folder could not be read/i)).toBeInTheDocument();
+});
+
+test('"Select all visible" is unaffected by the presence of "Select all files"', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'a.txt', type: 'file' },
+        { name: 'b.txt', type: 'file' },
+      ],
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /a\.txt, file/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /select all visible/i }));
+
+  expect(await screen.findByRole('button', { name: /use selected files with agent \(2\)/i })).toBeInTheDocument();
+  // Only the initial directory listing was requested; no recursive traversal occurred.
+  expect(axios.get).toHaveBeenCalledTimes(1);
 });
 
 test('periodic refresh triggers another git status request after approximately 5 seconds', async () => {
