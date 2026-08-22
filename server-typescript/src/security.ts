@@ -127,9 +127,16 @@ const SENSITIVE_EXACT_NAMES = new Set([
   "id_ecdsa",
 ]);
 const SENSITIVE_SUFFIXES = [".pem", ".key"];
+// Template env files document required keys without real secrets.
+const ENV_TEMPLATE_NAMES = new Set([
+  ".env.example",
+  ".env.sample",
+  ".env.template",
+]);
 
 export function isSensitiveFilename(name: string): boolean {
   const lower = name.toLowerCase();
+  if (ENV_TEMPLATE_NAMES.has(lower)) return false;
   if (lower.startsWith(".env")) return true;
   if (SENSITIVE_EXACT_NAMES.has(lower)) return true;
   if (SENSITIVE_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return true;
