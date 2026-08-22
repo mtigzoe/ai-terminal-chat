@@ -14,7 +14,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "axe-core": "^4.10.2",
     "axios": "^1.7.4",
-    "jest-axe": "^10.0.0",
+    "jest-axe": "^10.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -29,7 +29,45 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "electron": "npm run build && electron . --production",
-    "electron:dev": "electron . --dev"
+    "electron:dev": "electron . --dev",
+    "electron:build:win": "npm run build && node scripts/prepare-server.cjs && npx --yes electron-builder@26.15.3 --win nsis",
+    "electron:build:win:portable": "npm run build && node scripts/prepare-server.cjs && npx --yes electron-builder@26.15.3 --win portable"
+  },
+  "build": {
+    "appId": "io.spendmoney.ai-terminal-chat",
+    "productName": "AI Terminal Chat",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/server",
+        "to": "server-typescript",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "AI-Terminal-Chat-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "AI-Terminal-Chat-Portable-${version}.${ext}"
+    }
   },
   "eslintConfig": {
     "extends": [
