@@ -65,6 +65,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   const [filterQuery, setFilterQuery] = useState('');
   const [lastSelectedPath, setLastSelectedPath] = useState(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const [selectingAllFiles, setSelectingAllFiles] = useState(false);
   const [gitStatuses, setGitStatuses] = useState({});
   const [gitStatusError, setGitStatusError] = useState('');
   const gitStatusRefreshing = useRef(false);
@@ -299,6 +300,84 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     setStatus(filePaths.length ? `Selected ${filePaths.length} visible ${filePaths.length === 1 ? 'file' : 'files'} for the agent.` : 'No visible files to select.');
   };
 
+  // Recursively discovers every non-directory entry in the whole project via
+  // /project/list, starting at the root ("."). Directories already present in
+  // `children` are reused instead of being re-fetched; anything newly loaded
+  // is merged back into `children` in a single update once traversal
+  // finishes. A local `cache` (seeded from `children`) is used instead of
+  // calling `loadDirectory` directly because this walk spans many `await`
+  // points and state updates: a memoized `loadDirectory` closure would keep
+  // reading the `children` snapshot from the moment the walk started rather
+  // than what was just loaded, defeating the point of the cache.
+  const collectAllFilePaths = useCallback(async () => {
+    const cache = { ...children };
+    const newlyLoaded = {};
+    const paths = [];
+    const failedPaths = [];
+
+    const visit = async (dirPath) => {
+      let entries = cache[dirPath];
+      if (!entries) {
+        try {
+          const response = await axios.get(`${host}/project/list`, { params: { path: dirPath } });
+          entries = Array.isArray(response.data?.entries) ? response.data.entries : [];
+        } catch {
+          failedPaths.push(dirPath);
+          return;
+        }
+        cache[dirPath] = entries;
+        newlyLoaded[dirPath] = entries;
+      }
+      for (const entry of entries) {
+        const path = entryPath(entry, dirPath);
+        if (!path) continue;
+        if (isDirectory(entry)) {
+          await visit(path);
+        } else {
+          paths.push(path);
+        }
+      }
+    };
+
+    await visit('.');
+
+    if (Object.keys(newlyLoaded).length) {
+      setChildren((current) => ({ ...current, ...newlyLoaded }));
+    }
+
+    return { paths, failedPaths };
+  }, [children, host]);
+
+  const selectAllFiles = async () => {
+    if (selectingAllFiles) return;
+    setSelectingAllFiles(true);
+    setError('');
+    setStatus('Scanning the entire project for files.');
+    try {
+      const { paths, failedPaths } = await collectAllFilePaths();
+      let finalCount = 0;
+      setSelectedFiles((current) => {
+        const next = new Set(current);
+        paths.forEach((p) => next.add(p));
+        finalCount = next.size;
+        return next;
+      });
+      const failureNote = failedPaths.length
+        ? ` ${failedPaths.length} ${failedPaths.length === 1 ? 'folder' : 'folders'} could not be read and ${failedPaths.length === 1 ? 'was' : 'were'} skipped.`
+        : '';
+      setStatus(`Selected ${finalCount} ${finalCount === 1 ? 'file' : 'files'} across the entire project.${failureNote}`);
+      if (failedPaths.length) {
+        setError('Some folders could not be listed while selecting all files. The selection may be incomplete.');
+      }
+    } catch (err) {
+      const message = err?.response?.data?.error || err?.message || 'Unable to select all project files.';
+      setError(message);
+      setStatus('Unable to select all project files.');
+    } finally {
+      setSelectingAllFiles(false);
+    }
+  };
+
   const clearSelection = () => {
     setSelectedFiles(new Set());
     setLastSelectedPath(null);
@@ -452,6 +531,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
           const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus();
         }}>Refresh</button>
         <button type="button" onClick={selectAllVisible}>Select all visible</button>
+        <button type="button" onClick={selectAllFiles} disabled={selectingAllFiles}>Select all files</button>
         <button type="button" onClick={clearSelection} disabled={selectedFiles.size === 0}>Clear selection</button>
         <button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>Use selected files with agent ({selectedFiles.size})</button>
         {onInsertPathIntoTerminal && <button type="button" onClick={() => {
