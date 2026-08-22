@@ -7,8 +7,22 @@ const repoRoot = path.resolve(clientDir, '..');
 const serverDir = path.join(repoRoot, 'server-typescript');
 const stagingDir = path.join(clientDir, 'build', 'server');
 
-function npmCommand() {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+function runNpm(args, cwd) {
+  if (process.platform === 'win32') {
+    // npm.cmd is a Windows command script. Running it through cmd.exe avoids
+    // spawnSync EINVAL on newer Node versions (including Node 25).
+    execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm', ...args], {
+      cwd,
+      stdio: 'inherit',
+      windowsHide: true,
+    });
+    return;
+  }
+
+  execFileSync('npm', args, {
+    cwd,
+    stdio: 'inherit',
+  });
 }
 
 function copyRequiredFile(name) {
@@ -21,10 +35,7 @@ function copyRequiredFile(name) {
 }
 
 console.log('Building TypeScript backend...');
-execFileSync(npmCommand(), ['run', 'build'], {
-  cwd: serverDir,
-  stdio: 'inherit',
-});
+runNpm(['run', 'build'], serverDir);
 
 fs.rmSync(stagingDir, { recursive: true, force: true });
 fs.mkdirSync(stagingDir, { recursive: true });
@@ -39,9 +50,6 @@ copyRequiredFile('package.json');
 copyRequiredFile('package-lock.json');
 
 console.log('Installing backend production dependencies in the staging directory...');
-execFileSync(npmCommand(), ['ci', '--omit=dev'], {
-  cwd: stagingDir,
-  stdio: 'inherit',
-});
+runNpm(['ci', '--omit=dev'], stagingDir);
 
 console.log(`TypeScript backend prepared at ${stagingDir}`);
