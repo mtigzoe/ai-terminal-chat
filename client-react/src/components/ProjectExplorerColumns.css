@@ -1,0 +1,132 @@
+/* Explorer-style column header row (Name / Type / Size / Modified) sitting
+   above the project tree, plus the matching per-row visual columns inside
+   each .project-entry. Purely presentational — none of these classes affect
+   the tree's role="tree"/"treeitem" semantics or keyboard behavior. */
+
+.project-tree-header {
+  margin-top: 4px;
+  border: 1px solid #9a9caa;
+  border-radius: 6px 6px 0 0;
+  background: #eceef4;
+  overflow: hidden;
+}
+
+.project-tree-header-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.project-tree-header-cell {
+  display: flex;
+  align-items: center;
+  padding: 2px 4px;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: #333;
+  border-right: 1px solid #d5d7e0;
+}
+
+.project-tree-header-cell:last-child {
+  border-right: none;
+}
+
+.project-tree-header-cell-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.project-tree-header-cell-type {
+  flex: 0 0 130px;
+}
+
+.project-tree-header-cell-size {
+  flex: 0 0 70px;
+  justify-content: flex-end;
+}
+
+.project-tree-header-cell-modified {
+  flex: 0 0 90px;
+}
+
+.project-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.project-sort-button:hover {
+  text-decoration: underline;
+}
+
+.project-sort-button:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 1px;
+  text-decoration: underline;
+}
+
+.project-sort-glyph {
+  font-size: 0.8em;
+}
+
+.project-entry-columns {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+}
+
+.project-entry-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-entry-cell-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.project-entry-cell-type {
+  flex: 0 0 130px;
+  color: #555;
+  font-size: 0.9em;
+}
+
+.project-entry-cell-size {
+  flex: 0 0 70px;
+  color: #888;
+  text-align: right;
+  font-size: 0.9em;
+}
+
+.project-entry-cell-modified {
+  flex: 0 0 90px;
+  color: #888;
+  font-size: 0.9em;
+}
+
+@media (forced-colors: active) {
+  .project-tree-header {
+    border-color: ButtonText;
+    background: Canvas;
+  }
+
+  .project-tree-header-cell {
+    border-color: ButtonText;
+    color: CanvasText;
+  }
+
+  .project-sort-button:focus-visible {
+    outline-color: Highlight;
+  }
+}

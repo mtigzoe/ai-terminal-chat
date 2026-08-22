@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import './GitStatusBadge.css';
+import './ProjectExplorerColumns.css';
 
 const VIRTUALIZATION_THRESHOLD = 200;
 const TREE_ROW_HEIGHT = 32;
@@ -16,6 +17,26 @@ const GIT_STATUS_INFO = {
   renamed: { short: 'R', label: 'renamed' },
   conflict: { short: 'C', label: 'conflict' },
 };
+
+// /project/list only ever returns { name, type } per entry (see
+// server-python/tools.py:list_files and server-typescript/src/filesystem.ts:
+// listFiles) — there is no size or modified-time field. The "Type" column
+// below is derived purely from the file name's extension on the client; it
+// is a display label, not data the backend provided, and file size / last
+// modified are intentionally left blank rather than fabricated (see the
+// "Size"/"Modified" header cells, which are static text, not sort buttons).
+const FILE_TYPE_LABELS = {
+  js: 'JavaScript File', jsx: 'JavaScript File', mjs: 'JavaScript File', cjs: 'JavaScript File',
+  ts: 'TypeScript File', tsx: 'TypeScript File',
+  json: 'JSON File', md: 'Markdown Document', py: 'Python File',
+  css: 'CSS File', html: 'HTML Document', htm: 'HTML Document',
+  yml: 'YAML File', yaml: 'YAML File', txt: 'Text Document', sh: 'Shell Script',
+  svg: 'SVG Image', png: 'PNG Image', jpg: 'JPEG Image', jpeg: 'JPEG Image', gif: 'GIF Image',
+  lock: 'Lock File', toml: 'TOML File', ini: 'INI File', cfg: 'Configuration File',
+  xml: 'XML File', csv: 'CSV File', gitignore: 'Git Ignore File',
+};
+
+const SORT_COLUMN_LABELS = { name: 'Name', type: 'Type' };
 
 // The full set of `git status --porcelain=v1` XY codes that represent an
 // unresolved merge conflict. Most contain the literal character "U", but
@@ -66,6 +87,8 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   const [lastSelectedPath, setLastSelectedPath] = useState(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [selectingAllFiles, setSelectingAllFiles] = useState(false);
+  const [sortColumn, setSortColumn] = useState('name');
+  const [sortDirection, setSortDirection] = useState('asc');
   const [gitStatuses, setGitStatuses] = useState({});
   const [gitStatusError, setGitStatusError] = useState('');
   const gitStatusRefreshing = useRef(false);
@@ -82,6 +105,18 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     if (entry?.path) return entry.path;
     if (!parentPath || parentPath === '.') return name;
     return `${parentPath.replace(/[\\/]$/, '')}/${name}`;
+  };
+  // Client-side-only display label derived from the file name's extension.
+  // Not backend data — see the FILE_TYPE_LABELS comment above.
+  const typeLabel = (entry) => {
+    if (isDirectory(entry)) return 'Folder';
+    const name = entryName(entry);
+    const lastDot = name.lastIndexOf('.');
+    let ext = '';
+    if (lastDot > 0 && lastDot < name.length - 1) ext = name.slice(lastDot + 1).toLowerCase();
+    else if (lastDot === 0 && name.length > 1) ext = name.slice(1).toLowerCase();
+    if (!ext) return 'File';
+    return FILE_TYPE_LABELS[ext] || `${ext.toUpperCase()} File`;
   };
 
   const refreshGitStatus = useCallback(async () => {
@@ -290,6 +325,43 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     setActivePath(path);
   };
 
+  // Sorts a directory's own entries only (siblings), directories always
+  // first. Called separately at every level of the tree in `addVisible`, so
+  // sort order and directory grouping are applied consistently no matter how
+  // deep a folder is nested — not just at the root.
+  const sortEntries = (entries) => {
+    const factor = sortDirection === 'desc' ? -1 : 1;
+    const compareNames = (a, b) => entryName(a).localeCompare(entryName(b), undefined, { numeric: true, sensitivity: 'base' });
+    return [...entries].sort((a, b) => {
+      const aDir = isDirectory(a);
+      const bDir = isDirectory(b);
+      if (aDir !== bDir) return aDir ? -1 : 1;
+      let primary = 0;
+      if (sortColumn === 'type') primary = typeLabel(a).localeCompare(typeLabel(b), undefined, { sensitivity: 'base' });
+      if (primary === 0) primary = compareNames(a, b);
+      return primary * factor;
+    });
+  };
+
+  const handleSort = (column) => {
+    const nextDirection = sortColumn === column && sortDirection === 'asc' ? 'desc' : 'asc';
+    setSortColumn(column);
+    setSortDirection(nextDirection);
+    setStatus(`Sorted by ${SORT_COLUMN_LABELS[column]}, ${nextDirection === 'asc' ? 'ascending' : 'descending'}.`);
+  };
+
+  const sortButtonLabel = (column) => {
+    const label = SORT_COLUMN_LABELS[column];
+    if (sortColumn !== column) return `Sort by ${label}`;
+    const current = sortDirection === 'asc' ? 'ascending' : 'descending';
+    const next = sortDirection === 'asc' ? 'descending' : 'ascending';
+    return `${label}, sorted ${current}. Activate to sort ${next}.`;
+  };
+
+  const ariaSortValue = (column) => (sortColumn === column ? (sortDirection === 'asc' ? 'ascending' : 'descending') : undefined);
+
+  const sortGlyph = (column) => (sortColumn === column ? (sortDirection === 'asc' ? '▲' : '▼') : '');
+
   const selectAllVisible = () => {
     const filePaths = visibleItems.filter((item) => !item.directory).map((item) => item.path);
     setSelectedFiles((current) => {
@@ -421,7 +493,8 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
 
   const visibleItems = [];
   const addVisible = (entries, parentPath = '.', level = 1) => {
-    for (const entry of entries) {
+    const orderedEntries = sortEntries(entries);
+    for (const entry of orderedEntries) {
       const path = entryPath(entry, parentPath);
       const directory = isDirectory(entry);
       const selfMatch = entryMatchesFilter(entry);
@@ -554,8 +627,25 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
           <li>Home / End — first or last visible item</li>
           <li>Checkboxes — select files to send to the agent</li>
           <li>Insert path into terminal — places the focused or selected path in the terminal command field</li>
+          <li>Name / Type column headers — sort the file list; activate again to reverse the order</li>
         </ul>}
-        <p id="project-selection-help" className="project-selection-help">Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Use “Insert path into terminal” for a command workflow. Press F6 to move between the chat, project tree, and terminal.</p>
+        <p id="project-selection-help" className="project-selection-help">Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Use the Name or Type column headers to sort the list. Use “Insert path into terminal” for a command workflow. Press F6 to move between the chat, project tree, and terminal.</p>
+      </div>
+      <div className="project-tree-header" role="table" aria-label="Sort project files and folders">
+        <div role="row" className="project-tree-header-row">
+          <span role="columnheader" aria-sort={ariaSortValue('name')} className="project-tree-header-cell project-tree-header-cell-name">
+            <button type="button" className="project-sort-button" onClick={() => handleSort('name')} aria-label={sortButtonLabel('name')}>
+              Name<span aria-hidden="true" className="project-sort-glyph">{sortGlyph('name')}</span>
+            </button>
+          </span>
+          <span role="columnheader" aria-sort={ariaSortValue('type')} className="project-tree-header-cell project-tree-header-cell-type">
+            <button type="button" className="project-sort-button" onClick={() => handleSort('type')} aria-label={sortButtonLabel('type')}>
+              Type<span aria-hidden="true" className="project-sort-glyph">{sortGlyph('type')}</span>
+            </button>
+          </span>
+          <span role="columnheader" className="project-tree-header-cell project-tree-header-cell-size" title="Size is not provided by the project server.">Size</span>
+          <span role="columnheader" className="project-tree-header-cell project-tree-header-cell-modified" title="Modified date is not provided by the project server.">Modified</span>
+        </div>
       </div>
       <div ref={treeRef} role="tree" tabIndex="-1" aria-label="Project files and directories" aria-describedby="project-selection-help" className="project-list" data-focus-target="project-tree" id="project-tree-list" onScroll={shouldVirtualize ? (event) => setScrollTop(event.currentTarget.scrollTop) : undefined} style={{ maxHeight: `${TREE_VIEWPORT_HEIGHT}px`, overflowY: 'auto' }}>
         {shouldVirtualize && <div aria-hidden="true" style={{ height: `${visibleItems.length * TREE_ROW_HEIGHT}px`, position: 'relative' }} />}
@@ -569,8 +659,15 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
           const statusDescription = gitStatus ? `, ${gitStatus.label}` : '';
           const treeItemLabel = directory ? `${expanded.has(path) ? 'Expanded' : 'Collapsed'} ${name}, directory${statusDescription}` : `${name}, file${selected ? ', selected' : ''}${statusDescription}`;
           return <div key={path} role="treeitem" tabIndex={isActive || (!activePath && logicalIndex === 0) ? 0 : -1} aria-level={level} aria-posinset={logicalIndex + 1} aria-setsize={visibleItems.length} aria-expanded={directory ? expanded.has(path) : undefined} aria-selected={isActive} aria-label={treeItemLabel} data-tree-path={path} onFocus={() => setActivePath(path)} onKeyDown={(event) => handleTreeKeyDown(event, item)} onClick={() => directory ? toggleDirectory(path, name) : openFile(entry, path)} className="project-entry" style={shouldVirtualize ? { position: 'absolute', top: `${logicalIndex * TREE_ROW_HEIGHT}px`, insetInline: 0, height: `${TREE_ROW_HEIGHT}px`, paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` } : { paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` }}>
-            {directory ? <span aria-hidden="true">{expanded.has(path) ? '▾' : '▸'}</span> : <input type="checkbox" checked={selected} onChange={(event) => toggleFile(item.entry, path, { shiftKey: event.nativeEvent?.shiftKey || event.shiftKey })} aria-label={`Select ${name} for the agent`} onClick={(event) => event.stopPropagation()} />}
-            {' '}{name}{gitStatus && <span className={`project-git-status project-git-status-${gitStatus.kind}`} aria-hidden="true" title={`Git status: ${gitStatus.label}`}>[{gitStatus.short}]</span>}
+            <span className="project-entry-columns">
+              <span className="project-entry-cell project-entry-cell-name">
+                {directory ? <span aria-hidden="true">{expanded.has(path) ? '▾' : '▸'}</span> : <input type="checkbox" checked={selected} onChange={(event) => toggleFile(item.entry, path, { shiftKey: event.nativeEvent?.shiftKey || event.shiftKey })} aria-label={`Select ${name} for the agent`} onClick={(event) => event.stopPropagation()} />}
+                {' '}{name}{gitStatus && <span className={`project-git-status project-git-status-${gitStatus.kind}`} aria-hidden="true" title={`Git status: ${gitStatus.label}`}>[{gitStatus.short}]</span>}
+              </span>
+              <span className="project-entry-cell project-entry-cell-type" aria-hidden="true">{typeLabel(entry)}</span>
+              <span className="project-entry-cell project-entry-cell-size" aria-hidden="true">—</span>
+              <span className="project-entry-cell project-entry-cell-modified" aria-hidden="true">—</span>
+            </span>
           </div>;
         })}
       </div>

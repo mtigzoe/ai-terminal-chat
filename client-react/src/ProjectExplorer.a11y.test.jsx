@@ -303,6 +303,73 @@ describe('ProjectExplorer accessibility', () => {
     });
   });
 
+  test('sort column headers use aria-sort and announce the current/next sort state', async () => {
+    axiosInstance.get.mockResolvedValueOnce({
+      data: {
+        path: '.',
+        entries: [
+          { name: 'b.txt', type: 'file' },
+          { name: 'a.txt', type: 'file' },
+        ],
+      },
+    });
+    axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+
+    render(<ProjectExplorer host={host} />);
+    await screen.findByRole('treeitem', { name: /a\.txt, file/i });
+
+    // The "Name" columnheader itself carries aria-sort so table-navigation
+    // screen reading (e.g. JAWS) announces the sort state on arrival.
+    const nameHeaderCell = screen.getByRole('columnheader', { name: 'Name' });
+    expect(nameHeaderCell).toHaveAttribute('aria-sort', 'ascending');
+
+    // "Type" isn't the active sort column, so it carries no aria-sort at all
+    // (rather than an ambiguous "none") until it becomes active.
+    const typeHeaderCell = screen.getByRole('columnheader', { name: 'Type' });
+    expect(typeHeaderCell).not.toHaveAttribute('aria-sort');
+
+    // The interactive control itself also carries the full state in its own
+    // accessible name, for AT that reaches it via Tab rather than table
+    // navigation.
+    const nameButton = screen.getByRole('button', { name: /name, sorted ascending\. activate to sort descending\./i });
+    expect(nameButton).toBeInTheDocument();
+
+    fireEvent.click(nameButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveAttribute('aria-sort', 'descending');
+    });
+    expect(screen.getByRole('button', { name: /name, sorted descending\. activate to sort ascending\./i })).toBeInTheDocument();
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(/sorted by name, descending/i);
+  });
+
+  test('sort header buttons are reachable and operable with the keyboard alone', async () => {
+    axiosInstance.get.mockResolvedValueOnce({
+      data: {
+        path: '.',
+        entries: [
+          { name: 'b.txt', type: 'file' },
+          { name: 'a.txt', type: 'file' },
+        ],
+      },
+    });
+    axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+
+    render(<ProjectExplorer host={host} />);
+    await screen.findByRole('treeitem', { name: /a\.txt, file/i });
+
+    const typeButton = screen.getByRole('button', { name: /sort by type/i });
+    typeButton.focus();
+    expect(typeButton).toHaveFocus();
+    fireEvent.click(typeButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /type, sorted ascending/i })).toBeInTheDocument();
+    });
+  });
+
   test('empty tree state is announced', async () => {
     axiosInstance.get.mockResolvedValueOnce({
       data: { path: '.', entries: [] },

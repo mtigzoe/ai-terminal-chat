@@ -400,6 +400,248 @@ test('"Select all visible" is unaffected by the presence of "Select all files"',
   expect(axios.get).toHaveBeenCalledTimes(1);
 });
 
+test('column headers sort the visible files, with directories grouped before files', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'zebra.txt', type: 'file' },
+        { name: 'apple.py', type: 'file' },
+        { name: 'Docs', type: 'directory' },
+        { name: 'assets', type: 'directory' },
+      ],
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /zebra\.txt, file/i });
+
+  const labelsInOrder = () => screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label'));
+
+  // Default: Name ascending, directories (case-insensitive) before files.
+  expect(labelsInOrder()).toEqual([
+    'Collapsed assets, directory',
+    'Collapsed Docs, directory',
+    'apple.py, file',
+    'zebra.txt, file',
+  ]);
+
+  const nameHeader = screen.getByRole('button', { name: /name, sorted ascending/i });
+  fireEvent.click(nameHeader);
+
+  // Reversed: directories still grouped first, but each group's internal
+  // order flips too.
+  await waitFor(() => {
+    expect(labelsInOrder()).toEqual([
+      'Collapsed Docs, directory',
+      'Collapsed assets, directory',
+      'zebra.txt, file',
+      'apple.py, file',
+    ]);
+  });
+  expect(screen.getByRole('button', { name: /name, sorted descending/i })).toBeInTheDocument();
+});
+
+test('clicking the Type header sorts by the derived file type, directories still grouped first', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'index.js', type: 'file' },
+        { name: 'notes.md', type: 'file' },
+        { name: 'app.py', type: 'file' },
+        { name: 'lib', type: 'directory' },
+      ],
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /index\.js, file/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /sort by type/i }));
+
+  // JavaScript File < Markdown Document < Python File alphabetically; the
+  // directory stays first regardless of the Type column's values.
+  await waitFor(() => {
+    const labels = screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label'));
+    expect(labels).toEqual([
+      'Collapsed lib, directory',
+      'index.js, file',
+      'notes.md, file',
+      'app.py, file',
+    ]);
+  });
+});
+
+test('sorting does not change which files are selected', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'b.txt', type: 'file' },
+        { name: 'a.txt', type: 'file' },
+      ],
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+  const checkbox = await screen.findByRole('checkbox', { name: /select b\.txt for the agent/i });
+  fireEvent.click(checkbox);
+  expect(await screen.findByRole('button', { name: /use selected files with agent \(1\)/i })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
+
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /name, sorted descending/i })).toBeInTheDocument();
+  });
+  expect(screen.getByRole('button', { name: /use selected files with agent \(1\)/i })).toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: /select b\.txt for the agent/i })).toBeChecked();
+});
+
+test('sorting is applied within filtered results', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'report-b.txt', type: 'file' },
+        { name: 'report-a.txt', type: 'file' },
+        { name: 'other.txt', type: 'file' },
+      ],
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /other\.txt, file/i });
+
+  const filterInput = screen.getByLabelText(/filter files and folders/i);
+  fireEvent.change(filterInput, { target: { value: 'report' } });
+
+  await waitFor(() => {
+    expect(screen.getAllByRole('treeitem')).toHaveLength(2);
+  });
+  expect(screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label'))).toEqual([
+    'report-a.txt, file',
+    'report-b.txt, file',
+  ]);
+
+  fireEvent.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
+
+  await waitFor(() => {
+    expect(screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label'))).toEqual([
+      'report-b.txt, file',
+      'report-a.txt, file',
+    ]);
+  });
+});
+
+test('sort order applies inside expanded subdirectories too', async () => {
+  axios.get
+    .mockResolvedValueOnce({
+      data: { path: '.', entries: [{ name: 'src', type: 'directory' }] },
+    })
+    .mockResolvedValueOnce({
+      data: {
+        path: 'src',
+        entries: [
+          { name: 'zeta.ts', type: 'file' },
+          { name: 'alpha.ts', type: 'file' },
+        ],
+      },
+    });
+
+  render(<ProjectExplorer host={host} />);
+  const srcItem = await screen.findByRole('treeitem', { name: /src, directory/i });
+  fireEvent.click(srcItem);
+  await screen.findByRole('treeitem', { name: /alpha\.ts, file/i });
+
+  expect(screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label'))).toEqual([
+    'Expanded src, directory',
+    'alpha.ts, file',
+    'zeta.ts, file',
+  ]);
+
+  fireEvent.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
+
+  await waitFor(() => {
+    expect(screen.getAllByRole('treeitem').map((el) => el.getAttribute('aria-label'))).toEqual([
+      'Expanded src, directory',
+      'zeta.ts, file',
+      'alpha.ts, file',
+    ]);
+  });
+});
+
+test('"Select all visible" and "Select all files" are unaffected by sort state', async () => {
+  axios.get
+    .mockResolvedValueOnce({
+      data: {
+        path: '.',
+        entries: [
+          { name: 'zebra.txt', type: 'file' },
+          { name: 'apple.txt', type: 'file' },
+          { name: 'sub', type: 'directory' },
+        ],
+      },
+    })
+    .mockResolvedValueOnce({
+      data: { path: 'sub', entries: [{ name: 'nested.txt', type: 'file' }] },
+    });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /zebra\.txt, file/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /name, sorted descending/i })).toBeInTheDocument();
+  });
+
+  fireEvent.click(screen.getByRole('button', { name: /select all visible/i }));
+  expect(await screen.findByRole('button', { name: /use selected files with agent \(2\)/i })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /^select all files$/i }));
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /use selected files with agent \(3\)/i })).toBeInTheDocument();
+  });
+});
+
+test('sort headers are real buttons; Size and Modified are static, non-sortable headers', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: { path: '.', entries: [{ name: 'a.txt', type: 'file' }] },
+  });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('treeitem', { name: /a\.txt, file/i });
+
+  expect(screen.getByRole('button', { name: /name, sorted ascending/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /sort by type/i })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: 'Size' })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: 'Modified' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^size$/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^modified$/i })).not.toBeInTheDocument();
+});
+
+test('sessionStorage selection persistence still works after sorting', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [
+        { name: 'b.txt', type: 'file' },
+        { name: 'a.txt', type: 'file' },
+      ],
+    },
+  });
+
+  render(<ProjectExplorer host={host} />);
+  const checkbox = await screen.findByRole('checkbox', { name: /select a\.txt for the agent/i });
+  fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
+
+  await waitFor(() => {
+    const stored = JSON.parse(sessionStorage.getItem(`project-explorer:${host}:selected`));
+    expect(stored).toEqual(['a.txt']);
+  });
+});
+
 test('periodic refresh triggers another git status request after approximately 5 seconds', async () => {
   const setIntervalSpy = vi.spyOn(window, 'setInterval');
   const clearIntervalSpy = vi.spyOn(window, 'clearInterval');
