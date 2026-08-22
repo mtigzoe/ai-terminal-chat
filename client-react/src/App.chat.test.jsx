@@ -302,6 +302,7 @@ describe('project root loading', () => {
 
     render(<App />);
 
-    await screen.findByText(/unable to determine current project/i);
+    await screen.findByText(/unable to load project directory/i);
   });
 });
+

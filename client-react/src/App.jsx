@@ -357,7 +357,7 @@ function App() {
             />
           </div>
 
-          <section id="project-region" className="workspace-region" data-focus-region="project" aria-labelledby="project-explorer-heading">
+          <div id="project-region" className="workspace-region" data-focus-region="project">
             <ProjectExplorer
               key={projectRoot || 'default'}
               host={host}
@@ -365,7 +365,7 @@ function App() {
               onUseSelectedFiles={handleSelectedFiles}
               onInsertPathIntoTerminal={(path) => setPathForTerminal(path)}
             />
-          </section>
+          </div>
         </aside>
       </div>
     </div>
@@ -373,3 +373,7 @@ function App() {
 }
 
 export default App;
+
+
+
+
