@@ -4,8 +4,21 @@ This directory contains the React frontend for the AI Terminal Chat application.
 
 ## Prerequisites
 
-- Node.js and npm
+- Node.js 22 LTS and npm
 - The Flask backend running from the project root
+
+For Windows Electron packaging, use Node.js 22 LTS.
+
+Verified packaging environment:
+- Node.js: v22.23.2
+- npm: 10.9.8
+
+Check your installed versions with:
+
+```bash
+node -v
+npm -v
+```
 
 ## Installation
 
@@ -86,3 +99,4 @@ When the application is packaged, Electron loads `dist/index.html` from the appl
 - No automatic Flask process management is performed in Stage 1.
 - The preload script exposes only a read-only `window.electronAPI.isElectron` flag.
 - Context isolation and sandboxing are enabled; Node integration is disabled in the renderer.
+
