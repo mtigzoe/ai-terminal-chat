@@ -117,7 +117,6 @@ function App() {
   const [waiting, setWaiting] = useState(false);
   const [agentStatus, setAgentStatus] = useState(null);
   const [projectRoot, setProjectRoot] = useState('');
-  const [projectRootError, setProjectRootError] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const [pathForTerminal, setPathForTerminal] = useState(null);
@@ -126,10 +125,8 @@ function App() {
   const refreshProjectRoot = useCallback(() => {
     axios.get(`${host}/project-root`).then((response) => {
       setProjectRoot(response.data.path || '');
-      setProjectRootError(false);
     }).catch(() => {
       setProjectRoot('');
-      setProjectRootError(true);
     });
   }, [host]);
 
@@ -351,8 +348,7 @@ function App() {
         </div>
 
         <aside id="workspace-panels" className="workspace-panels" aria-label="Terminal and project">
-          <div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-region-heading">
-            <h2 id="terminal-region-heading" className="sr-only">Terminal</h2>
+          <div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-panel-heading">
             <TerminalPanel
               host={host}
               onSendToChat={handleClick}
@@ -361,18 +357,7 @@ function App() {
             />
           </div>
 
-          <section id="project-region" className="workspace-region" data-focus-region="project" aria-labelledby="current-project-heading">
-            <section className="current-project">
-              <div>
-                <h2 id="current-project-heading">Current project</h2>
-                {projectRootError ? (
-                  <p role="status" aria-live="polite">Unable to determine current project.</p>
-                ) : (
-                  <p>{projectRoot || 'Loading current project…'}</p>
-                )}
-              </div>
-              <a href="/settings.html#settings-project-root">Change project</a>
-            </section>
+          <section id="project-region" className="workspace-region" data-focus-region="project" aria-labelledby="project-explorer-heading">
             <ProjectExplorer
               key={projectRoot || 'default'}
               host={host}

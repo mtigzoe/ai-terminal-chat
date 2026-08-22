@@ -97,11 +97,6 @@ body {
 .activity-item--confirm code { color: #8a5a00; }
 .activity-item--progress code { color: #334; }
 
-.current-project { text-align: left; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #9a9caa; background: #f7f6f3; }
-.current-project h2 { font-size: 1em; margin: 0 0 4px; }
-.current-project p { margin: 0; overflow-wrap: anywhere; }
-.current-project a { display: inline-block; margin-top: 6px; }
-
 .confirmation-backdrop {
   position: fixed;
   inset: 0;
@@ -276,8 +271,12 @@ body {
 }
 
 .project-explorer-path {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
   overflow-wrap: anywhere;
+}
+
+.project-change-link {
+  margin: 0 0 8px;
 }
 
 .project-explorer-toolbar {

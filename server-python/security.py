@@ -236,6 +236,12 @@ SENSITIVE_EXACT_NAMES = {
     "id_ecdsa",
 }
 SENSITIVE_SUFFIXES = (".pem", ".key")
+# Template env files document required keys without real secrets.
+ENV_TEMPLATE_NAMES = {
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+}
 
 
 def is_sensitive_filename(name: str) -> bool:
@@ -243,6 +249,8 @@ def is_sensitive_filename(name: str) -> bool:
 
     lower = name.lower()
 
+    if lower in ENV_TEMPLATE_NAMES:
+        return False
     if lower.startswith(".env"):
         return True
     if lower in SENSITIVE_EXACT_NAMES:

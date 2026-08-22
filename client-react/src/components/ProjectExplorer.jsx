@@ -439,7 +439,10 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   return (
     <section className="project-explorer" role="region" aria-labelledby="project-explorer-heading" data-focus-region="project">
       <h2 id="project-explorer-heading">Project</h2>
-      <p className="project-path" aria-label="Current project directory">{projectRoot || '.'}</p>
+      <p className="project-explorer-path" aria-label="Current project directory">{projectRoot || '.'}</p>
+      <p className="project-change-link">
+        <a href="/settings.html#settings-project-root">Change project</a>
+      </p>
       <div className="project-actions">
         <button type="button" onClick={collapseAll}>Collapse all</button>
         <button type="button" onClick={expandAll}>Expand all</button>
