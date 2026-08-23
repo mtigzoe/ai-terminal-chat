@@ -16,6 +16,8 @@ const http = require('node:http');
 let mainWindow = null;
 /** @type {import('electron').UtilityProcess | null} */
 let backendProcess = null;
+let backendExit = null;
+let backendStderr = '';
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = 9000;
@@ -76,10 +78,22 @@ async function waitForBackend(timeoutMs = 30000) {
     if (await checkBackend()) {
       return;
     }
+
+    if (backendExit) {
+      const details = backendStderr.trim();
+      const exitDetails = `TypeScript backend exited before becoming ready (code ${backendExit.code ?? 'unknown'}, signal ${backendExit.signal ?? 'none'}).`;
+      throw new Error(details ? `${exitDetails}\n\nBackend error:\n${details}` : exitDetails);
+    }
+
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  throw new Error(`TypeScript backend did not become ready on port ${BACKEND_PORT}.`);
+  const details = backendStderr.trim();
+  throw new Error(
+    details
+      ? `TypeScript backend did not become ready on port ${BACKEND_PORT}.\n\nBackend error:\n${details}`
+      : `TypeScript backend did not become ready on port ${BACKEND_PORT}.`
+  );
 }
 
 async function startBundledBackend() {
@@ -99,6 +113,9 @@ async function startBundledBackend() {
     return;
   }
 
+  backendExit = null;
+  backendStderr = '';
+
   console.log('Starting bundled TypeScript backend...');
   backendProcess = utilityProcess.fork(serverEntry, [], {
     cwd: backendDir,
@@ -116,14 +133,19 @@ async function startBundledBackend() {
   });
 
   backendProcess.stderr?.on('data', (data) => {
-    console.error(`[server-typescript] ${data.toString().trimEnd()}`);
+    const text = data.toString();
+    backendStderr = `${backendStderr}${text}`.slice(-8000);
+    console.error(`[server-typescript] ${text.trimEnd()}`);
   });
 
   backendProcess.on('error', (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    backendStderr = `${backendStderr}${message}\n`.slice(-8000);
     console.error('TypeScript backend process error:', error);
   });
 
-  backendProcess.on('exit', (code) => {
+  backendProcess.on('exit', (code, signal) => {
+    backendExit = { code, signal };
     console.log(`TypeScript backend exited with code ${code}.`);
     backendProcess = null;
   });
