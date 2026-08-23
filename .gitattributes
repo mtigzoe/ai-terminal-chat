@@ -1,0 +1,4 @@
+# Dependency lockfiles — metadata, not application source
+client-react/package-lock.json linguist-generated
+client-react/pnpm-lock.yaml linguist-generated
+server-typescript/package-lock.json linguist-generated
