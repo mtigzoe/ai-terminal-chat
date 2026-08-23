@@ -664,6 +664,12 @@ Releases are published on GitHub with release notes describing significant chang
 
 See the [Releases](https://github.com/mtigzoe/ai-terminal-chat/releases) page for available releases.
 
+## Code of Conduct
+
+We expect all contributors and participants to interact respectfully and constructively.
+
+Please see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the project's Code of Conduct.
+
 ## License
 
 Apache License 2.0
