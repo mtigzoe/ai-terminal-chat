@@ -1,9 +1,9 @@
 import React from 'react';
 
 const PAGES = [
-  { href: '/', label: 'Chat', match: (path) => path === '/' || path === '/index.html' || path.endsWith('/index.html') },
-  { href: '/project.html', label: 'Project', match: (path) => path.includes('project') },
-  { href: '/settings.html', label: 'Settings', match: (path) => path.includes('settings') },
+  { href: './index.html', label: 'Chat', match: (path) => path === '/' || path === '/index.html' || path.endsWith('/index.html') },
+  { href: './project.html', label: 'Project', match: (path) => path.includes('project') },
+  { href: './settings.html', label: 'Settings', match: (path) => path.includes('settings') },
 ];
 
 /**
