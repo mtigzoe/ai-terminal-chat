@@ -8,6 +8,7 @@ The project combines a React/Vite frontend with a Flask/Python backend and a pro
 
 - [Architecture](#architecture)
 - [Repository layout](#repository-layout)
+- [Languages and stack](#languages-and-stack)
 - [Prerequisites](#prerequisites)
 - [Quick start](#quick-start)
   - [Backend setup](#backend-setup)
@@ -84,6 +85,18 @@ ai-terminal-chat/
 ├── LICENSE                # Apache License 2.0
 └── README.md
 ```
+
+## Languages and stack
+
+| Layer | Languages / technologies |
+| --- | --- |
+| Web UI | JavaScript (React, Vite), CSS |
+| Desktop shell | Electron (same React UI) |
+| Primary API | Python 3.11+ (Flask) |
+| Alternate API | TypeScript (Hono) |
+| Automation | Bash, PowerShell, Docker Compose |
+
+GitHub’s language bar (the percentage chart on the repository page) is generated automatically from file sizes by language. It may weight lockfiles, generated assets, or other files differently from this intentional stack list.
 
 ## Prerequisites
 
