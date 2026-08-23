@@ -46,7 +46,7 @@ function ProjectPage() {
     } catch {
       // sessionStorage may be unavailable
     }
-    window.location.assign('/');
+    window.location.assign('./index.html');
   };
 
   const handleInsertPathIntoTerminal = (path) => {
@@ -55,7 +55,7 @@ function ProjectPage() {
     } catch {
       // ignore
     }
-    window.location.assign('/');
+    window.location.assign('./index.html');
   };
 
   return (
