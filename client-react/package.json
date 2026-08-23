@@ -9,12 +9,13 @@
     "@fortawesome/free-solid-svg-icons": "^6.6.0",
     "@fortawesome/react-fontawesome": "^0.2.2",
     "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.3.2",
+    "@testing-library/react": "^16.3.1",
     "@testing-library/user-event": "^14.5.2",
     "@vitejs/plugin-react": "^4.3.1",
     "axe-core": "^4.10.2",
     "axios": "^1.7.4",
     "jest-axe": "^10.0.0",
+    "jest-environment-jsdom": "^30.1.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -46,8 +47,23 @@
     ],
     "extraResources": [
       {
-        "from": "build/server",
-        "to": "server-typescript",
+        "from": "build/server/dist",
+        "to": "server-typescript/dist",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/server/package.json",
+        "to": "server-typescript/package.json"
+      },
+      {
+        "from": "build/server/package-lock.json",
+        "to": "server-typescript/package-lock.json"
+      },
+      {
+        "from": "build/server/node_modules",
+        "to": "server-typescript/node_modules",
         "filter": [
           "**/*"
         ]
