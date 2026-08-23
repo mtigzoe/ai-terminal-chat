@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import MainNav from './MainNav.jsx';
 
 const Header = ({ toggled, setToggled, waiting }) => {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -55,9 +56,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
 
   return (
     <header className="chat-header">
-      <a className="settings-link" href="/settings.html">
-        Settings
-      </a>
+      <MainNav />
       <h1>Chat</h1>
       <div className="stream-response-control">
         <span className="toggle-text" id="stream-response-label">
@@ -65,15 +64,15 @@ const Header = ({ toggled, setToggled, waiting }) => {
         </span>
         <button
           type="button"
-          className={`toggle-btn ${toggled ? "toggled" : ""}`}
+          className={`toggle-btn ${toggled ? 'toggled' : ''}`}
           onClick={() => setToggled(!toggled)}
-          aria-label={`Stream response ${toggled ? "on" : "off"}`}
+          aria-label={`Stream response ${toggled ? 'on' : 'off'}`}
           aria-pressed={toggled}
         >
           <span className="toggle-hover" aria-hidden="true">
             <span className="thumb"></span>
             <span className="toggle-hover-text">
-              {toggled ? "Streaming response on" : "Streaming response off"}
+              {toggled ? 'Streaming response on' : 'Streaming response off'}
             </span>
           </span>
         </button>

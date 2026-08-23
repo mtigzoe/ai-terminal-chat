@@ -15,6 +15,7 @@ export default defineConfig({
       input: {
         chat: 'index.html',
         settings: 'settings.html',
+        project: 'project.html',
       },
     },
   },

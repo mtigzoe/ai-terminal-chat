@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import { flushSync } from 'react-dom';
 import './App.css';
@@ -7,7 +7,6 @@ import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import ProviderSelector from './components/ProviderSelector.jsx';
-import ProjectExplorer from './components/ProjectExplorer.jsx';
 import TerminalPanel from './components/TerminalPanel.jsx';
 import {
   statusFromProgressEvent,
@@ -116,39 +115,13 @@ function App() {
   const [toggled, setToggled] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [agentStatus, setAgentStatus] = useState(null);
-  const [projectRoot, setProjectRoot] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const [pathForTerminal, setPathForTerminal] = useState(null);
   const is_stream = toggled;
 
-  const refreshProjectRoot = useCallback(() => {
-    axios.get(`${host}/project-root`).then((response) => {
-      setProjectRoot(response.data.path || '');
-    }).catch(() => {
-      setProjectRoot('');
-    });
-  }, [host]);
-
   useEffect(() => {
-    refreshProjectRoot();
-  }, [refreshProjectRoot]);
-
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') refreshProjectRoot();
-    };
-    const onFocus = () => refreshProjectRoot();
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onFocus);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [refreshProjectRoot]);
-
-  useEffect(() => {
-    const regions = ['chat', 'terminal', 'project'];
+    const regions = ['chat', 'terminal'];
 
     const focusRegion = (id) => {
       if (id === 'chat') {
@@ -158,14 +131,6 @@ function App() {
       if (id === 'terminal') {
         window.setTimeout(() => {
           document.querySelector('[data-focus-target="terminal-input"]')?.focus?.();
-        }, 0);
-        return;
-      }
-      if (id === 'project') {
-        window.setTimeout(() => {
-          const tree = document.querySelector('[data-focus-target="project-tree"]');
-          const firstItem = tree?.querySelector('[role="treeitem"]');
-          (firstItem || tree)?.focus?.();
         }, 0);
       }
     };
@@ -177,8 +142,6 @@ function App() {
       let current = 'chat';
       if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') {
         current = 'terminal';
-      } else if (active?.closest?.('[data-focus-region="project"]') || active?.getAttribute?.('data-focus-target') === 'project-tree') {
-        current = 'project';
       } else if (active === inputRef.current || active?.closest?.('.chat-app')) {
         current = 'chat';
       }
@@ -246,12 +209,6 @@ function App() {
     if (validationCheck(message)) return;
     if (!is_stream) handleNonStreamingChat(message);
     else handleStreamingChat(message);
-  };
-  const handleSelectedFiles = (files) => {
-    if (!Array.isArray(files) || files.length === 0) return;
-    const fileContext = files.map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`).join('\n');
-    const message = `I explicitly selected these project files for you to inspect. Use the supplied contents as context for your next response.\n${fileContext}`;
-    handleClick(message);
   };
   const handleNonStreamingChat = async (message) => {
     const requestId = generateRequestId();
@@ -327,13 +284,49 @@ function App() {
     fetchStreamData();
   };
 
+  // Consume pending file selection / terminal path hand-off from the Project page.
+  useEffect(() => {
+    let pendingFiles = null;
+    let pendingPath = null;
+
+    try {
+      const rawFiles = sessionStorage.getItem('ai-terminal-chat:pending-files');
+      if (rawFiles) {
+        pendingFiles = JSON.parse(rawFiles);
+        sessionStorage.removeItem('ai-terminal-chat:pending-files');
+      }
+      const rawPath = sessionStorage.getItem('ai-terminal-chat:pending-terminal-path');
+      if (rawPath) {
+        pendingPath = rawPath;
+        sessionStorage.removeItem('ai-terminal-chat:pending-terminal-path');
+      }
+    } catch {
+      // Ignore storage or parse errors.
+    }
+
+    if (Array.isArray(pendingFiles) && pendingFiles.length > 0) {
+      const fileContext = pendingFiles
+        .map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`)
+        .join('\n');
+      const message =
+        `I explicitly selected these project files for you to inspect. ` +
+        `Use the supplied contents as context for your next response.\n${fileContext}`;
+      window.setTimeout(() => handleClick(message), 0);
+    }
+
+    if (pendingPath) {
+      setPathForTerminal(pendingPath);
+    }
+    // Intentional one-time hand-off on mount; handleClick is stable for this use.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div style={{ textAlign: 'center' }}>
       <nav className="skip-links" aria-label="Skip links">
         <a className="skip-link" href="#main-conversation">Skip to conversation</a>
         <a className="skip-link" href="#message-input-region">Skip to message input</a>
         <a className="skip-link" href="#terminal-region">Skip to terminal</a>
-        <a className="skip-link" href="#project-region">Skip to project</a>
       </nav>
       <div className="app-shell">
         <div className="chat-app" data-focus-region="chat">
@@ -347,23 +340,13 @@ function App() {
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
 
-        <aside id="workspace-panels" className="workspace-panels" aria-label="Terminal and project">
+        <aside id="workspace-panels" className="workspace-panels" aria-label="Terminal">
           <div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-panel-heading">
             <TerminalPanel
               host={host}
               onSendToChat={handleClick}
               pathToInsert={pathForTerminal}
               onPathInserted={() => setPathForTerminal(null)}
-            />
-          </div>
-
-          <div id="project-region" className="workspace-region" data-focus-region="project">
-            <ProjectExplorer
-              key={projectRoot || 'default'}
-              host={host}
-              projectRoot={projectRoot}
-              onUseSelectedFiles={handleSelectedFiles}
-              onInsertPathIntoTerminal={(path) => setPathForTerminal(path)}
             />
           </div>
         </aside>
@@ -373,7 +356,3 @@ function App() {
 }
 
 export default App;
-
-
-
-

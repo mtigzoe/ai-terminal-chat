@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import MainNav from './MainNav.jsx';
 
 const SettingsPage = ({ host }) => {
   const [providerNames, setProviderNames] = useState([]);
@@ -279,7 +280,7 @@ const SettingsPage = ({ host }) => {
   if (loading) {
     return (
       <main className="settings-page" aria-labelledby="settings-heading">
-        <a className="back-link" href="/">Back to chat</a>
+        <MainNav />
         <h1 id="settings-heading">Settings</h1>
         <p role="status" aria-live="polite">Loading settings…</p>
       </main>
@@ -288,7 +289,7 @@ const SettingsPage = ({ host }) => {
 
   return (
     <main className="settings-page" aria-labelledby="settings-heading">
-      <a className="back-link" href="/">Back to chat</a>
+      <MainNav />
       <h1 id="settings-heading">Settings</h1>
 
       <form className="settings-form" onSubmit={handleSave}>
