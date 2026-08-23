@@ -652,6 +652,18 @@ Automated tests verify DOM structure, keyboard behaviour, and accessibility-orie
 - Add tests for security-sensitive and accessibility-sensitive changes.
 - Update documentation when scripts, configuration, or user workflows change.
 
+## Contributors
+
+Contributions are welcome. Contributors who submit code, documentation, bug reports, accessibility improvements, testing, or other meaningful improvements are appreciated.
+
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for contribution guidelines.
+
+## Releases
+
+Releases are published on GitHub with release notes describing significant changes, improvements, bug fixes, and other notable updates.
+
+See the [Releases](https://github.com/mtigzoe/ai-terminal-chat/releases) page for available releases.
+
 ## License
 
 Apache License 2.0
