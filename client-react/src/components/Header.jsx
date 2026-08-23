@@ -51,7 +51,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
 
   const clearConversation = () => {
     setConfirmOpen(false);
-    window.location.assign('/');
+    window.location.assign('./index.html');
   };
 
   return (
