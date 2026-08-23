@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import MainNav from './MainNav.jsx';
+import ProjectRootManager from './ProjectRootManager.jsx';
 
 const SettingsPage = ({ host }) => {
   const [providerNames, setProviderNames] = useState([]);
@@ -9,11 +10,9 @@ const SettingsPage = ({ host }) => {
   const [models, setModels] = useState([]);
   const [modelsSupported, setModelsSupported] = useState(false);
   const [modelsError, setModelsError] = useState('');
-  const [projectRoot, setProjectRoot] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [choosingFolder, setChoosingFolder] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
@@ -23,18 +22,6 @@ const SettingsPage = ({ host }) => {
   const [allowedCommandsStatus, setAllowedCommandsStatus] = useState('');
   const [allowedCommandsError, setAllowedCommandsError] = useState(false);
   const [allowedCommandsBusy, setAllowedCommandsBusy] = useState(false);
-  const chooseFolderButtonRef = useRef(null);
-
-  /**
-   * Restore keyboard focus to the Choose a folder button after the native
-   * OS dialog closes. Disabled buttons cannot hold focus, so we defer until
-   * React has re-enabled the control.
-   */
-  const restoreChooseFolderFocus = () => {
-    window.setTimeout(() => {
-      chooseFolderButtonRef.current?.focus();
-    }, 0);
-  };
 
   const loadModels = async (providerName, preserveModel = '') => {
     if (!providerName) return;
@@ -71,17 +58,14 @@ const SettingsPage = ({ host }) => {
 
     const loadSettings = async () => {
       try {
-        const [providerResponse, projectRootResponse, allowedCommandsResponse] =
-          await Promise.all([
-            axios.get(`${host}/providers?probe=0`),
-            axios.get(`${host}/project-root`),
-            axios.get(`${host}/allowed-commands`),
-          ]);
+        const [providerResponse, allowedCommandsResponse] = await Promise.all([
+          axios.get(`${host}/providers?probe=0`),
+          axios.get(`${host}/allowed-commands`),
+        ]);
         if (!active) return;
         setProviderNames(providerResponse.data.providers || []);
         setProvider(providerResponse.data.name || '');
         setModel(providerResponse.data.model || '');
-        setProjectRoot(projectRootResponse.data.path || '');
         setAllowedCommands(allowedCommandsResponse.data.commands || []);
         setStatusMessage('');
         await loadModels(providerResponse.data.name, providerResponse.data.model || '');
@@ -109,64 +93,9 @@ const SettingsPage = ({ host }) => {
     await loadModels(nextProvider);
   };
 
-  const handleChooseFolder = async () => {
-    setChoosingFolder(true);
-    setStatusMessage('Opening the folder picker.');
-    setStatusIsError(false);
-
-    try {
-      let selectedPath = '';
-
-      // Prefer the native Electron directory dialog when available.
-      if (window.electronAPI?.chooseFolder) {
-        const chosen = await window.electronAPI.chooseFolder(projectRoot || undefined);
-        if (!chosen) {
-          setStatusMessage('Folder selection cancelled.');
-          return;
-        }
-        selectedPath = chosen;
-      } else if (typeof window.showDirectoryPicker === 'function') {
-        // Browser File System Access API (Chrome/Edge). Path is often not
-        // a real filesystem path, so we still prefer Electron for desktop.
-        const handle = await window.showDirectoryPicker({ mode: 'read' });
-        selectedPath = handle?.name || '';
-        if (!selectedPath) {
-          throw new Error('The folder picker did not return a path.');
-        }
-        setStatusIsError(true);
-        setStatusMessage(
-          `Browser selected folder name "${selectedPath}". ` +
-          `For a full filesystem path, run the desktop (Electron) app or type the path manually.`
-        );
-        // Do not overwrite projectRoot with a bare folder name only.
-        return;
-      } else {
-        throw new Error(
-          'No folder picker is available in this environment. ' +
-          'Type the full project path in the field, or use the Electron desktop app.'
-        );
-      }
-
-      setProjectRoot(selectedPath);
-      setStatusMessage(`Folder selected: ${selectedPath}`);
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        setStatusMessage('Folder selection cancelled.');
-        return;
-      }
-      setStatusIsError(true);
-      setStatusMessage(
-        error?.response?.data?.error || error?.message || 'Could not choose a folder.'
-      );
-    } finally {
-      setChoosingFolder(false);
-      restoreChooseFolderFocus();
-    }
-  };
-
   const handleSave = async (event) => {
     event.preventDefault();
-    if (!provider || !projectRoot.trim()) return;
+    if (!provider) return;
 
     setSaving(true);
     setStatusMessage('');
@@ -176,20 +105,15 @@ const SettingsPage = ({ host }) => {
       const payload = {
         provider,
         model: model || undefined,
-        project_path: projectRoot.trim(),
       };
       if (apiKey.trim()) {
         payload.api_key = apiKey.trim();
       }
 
       const providerResponse = await axios.post(`${host}/providers/select`, payload);
-      const projectRootResponse = await axios.post(`${host}/project-root`, {
-        path: projectRoot.trim(),
-      });
 
       setProvider(providerResponse.data.name || provider);
       setModel(providerResponse.data.model || model);
-      setProjectRoot(projectRootResponse.data.path || projectRoot.trim());
       setApiKey('');
 
       const notes = providerResponse.data.capabilities?.notes;
@@ -203,7 +127,7 @@ const SettingsPage = ({ host }) => {
         );
       } else {
         setStatusMessage(
-          `Settings saved for ${providerResponse.data.name || provider}. Project path saved.`
+          `Settings saved for ${providerResponse.data.name || provider}.`
         );
       }
     } catch (error) {
@@ -292,117 +216,99 @@ const SettingsPage = ({ host }) => {
       <MainNav />
       <h1 id="settings-heading">Settings</h1>
 
-      <form className="settings-form" onSubmit={handleSave}>
-        <div className="settings-field">
-          <label htmlFor="settings-project-root">Default project path</label>
-          <input
-            id="settings-project-root"
-            type="text"
-            value={projectRoot}
-            onChange={(event) => setProjectRoot(event.target.value)}
-            disabled={saving || choosingFolder}
-            placeholder="C:\\Projects\\my-project"
-            autoComplete="off"
-            spellCheck="false"
-            aria-describedby="settings-project-root-help"
-          />
-          <button
-            type="button"
-            ref={chooseFolderButtonRef}
-            className="settings-folder-button"
-            onClick={handleChooseFolder}
-            disabled={saving || choosingFolder}
-            aria-describedby="settings-project-root-help"
-          >
-            {choosingFolder ? 'Choosing folder…' : 'Choose a folder'}
-          </button>
-          <p id="settings-project-root-help" className="settings-help">
-            The backend uses this directory as the root for file, search, terminal, and Git tools. Choose a folder to open the native operating-system folder picker, or enter the full path manually. The selected path is shown here before you save it.
-          </p>
-        </div>
+      <ProjectRootManager host={host} />
 
-        <div className="settings-field">
-          <label htmlFor="settings-provider">AI Provider</label>
-          <select
-            id="settings-provider"
-            value={provider}
-            onChange={handleProviderChange}
-            disabled={saving || choosingFolder}
-          >
-            <option value="" disabled>Select a provider</option>
-            {providerNames.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-        </div>
+      <section className="settings-ai-providers" aria-labelledby="ai-providers-heading">
+        <h2 id="ai-providers-heading">AI Providers</h2>
+        <p className="settings-help">
+          Choose the active AI provider, model, and optional API key. These settings are
+          independent of the active project path above.
+        </p>
 
-        <div className="settings-field">
-          <label htmlFor="settings-model">Model</label>
-          {models.length > 0 && modelsSupported ? (
+        <form className="settings-form" onSubmit={handleSave}>
+          <div className="settings-field">
+            <label htmlFor="settings-provider">AI Provider</label>
             <select
-              id="settings-model"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              disabled={saving || choosingFolder || loadingModels}
-              aria-describedby="settings-model-help"
+              id="settings-provider"
+              value={provider}
+              onChange={handleProviderChange}
+              disabled={saving}
             >
-              {models.map((item) => (
-                <option key={item.id} value={item.id}>{item.id}</option>
+              <option value="" disabled>Select a provider</option>
+              {providerNames.map((name) => (
+                <option key={name} value={name}>{name}</option>
               ))}
             </select>
-          ) : (
-            <input
-              id="settings-model"
-              type="text"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              disabled={saving || choosingFolder}
-              placeholder={loadingModels ? 'Loading models…' : 'Enter model name'}
-              aria-describedby="settings-model-help"
-            />
-          )}
-          <p id="settings-model-help" className="settings-help">
-            {provider === 'ollama'
-              ? 'For Ollama, choose a model from the list of installed models, or type a model name and pull it with `ollama pull <name>` if it is missing.'
-              : 'Select a model when the provider supports listing, or type a model identifier.'}
-          </p>
-          {modelsError ? (
-            <p className="settings-status settings-status--error" role="status" aria-live="polite">
-              {modelsError}
+          </div>
+
+          <div className="settings-field">
+            <label htmlFor="settings-model">Model</label>
+            {models.length > 0 && modelsSupported ? (
+              <select
+                id="settings-model"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                disabled={saving || loadingModels}
+                aria-describedby="settings-model-help"
+              >
+                {models.map((item) => (
+                  <option key={item.id} value={item.id}>{item.id}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id="settings-model"
+                type="text"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                disabled={saving}
+                placeholder={loadingModels ? 'Loading models…' : 'Enter model name'}
+                aria-describedby="settings-model-help"
+              />
+            )}
+            <p id="settings-model-help" className="settings-help">
+              {provider === 'ollama'
+                ? 'For Ollama, choose a model from the list of installed models, or type a model name and pull it with `ollama pull <name>` if it is missing.'
+                : 'Select a model when the provider supports listing, or type a model identifier.'}
             </p>
-          ) : null}
-        </div>
+            {modelsError ? (
+              <p className="settings-status settings-status--error" role="status" aria-live="polite">
+                {modelsError}
+              </p>
+            ) : null}
+          </div>
 
-        <div className="settings-field">
-          <label htmlFor="settings-api-key">API key</label>
-          <input
-            id="settings-api-key"
-            type="password"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            disabled={saving || choosingFolder}
-            autoComplete="new-password"
-            placeholder="Enter API key (optional for Ollama)"
-            aria-describedby="settings-api-key-help"
-          />
-          <p id="settings-api-key-help" className="settings-help">
-            The key is sent to the local backend only and is not displayed after saving. Leave it blank to keep the existing server-side key. Ollama does not require an API key.
-          </p>
-        </div>
+          <div className="settings-field">
+            <label htmlFor="settings-api-key">API key</label>
+            <input
+              id="settings-api-key"
+              type="password"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              disabled={saving}
+              autoComplete="new-password"
+              placeholder="Enter API key (optional for Ollama)"
+              aria-describedby="settings-api-key-help"
+            />
+            <p id="settings-api-key-help" className="settings-help">
+              The key is sent to the local backend only and is not displayed after saving. Leave it blank to keep the existing server-side key. Ollama does not require an API key.
+            </p>
+          </div>
 
-        <button type="submit" className="settings-save" disabled={saving || choosingFolder || !provider || !projectRoot.trim()}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+          <button type="submit" className="settings-save" disabled={saving || !provider}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
 
-        <div
-          className={`settings-status${statusIsError ? ' settings-status--error' : ''}`}
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {statusMessage}
-        </div>
-      </form>
+          <div
+            className={`settings-status${statusIsError ? ' settings-status--error' : ''}`}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {statusMessage}
+          </div>
+        </form>
+      </section>
 
       <section
         className="settings-allowed-commands"

@@ -2,26 +2,22 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
 /**
- * Small, keyboard-accessible desktop project switcher.
+ * Keyboard-accessible project root manager.
  *
- * Unlike the full Settings form, choosing a folder here applies the project
- * root immediately. Electron supplies the real filesystem path; browsers use
- * the existing manual-path workflow because the File System Access API does
- * not reliably expose an absolute path.
+ * Choosing a folder in Electron applies the project root immediately. In a
+ * browser, enter the full path and use Apply path. This is the single place
+ * on Settings to change the project root (no duplicate field on the provider form).
  */
 export default function ProjectRootManager({ host }) {
   const [projectRoot, setProjectRoot] = useState('');
+  const [pathDraft, setPathDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('Loading active project.');
   const [error, setError] = useState(false);
   const chooseFolderButtonRef = useRef(null);
+  const applyPathButtonRef = useRef(null);
 
-  /**
-   * Restore keyboard focus to the native folder button after the OS dialog
-   * closes (success, cancel, or error). The button is disabled while busy,
-   * so focus is restored on the next task after React re-enables it.
-   */
   const restoreChooseFolderFocus = () => {
     window.setTimeout(() => {
       chooseFolderButtonRef.current?.focus();
@@ -34,6 +30,7 @@ export default function ProjectRootManager({ host }) {
       const response = await axios.get(`${host}/project-root`);
       const path = response.data?.path || '';
       setProjectRoot(path);
+      setPathDraft(path);
       setError(false);
       setStatus(path ? `Active project: ${path}` : 'No active project is configured.');
     } catch (requestError) {
@@ -52,6 +49,47 @@ export default function ProjectRootManager({ host }) {
     loadProjectRoot();
   }, [loadProjectRoot]);
 
+  const applyPath = async (pathValue, { focusTarget } = {}) => {
+    const trimmed = (pathValue || '').trim();
+    if (!trimmed) {
+      setError(true);
+      setStatus('Enter a full project path before applying.');
+      return;
+    }
+
+    setBusy(true);
+    setError(false);
+    setStatus(`Saving project: ${trimmed}`);
+
+    try {
+      const response = await axios.post(`${host}/project-root`, { path: trimmed });
+      const savedPath = response.data?.path || trimmed;
+      setProjectRoot(savedPath);
+      setPathDraft(savedPath);
+      setError(false);
+      setStatus(`Active project changed to ${savedPath}.`);
+      window.dispatchEvent(
+        new CustomEvent('project-root-changed', { detail: { path: savedPath } })
+      );
+    } catch (requestError) {
+      setError(true);
+      setStatus(
+        requestError?.response?.data?.error ||
+          requestError?.message ||
+          'Could not change the active project.'
+      );
+    } finally {
+      setBusy(false);
+      window.setTimeout(() => {
+        if (focusTarget === 'apply') {
+          applyPathButtonRef.current?.focus();
+        } else {
+          chooseFolderButtonRef.current?.focus();
+        }
+      }, 0);
+    }
+  };
+
   const chooseAndApply = async () => {
     setBusy(true);
     setError(false);
@@ -61,7 +99,7 @@ export default function ProjectRootManager({ host }) {
       if (!window.electronAPI?.chooseFolder) {
         setError(true);
         setStatus(
-          'Native project selection is available in the Electron desktop app. Use the project path field below in a browser.'
+          'Native project selection is available in the Electron desktop app. Enter the full path below and choose Apply path.'
         );
         return;
       }
@@ -72,18 +110,8 @@ export default function ProjectRootManager({ host }) {
         return;
       }
 
-      setStatus(`Saving project: ${chosen}`);
-      const response = await axios.post(`${host}/project-root`, { path: chosen });
-      const savedPath = response.data?.path || chosen;
-      setProjectRoot(savedPath);
-      setError(false);
-      setStatus(`Active project changed to ${savedPath}.`);
-
-      // The chat page is a separate route/document. Notify any same-window
-      // listeners when this component is embedded in another desktop view.
-      window.dispatchEvent(
-        new CustomEvent('project-root-changed', { detail: { path: savedPath } })
-      );
+      await applyPath(chosen, { focusTarget: 'choose' });
+      return;
     } catch (requestError) {
       if (requestError?.name === 'AbortError') {
         setStatus('Folder selection cancelled.');
@@ -101,13 +129,17 @@ export default function ProjectRootManager({ host }) {
     }
   };
 
+  const handleApplyPath = (event) => {
+    event.preventDefault();
+    applyPath(pathDraft, { focusTarget: 'apply' });
+  };
+
   return (
     <section className="settings-allowed-commands" aria-labelledby="active-project-heading">
       <h2 id="active-project-heading">Active Project</h2>
       <p className="settings-help">
-        Choose a local folder and apply it immediately as the project root used by file,
-        search, terminal, and Git tools. This desktop shortcut does not change your AI
-        provider or model settings.
+        Set the local folder used as the project root for file, search, terminal, and Git
+        tools. Changes apply immediately and do not alter AI provider or model settings.
       </p>
 
       <div className="settings-field">
@@ -118,6 +150,21 @@ export default function ProjectRootManager({ host }) {
         >
           {loading ? 'Loading…' : projectRoot || 'No project selected'}
         </output>
+      </div>
+
+      <div className="settings-field">
+        <label htmlFor="active-project-path-input">Project path</label>
+        <input
+          id="active-project-path-input"
+          type="text"
+          value={pathDraft}
+          onChange={(event) => setPathDraft(event.target.value)}
+          disabled={busy || loading}
+          placeholder="C:\\Projects\\my-project"
+          autoComplete="off"
+          spellCheck="false"
+          aria-describedby="active-project-help"
+        />
       </div>
 
       <div className="settings-allowed-commands-buttons">
@@ -133,6 +180,15 @@ export default function ProjectRootManager({ host }) {
         </button>
         <button
           type="button"
+          ref={applyPathButtonRef}
+          className="settings-folder-button"
+          onClick={handleApplyPath}
+          disabled={busy || loading || !pathDraft.trim()}
+        >
+          Apply path
+        </button>
+        <button
+          type="button"
           className="settings-folder-button"
           onClick={loadProjectRoot}
           disabled={busy || loading}
@@ -142,8 +198,9 @@ export default function ProjectRootManager({ host }) {
       </div>
 
       <p id="active-project-help" className="settings-help">
-        The selected folder is persisted in the local configuration file. Canceling the
-        native picker leaves the current project unchanged.
+        In the desktop app, choose a folder with the native picker. In a browser, type the
+        full filesystem path and select Apply path. Canceling the native picker leaves the
+        current project unchanged.
       </p>
 
       <div
