@@ -25,8 +25,10 @@ npm -v
 From the `client-react` directory, install the dependencies:
 
 ```bash
-npm install
+npm ci
 ```
+
+`npm ci` installs the client/Electron dependencies from `package-lock.json` and is recommended for a clean, reproducible setup after cloning the repository.
 
 ## Run the app
 
@@ -134,9 +136,23 @@ The portable executable is generated in `release/` with a filename like:
 AI-Terminal-Chat-Portable-0.1.0.exe
 ```
 
+Both Electron build commands automatically prepare the bundled TypeScript backend and install its production dependencies with `npm ci --omit=dev`. You do not need to run that backend installation manually.
+
 ### GitHub Releases
 
 After building a Windows release, upload the generated `.exe` files from `release/` to the corresponding GitHub Release.
+
+For example, to create a new release:
+
+```powershell
+gh release create v0.1.0 .\release\AI-Terminal-Chat-Setup-0.1.0.exe .\release\AI-Terminal-Chat-Portable-0.1.0.exe --title "AI Terminal Chat v0.1.0"
+```
+
+For a portable build added to an existing release:
+
+```powershell
+gh release upload v0.1.0 .\release\AI-Terminal-Chat-Portable-0.1.0.exe
+```
 
 Do not commit generated `.exe` files to the repository.
 
