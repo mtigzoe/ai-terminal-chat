@@ -165,19 +165,76 @@ export class GeminiProvider extends Provider {
     }
   }
 
+  /**
+   * Map a client history turn into a Gemini Content object.
+   *
+   * The React client stores UI-only metadata (for example `toolActivity`) on
+   * model turns. Gemini's generateContent schema only allows `role` and
+   * `parts` on each content item, so any extra fields must be stripped or the
+   * API returns HTTP 400 (Unknown name "toolActivity").
+   */
   private normalizeHistoryItem(item: unknown): GeminiContent | null {
     if (!item || typeof item !== "object") return null;
     const record = item as Record<string, unknown>;
+
     if (record.role === "user" || record.role === "model") {
-      if (Array.isArray(record.parts)) return record as unknown as GeminiContent;
+      if (Array.isArray(record.parts)) {
+        const parts = this.sanitizeParts(record.parts);
+        if (parts.length === 0) return null;
+        return { role: record.role, parts };
+      }
       if (typeof record.content === "string" && record.content) {
         return { role: record.role, parts: [{ text: record.content }] };
       }
     }
+
     if (record.role === "assistant" && typeof record.content === "string" && record.content) {
       return { role: "model", parts: [{ text: record.content }] };
     }
+
     return null;
+  }
+
+  /** Keep only part shapes Gemini accepts; drop unknown keys. */
+  private sanitizeParts(parts: unknown[]): GeminiPart[] {
+    const sanitized: GeminiPart[] = [];
+    for (const part of parts) {
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+
+      if (typeof record.text === "string") {
+        sanitized.push({ text: record.text });
+        continue;
+      }
+
+      if (record.functionCall && typeof record.functionCall === "object") {
+        const call = record.functionCall as Record<string, unknown>;
+        if (typeof call.name === "string" && call.name) {
+          sanitized.push({
+            functionCall: {
+              name: call.name,
+              args: (call.args as Record<string, unknown>) || {},
+              ...(typeof call.id === "string" ? { id: call.id } : {}),
+            },
+          });
+        }
+        continue;
+      }
+
+      if (record.functionResponse && typeof record.functionResponse === "object") {
+        const resp = record.functionResponse as Record<string, unknown>;
+        if (typeof resp.name === "string" && resp.name) {
+          sanitized.push({
+            functionResponse: {
+              name: resp.name,
+              response: resp.response,
+              ...(typeof resp.id === "string" ? { id: resp.id } : {}),
+            },
+          });
+        }
+      }
+    }
+    return sanitized;
   }
 
   private requireApiKey(): void {

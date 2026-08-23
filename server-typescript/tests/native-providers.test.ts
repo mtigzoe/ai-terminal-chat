@@ -28,6 +28,32 @@ describe("GeminiProvider", () => {
     ]);
   });
 
+  it("strips client-only metadata such as toolActivity from history", () => {
+    const provider = new GeminiProvider({ model: "gemini-test", api_key: "key" });
+    const contents = provider.buildContents("follow-up", [
+      { role: "user", parts: [{ text: "read README" }] },
+      {
+        role: "model",
+        parts: [{ text: "I could not read that file." }],
+        toolActivity: [
+          { type: "tool_call", name: "read_file", args: { path: "README.md" } },
+          { type: "tool_result", name: "read_file", result: { error: "not allowed" } },
+        ],
+      },
+    ]);
+
+    expect(contents).toEqual([
+      { role: "user", parts: [{ text: "read README" }] },
+      { role: "model", parts: [{ text: "I could not read that file." }] },
+      { role: "user", parts: [{ text: "follow-up" }] },
+    ]);
+
+    for (const item of contents) {
+      expect(item).not.toHaveProperty("toolActivity");
+      expect(Object.keys(item as object).sort()).toEqual(["parts", "role"]);
+    }
+  });
+
   it("parses text and function calls from a native Gemini response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       candidates: [{
