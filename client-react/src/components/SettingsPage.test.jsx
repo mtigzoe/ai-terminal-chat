@@ -59,7 +59,8 @@ describe('loading settings', () => {
   test('populates the form from the backend once loaded', async () => {
     await renderLoaded();
 
-    expect(screen.getByLabelText(/default project path/i)).toHaveValue('/tmp/project');
+    expect(screen.getByRole('heading', { name: /active project/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /ai providers/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/ai provider/i)).toHaveValue('gemini');
     expect(screen.getByLabelText(/^model$/i)).toHaveValue('gemini-3.6-flash');
   });
@@ -148,9 +149,6 @@ describe('saving settings', () => {
       if (url === `${HOST}/providers/select`) {
         return Promise.resolve({ data: { name: payload.provider, model: payload.model } });
       }
-      if (url === `${HOST}/project-root`) {
-        return Promise.resolve({ data: { path: payload.path } });
-      }
       return Promise.reject(new Error(`unexpected POST ${url}`));
     });
 
@@ -201,9 +199,6 @@ describe('saving settings', () => {
           },
         });
       }
-      if (url === `${HOST}/project-root`) {
-        return Promise.resolve({ data: { path: payload.path } });
-      }
       return Promise.reject(new Error(`unexpected POST ${url}`));
     });
 
@@ -213,163 +208,15 @@ describe('saving settings', () => {
   });
 });
 
-describe('folder picker', () => {
-  afterEach(() => {
-    delete window.electronAPI;
-  });
-
-  test('a folder-picker failure surfaces an error and resets the button label', async () => {
+describe('page structure', () => {
+  test('places Active Project between navigation and AI Providers', async () => {
     await renderLoaded();
-    // No electronAPI and no showDirectoryPicker → explicit unavailable message.
-    delete window.electronAPI;
-    delete window.showDirectoryPicker;
 
-    const chooseButton = screen.getByRole('button', { name: /choose a folder/i });
-    fireEvent.click(chooseButton);
+    const nav = screen.getByRole('navigation', { name: /main/i });
+    const activeProject = screen.getByRole('heading', { name: /active project/i });
+    const aiProviders = screen.getByRole('heading', { name: /ai providers/i });
 
-    await screen.findByText(/no folder picker is available/i);
-    expect(screen.getByRole('button', { name: /choose a folder/i })).not.toBeDisabled();
-  });
-
-  test('a successful Electron folder pick updates the project path field', async () => {
-    await renderLoaded();
-    window.electronAPI = {
-      isElectron: true,
-      chooseFolder: vi.fn().mockResolvedValue('/tmp/chosen-project'),
-    };
-
-    fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
-
-    await waitFor(() =>
-      expect(screen.getByLabelText(/default project path/i)).toHaveValue('/tmp/chosen-project')
-    );
-    expect(window.electronAPI.chooseFolder).toHaveBeenCalled();
-  });
-
-  test('cancelling the Electron folder pick leaves the path unchanged', async () => {
-    await renderLoaded();
-    const previous = screen.getByLabelText(/default project path/i).value;
-    window.electronAPI = {
-      isElectron: true,
-      chooseFolder: vi.fn().mockResolvedValue(null),
-    };
-
-    fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
-
-    await screen.findByText(/folder selection cancelled/i);
-    expect(screen.getByLabelText(/default project path/i)).toHaveValue(previous);
-  });
-
-  test('Choose a folder button is keyboard accessible and labelled', async () => {
-    await renderLoaded();
-    const button = screen.getByRole('button', { name: /choose a folder/i });
-    expect(button).toBeEnabled();
-    expect(button).toHaveAttribute('type', 'button');
-    expect(button).toHaveAttribute('aria-describedby', 'settings-project-root-help');
-  });
-
-  test('restores focus to Choose a folder after a successful Electron selection', async () => {
-    await renderLoaded();
-    window.electronAPI = {
-      isElectron: true,
-      chooseFolder: vi.fn().mockResolvedValue('/tmp/chosen-project'),
-    };
-
-    const button = screen.getByRole('button', { name: /choose a folder/i });
-    button.focus();
-    expect(document.activeElement).toBe(button);
-
-    fireEvent.click(button);
-
-    await waitFor(() =>
-      expect(screen.getByLabelText(/default project path/i)).toHaveValue('/tmp/chosen-project')
-    );
-    await waitFor(() => {
-      expect(document.activeElement).toBe(
-        screen.getByRole('button', { name: /choose a folder/i })
-      );
-    });
-    expect(screen.getByText(/folder selected:\s*\/tmp\/chosen-project/i)).toBeInTheDocument();
-  });
-
-  test('restores focus to Choose a folder after cancellation', async () => {
-    await renderLoaded();
-    window.electronAPI = {
-      isElectron: true,
-      chooseFolder: vi.fn().mockResolvedValue(null),
-    };
-
-    const button = screen.getByRole('button', { name: /choose a folder/i });
-    button.focus();
-    fireEvent.click(button);
-
-    await screen.findByText(/folder selection cancelled/i);
-    await waitFor(() => {
-      expect(document.activeElement).toBe(
-        screen.getByRole('button', { name: /choose a folder/i })
-      );
-    });
-  });
-
-  test('restores focus to Choose a folder after a picker error', async () => {
-    await renderLoaded();
-    window.electronAPI = {
-      isElectron: true,
-      chooseFolder: vi.fn().mockRejectedValue(new Error('Dialog failed')),
-    };
-
-    const button = screen.getByRole('button', { name: /choose a folder/i });
-    button.focus();
-    fireEvent.click(button);
-
-    await screen.findByText(/dialog failed/i);
-    await waitFor(() => {
-      expect(document.activeElement).toBe(
-        screen.getByRole('button', { name: /choose a folder/i })
-      );
-    });
-  });
-
-  test('announces opening the folder picker then the selection outcome once', async () => {
-    await renderLoaded();
-    let resolveChoose;
-    window.electronAPI = {
-      isElectron: true,
-      chooseFolder: vi.fn(
-        () =>
-          new Promise((resolve) => {
-            resolveChoose = resolve;
-          })
-      ),
-    };
-
-    fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
-    await screen.findByText(/opening the folder picker/i);
-
-    resolveChoose('/tmp/announced-project');
-
-    await waitFor(() =>
-      expect(screen.getByText(/folder selected:\s*\/tmp\/announced-project/i)).toBeInTheDocument()
-    );
-    // Final status region should show the selection, not the intermediate message.
-    const statuses = screen.getAllByRole('status');
-    const folderStatus = statuses.find((el) =>
-      /folder selected/i.test(el.textContent || '')
-    );
-    expect(folderStatus).toBeTruthy();
-    expect(folderStatus.textContent).toMatch(/folder selected:\s*\/tmp\/announced-project/i);
-  });
-
-  test('browser File System Access API does not claim a reliable absolute path', async () => {
-    await renderLoaded();
-    delete window.electronAPI;
-    window.showDirectoryPicker = vi.fn().mockResolvedValue({ name: 'only-a-name' });
-
-    fireEvent.click(screen.getByRole('button', { name: /choose a folder/i }));
-
-    await screen.findByText(/browser selected folder name/i);
-    expect(screen.getByText(/full filesystem path/i)).toBeInTheDocument();
-    // Path field must not be overwritten with a bare folder name.
-    expect(screen.getByLabelText(/default project path/i)).toHaveValue('/tmp/project');
+    expect(nav.compareDocumentPosition(activeProject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(activeProject.compareDocumentPosition(aiProviders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
