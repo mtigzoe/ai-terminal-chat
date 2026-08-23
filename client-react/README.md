@@ -94,6 +94,54 @@ In development (unpackaged) Electron always loads `http://localhost:3000`. The b
 
 When the application is packaged, Electron loads `dist/index.html` from the application resources. A leftover `dist/` directory on disk does not affect unpackaged development runs.
 
+## Build and release
+
+### Production web build
+
+Build the production React application with:
+
+```powershell
+npm run build
+```
+
+The production files are generated in `dist/`.
+
+### Windows installer
+
+Build the Windows NSIS installer with:
+
+```powershell
+npm run electron:build:win
+```
+
+The installer is generated in `release/` with a filename like:
+
+```text
+AI-Terminal-Chat-Setup-0.1.0.exe
+```
+
+### Windows portable build
+
+Build the portable Windows executable with:
+
+```powershell
+npm run electron:build:win:portable
+```
+
+The portable executable is generated in `release/` with a filename like:
+
+```text
+AI-Terminal-Chat-Portable-0.1.0.exe
+```
+
+### GitHub Releases
+
+After building a Windows release, upload the generated `.exe` files from `release/` to the corresponding GitHub Release.
+
+Do not commit generated `.exe` files to the repository.
+
+Before creating a release, update the `version` field in `package.json` as appropriate. Electron Builder uses that version in the generated artifact filenames.
+
 ### Notes
 
 - No automatic Flask process management is performed in Stage 1.
