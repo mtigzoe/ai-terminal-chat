@@ -43,6 +43,11 @@ function ProjectPage() {
         'ai-terminal-chat:pending-files',
         JSON.stringify(files)
       );
+      const paths = files.map((f) => f.path).filter(Boolean);
+      sessionStorage.setItem(
+        'ai-terminal-chat:allowed-paths',
+        JSON.stringify(paths)
+      );
     } catch {
       // sessionStorage may be unavailable
     }

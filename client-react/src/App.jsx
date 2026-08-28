@@ -118,7 +118,29 @@ function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const [pathForTerminal, setPathForTerminal] = useState(null);
+  const [allowedPaths, setAllowedPaths] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
   const is_stream = toggled;
+
+  const resolveAllowedPaths = () => {
+    if (allowedPaths && allowedPaths.length > 0) return allowedPaths;
+    try {
+      const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
 
   useEffect(() => {
     const regions = ['chat', 'terminal'];
@@ -215,7 +237,7 @@ function App() {
     requestIdRef.current = requestId;
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const chatData = { chat: message, history: data, request_id: requestId };
+    const chatData = { chat: message, history: data, request_id: requestId, ...(resolveAllowedPaths() ? { allowed_paths: resolveAllowedPaths() } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -244,7 +266,7 @@ function App() {
     fetchData();
   };
   const handleStreamingChat = async (message) => {
-    const chatData = { chat: message, history: data };
+    const chatData = { chat: message, history: data, ...(resolveAllowedPaths() ? { allowed_paths: resolveAllowedPaths() } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -305,6 +327,15 @@ function App() {
     }
 
     if (Array.isArray(pendingFiles) && pendingFiles.length > 0) {
+      const paths = pendingFiles.map(({ path }) => path).filter(Boolean);
+      if (paths.length > 0) {
+        setAllowedPaths(paths);
+        try {
+          sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
+        } catch {
+          // ignore
+        }
+      }
       const fileContext = pendingFiles
         .map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`)
         .join('\n');

@@ -8,7 +8,10 @@ so it doesn't move when providers change.
 import json
 import os
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Iterable, Optional
 
 
 _CONFIG_DIR = Path.home() / ".ai-terminal-chat"
@@ -275,3 +278,121 @@ def is_sensitive_path(file_path: Path) -> bool:
         return True
 
     return is_sensitive_filename(file_path.name)
+
+
+# ---------------------------------------------------------------------------
+# Agent read-permission set (selected Project files)
+# ---------------------------------------------------------------------------
+# When the user selects files on the Project page, those relative paths become
+# the only files the agent may read through filesystem tools.  The set is
+# request-scoped via a context variable so concurrent chats stay isolated.
+# An empty / unset set means "no extra restriction" (existing PROJECT_ROOT and
+# sensitive-file rules still apply).
+
+_allowed_read_paths: ContextVar[Optional[frozenset[str]]] = ContextVar(
+    "allowed_read_paths", default=None
+)
+
+
+def _normalize_allowed_path(path: str) -> str:
+    """Normalize a user-supplied relative path to the form used for matching.
+
+    Uses safe_path so absolute / traversal paths are rejected.  Returns the
+    POSIX-style relative path string (forward slashes) under PROJECT_ROOT.
+    """
+
+    resolved = safe_path(path)
+    rel = resolved.relative_to(get_project_root())
+    return rel.as_posix()
+
+
+def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> frozenset[str]:
+    """Validate and install the allowed read set for the current context.
+
+    Invalid entries are dropped (they cannot be normalized).  Returns the
+    frozenset that was installed (may be empty).
+    """
+
+    if paths is None:
+        _allowed_read_paths.set(None)
+        return frozenset()
+
+    normalized: set[str] = set()
+    for raw in paths:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            normalized.add(_normalize_allowed_path(raw.strip()))
+        except ValueError:
+            continue
+
+    result = frozenset(normalized)
+    _allowed_read_paths.set(result if result else None)
+    return result
+
+
+def clear_allowed_read_paths() -> None:
+    """Remove any agent read restriction for the current context."""
+
+    _allowed_read_paths.set(None)
+
+
+def get_allowed_read_paths() -> Optional[frozenset[str]]:
+    """Return the active allowed set, or None when unrestricted."""
+
+    return _allowed_read_paths.get()
+
+
+@contextmanager
+def allowed_read_paths_context(paths: Optional[Iterable[str]]):
+    """Context manager that sets allowed paths for a request then clears them."""
+
+    token = _allowed_read_paths.set(None)
+    try:
+        if paths is not None:
+            set_allowed_read_paths(paths)
+        yield get_allowed_read_paths()
+    finally:
+        _allowed_read_paths.reset(token)
+
+
+def is_read_allowed(path: str | Path) -> bool:
+    """True if the path may be read under the current permission set.
+
+    Call after safe_path / sensitive checks.  When no restriction is active
+    (None), always returns True.
+    """
+
+    allowed = _allowed_read_paths.get()
+    if allowed is None:
+        return True
+
+    try:
+        if isinstance(path, Path):
+            root = get_project_root()
+            try:
+                rel = path.resolve().relative_to(root).as_posix()
+            except ValueError:
+                return False
+        else:
+            rel = _normalize_allowed_path(str(path))
+    except ValueError:
+        return False
+
+    return rel in allowed
+
+
+def require_read_allowed(path: str | Path) -> None:
+    """Raise ValueError if the path is outside the allowed read set."""
+
+    if not is_read_allowed(path):
+        display = path if isinstance(path, str) else str(path)
+        try:
+            if isinstance(path, Path):
+                display = path.resolve().relative_to(get_project_root()).as_posix()
+        except Exception:
+            pass
+        raise ValueError(
+            f"Access denied: '{display}' is not in the set of files the user "
+            f"selected for the agent. Select it on the Project page first."
+        )
