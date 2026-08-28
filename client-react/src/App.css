@@ -66,6 +66,12 @@ body {
 .user > p { background-color: #ece2e2; color: #000; border: solid 1px #505261; }
 .model > p, .tempResponse > p { background-color: #e0e4e9; color: #000; border: solid 1px #9a9caa; }
 
+/* Copy action for completed assistant responses */
+.response-actions { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px 15px; }
+.copy-response-button { min-height: 32px; padding: 4px 12px; border: 1px solid #505261; border-radius: 6px; background: #fff; color: #111; cursor: pointer; font-size: 0.9em; }
+.copy-response-button:hover { background: #ece9e5; }
+.copy-response-status { font-size: 0.9em; color: #333; }
+
 .toggle-btn {
  background-color: rgb(134, 167, 196); border: 1px solid #aaa; border-radius: 99px; width: 50px; height: 28px;
  transition: background-color 0.1s ease, border-color 0.2s ease; cursor: pointer; box-shadow: 1px 1px 10px rgba(0, 0, 0, 0.748); position: relative;
