@@ -4,6 +4,10 @@ An accessible AI chat interface for working with a local project through control
 
 The project combines a React/Vite frontend with a Flask/Python backend and a provider layer for AI models. The backend does not give an AI model unrestricted access to the computer: models can request explicitly exposed tools, and the Python backend validates and executes those requests under security constraints.
 
+## Web Demo
+
+[AI Terminal Chat](https://mtigzoe.github.io/ai-terminal-chat/)
+
 ## Table of Contents
 
 - [Architecture](#architecture)
