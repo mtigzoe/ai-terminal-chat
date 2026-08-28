@@ -668,3 +668,22 @@ test('periodic refresh triggers another git status request after approximately 5
   setIntervalSpy.mockRestore();
   clearIntervalSpy.mockRestore();
 });
+
+test('calls onUseSelectedFiles with empty array when no files are selected', async () => {
+  axios.get.mockResolvedValueOnce({
+    data: {
+      path: '.',
+      entries: [{ name: 'README.md', type: 'file' }],
+    },
+  });
+
+  const onUseSelectedFiles = vi.fn();
+  render(<ProjectExplorer host={host} onUseSelectedFiles={onUseSelectedFiles} />);
+  await screen.findByRole('treeitem', { name: /README\.md, file/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /use selected files with agent/i }));
+
+  await waitFor(() => {
+    expect(onUseSelectedFiles).toHaveBeenCalledWith([]);
+  });
+});

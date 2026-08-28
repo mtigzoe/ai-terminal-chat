@@ -123,7 +123,7 @@ function App() {
       const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : null;
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
     } catch {
       return null;
     }
@@ -131,12 +131,12 @@ function App() {
   const is_stream = toggled;
 
   const resolveAllowedPaths = () => {
-    if (allowedPaths !== null) return allowedPaths;
+    if (allowedPaths && allowedPaths.length > 0) return allowedPaths;
     try {
       const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : null;
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
     } catch {
       return null;
     }
@@ -237,8 +237,7 @@ function App() {
     requestIdRef.current = requestId;
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, request_id: requestId, ...(resolvedAllowedPaths !== null ? { allowed_paths: resolvedAllowedPaths } : {}) };
+    const chatData = { chat: message, history: data, request_id: requestId, ...(resolveAllowedPaths() ? { allowed_paths: resolveAllowedPaths() } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -267,8 +266,7 @@ function App() {
     fetchData();
   };
   const handleStreamingChat = async (message) => {
-    const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, ...(resolvedAllowedPaths !== null ? { allowed_paths: resolvedAllowedPaths } : {}) };
+    const chatData = { chat: message, history: data, ...(resolveAllowedPaths() ? { allowed_paths: resolveAllowedPaths() } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -328,23 +326,23 @@ function App() {
       // Ignore storage or parse errors.
     }
 
-    if (Array.isArray(pendingFiles)) {
+    if (Array.isArray(pendingFiles) && pendingFiles.length > 0) {
       const paths = pendingFiles.map(({ path }) => path).filter(Boolean);
-      setAllowedPaths(paths);
-      try {
-        sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
-      } catch {
-        // ignore
+      if (paths.length > 0) {
+        setAllowedPaths(paths);
+        try {
+          sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
+        } catch {
+          // ignore
+        }
       }
-      if (pendingFiles.length > 0) {
-        const fileContext = pendingFiles
-          .map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`)
-          .join('\n');
-        const message =
-          `I explicitly selected these project files for you to inspect. ` +
-          `Use the supplied contents as context for your next response.\n${fileContext}`;
-        window.setTimeout(() => handleClick(message), 0);
-      }
+      const fileContext = pendingFiles
+        .map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`)
+        .join('\n');
+      const message =
+        `I explicitly selected these project files for you to inspect. ` +
+        `Use the supplied contents as context for your next response.\n${fileContext}`;
+      window.setTimeout(() => handleClick(message), 0);
     }
 
     if (pendingPath) {

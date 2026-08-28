@@ -306,3 +306,117 @@ describe('project root loading', () => {
   });
 });
 
+describe('allowed_paths from project selection', () => {
+  afterEach(() => {
+    try {
+      sessionStorage.clear();
+    } catch {
+      // ignore unavailable sessionStorage
+    }
+  });
+
+  function enableStreaming() {
+    fireEvent.click(screen.getByRole('button', { name: /stream response off/i }));
+  }
+
+  test('non-streaming chat sends allowed_paths: [] when no project files are selected', async () => {
+    sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
+
+    axios.post.mockResolvedValue({
+      data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
+    });
+
+    render(<App />);
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.objectContaining({ allowed_paths: [] }),
+        expect.any(Object)
+      );
+    });
+  });
+
+  test('non-streaming chat sends selected file paths as allowed_paths', async () => {
+    sessionStorage.setItem(
+      'ai-terminal-chat:pending-files',
+      JSON.stringify([{ path: 'README.md', content: '# README' }])
+    );
+
+    axios.post.mockResolvedValue({
+      data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
+    });
+
+    render(<App />);
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.objectContaining({ allowed_paths: ['README.md'] }),
+        expect.any(Object)
+      );
+    });
+  });
+
+  test('non-streaming chat overwrites stale allowed_paths with [] when project files are deselected', async () => {
+    sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['README.md']));
+    sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
+
+    axios.post.mockResolvedValue({
+      data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
+    });
+
+    render(<App />);
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.objectContaining({ allowed_paths: [] }),
+        expect.any(Object)
+      );
+    });
+
+    expect(sessionStorage.getItem('ai-terminal-chat:allowed-paths')).toBe('[]');
+  });
+
+  test('streaming chat sends allowed_paths: [] when no project files are selected', async () => {
+    sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
+
+    global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(['streamed ']));
+
+    render(<App />);
+    enableStreaming();
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      const fetchCall = global.fetch.mock.calls[0];
+      expect(fetchCall[0]).toContain('/stream');
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body).toHaveProperty('allowed_paths', []);
+    });
+  });
+
+  test('streaming chat sends selected file paths as allowed_paths', async () => {
+    sessionStorage.setItem(
+      'ai-terminal-chat:pending-files',
+      JSON.stringify([{ path: 'README.md', content: '# README' }])
+    );
+
+    global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(['streamed ']));
+
+    render(<App />);
+    enableStreaming();
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      const fetchCall = global.fetch.mock.calls[0];
+      expect(fetchCall[0]).toContain('/stream');
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body).toHaveProperty('allowed_paths', ['README.md']);
+    });
+  });
+});
+

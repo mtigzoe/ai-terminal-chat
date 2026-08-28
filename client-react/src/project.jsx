@@ -37,7 +37,7 @@ function ProjectPage() {
   }, [refreshProjectRoot]);
 
   const handleUseSelectedFiles = (files) => {
-    if (!Array.isArray(files) || files.length === 0) return;
+    if (!Array.isArray(files)) return;
     try {
       sessionStorage.setItem(
         'ai-terminal-chat:pending-files',
