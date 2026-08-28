@@ -216,3 +216,28 @@ def test_context_manager_empty_list_is_restrictive(project_root):
         assert security.get_allowed_read_paths() == frozenset()
         assert "error" in tools.read_file("README.md")
     assert security.get_allowed_read_paths() is None
+
+
+# --- git content tools under restriction ---
+
+def test_git_diff_requires_allowed_path_when_restricted(project_root):
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.git_diff(path="")
+    assert "error" in result
+    assert "path" in result["error"].lower() or "allowed" in result["error"].lower()
+
+
+def test_git_diff_denies_unselected_path(project_root):
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.git_diff(path="other.md")
+    assert "error" in result
+    assert "denied" in result["error"].lower() or "not in the set" in result["error"].lower()
+
+
+def test_git_show_shell_blocked_when_restricted(project_root):
+    security.set_allowed_read_paths(["README.md"])
+    # git show is already on the default allowlist
+    result = tools.run_command("git show HEAD:other.md")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "blocked" in err or "read_file" in err or "not allowed" in err

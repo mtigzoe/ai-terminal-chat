@@ -482,6 +482,9 @@ _FILE_CONTENT_COMMAND_PREFIXES = (
     "more",
     "bat",
     "nl",
+    # Git content dumpers — can expose unselected file bodies
+    "git show",
+    "git diff",
 )
 
 
@@ -922,7 +925,20 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
         except ValueError as exc:
             return {"error": str(exc)}
 
+        try:
+            require_read_allowed(file_path)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
         args.append(str(file_path.relative_to(PROJECT_ROOT)))
+    elif get_allowed_read_paths() is not None:
+        return {
+            "error": (
+                "A path is required while agent file-selection is active. "
+                "Pass an allowed relative path, or use read_file on a "
+                "selected file."
+            )
+        }
 
     try:
         result = subprocess.run(
