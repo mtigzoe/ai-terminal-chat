@@ -286,8 +286,9 @@ def is_sensitive_path(file_path: Path) -> bool:
 # When the user selects files on the Project page, those relative paths become
 # the only files the agent may read through filesystem tools.  The set is
 # request-scoped via a context variable so concurrent chats stay isolated.
-# An empty / unset set means "no extra restriction" (existing PROJECT_ROOT and
-# sensitive-file rules still apply).
+# ``None`` means unrestricted (legacy / no allowed_paths in the request).
+# An empty frozenset means restriction is active and no files may be read.
+# Existing PROJECT_ROOT and sensitive-file rules always still apply.
 
 _allowed_read_paths: ContextVar[Optional[frozenset[str]]] = ContextVar(
     "allowed_read_paths", default=None
@@ -306,16 +307,19 @@ def _normalize_allowed_path(path: str) -> str:
     return rel.as_posix()
 
 
-def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> frozenset[str]:
+def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> Optional[frozenset[str]]:
     """Validate and install the allowed read set for the current context.
 
-    Invalid entries are dropped (they cannot be normalized).  Returns the
-    frozenset that was installed (may be empty).
+    ``None`` means unrestricted (no permission information / legacy).
+    An empty iterable installs an empty frozenset: restriction active, no
+    files readable.  Invalid path entries are dropped.
+
+    Returns the value stored in the context variable (``None`` or a frozenset).
     """
 
     if paths is None:
         _allowed_read_paths.set(None)
-        return frozenset()
+        return None
 
     normalized: set[str] = set()
     for raw in paths:
@@ -327,7 +331,7 @@ def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> frozenset[str]:
             continue
 
     result = frozenset(normalized)
-    _allowed_read_paths.set(result if result else None)
+    _allowed_read_paths.set(result)
     return result
 
 

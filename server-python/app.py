@@ -420,13 +420,18 @@ def confirm_action():
 
 
 def _extract_allowed_paths(data: dict):
-    """Return allowed_paths list from the request body, or None if unrestricted."""
+    """Return allowed_paths from the request body.
+
+    ``None`` when the key is absent (legacy unrestricted behavior).
+    A list (possibly empty) when the key is present: empty means no files
+    are allowed.  Non-list values are treated as absent.
+    """
 
     if not isinstance(data, dict):
         return None
-    raw = data.get("allowed_paths")
-    if raw is None:
+    if "allowed_paths" not in data:
         return None
+    raw = data.get("allowed_paths")
     if not isinstance(raw, list):
         return None
     return [item for item in raw if isinstance(item, str) and item.strip()]

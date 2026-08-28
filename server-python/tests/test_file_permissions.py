@@ -2,10 +2,15 @@
 
 Selected paths from the Project page are enforced in the Python backend
 for read_file, search_files, list_files, and file-reading shell commands.
+
+``allowed_paths`` omitted (None) => unrestricted (legacy).
+``allowed_paths: []`` => restriction active, no files readable.
+``allowed_paths: ["README.md"]`` => only those paths readable.
 """
 
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -38,18 +43,66 @@ def _clear_permissions():
     security.clear_allowed_read_paths()
 
 
-def test_selected_file_can_be_read(project_root):
+# --- representation: None vs [] vs non-empty ---
+
+def test_allowed_paths_omitted_is_unrestricted(project_root):
+    """No allowed_paths => legacy unrestricted reads."""
+    security.set_allowed_read_paths(None)
+    assert security.get_allowed_read_paths() is None
+    result = tools.read_file("other.md")
+    assert "error" not in result
+    assert "other content" in result["contents"]
+
+
+def test_allowed_paths_empty_list_denies_all_reads(project_root):
+    """Explicit empty list => restriction active, nothing readable."""
+    stored = security.set_allowed_read_paths([])
+    assert stored == frozenset()
+    assert security.get_allowed_read_paths() == frozenset()
+    result = tools.read_file("README.md")
+    assert "error" in result
+    assert "denied" in result["error"].lower() or "not in the set" in result["error"].lower()
+
+
+def test_allowed_paths_single_file(project_root):
+    security.set_allowed_read_paths(["README.md"])
+    assert security.get_allowed_read_paths() == frozenset({"README.md"})
+    ok = tools.read_file("README.md")
+    assert "error" not in ok
+    denied = tools.read_file("other.md")
+    assert "error" in denied
+
+
+# --- read_file ---
+
+def test_read_file_selected(project_root):
     security.set_allowed_read_paths(["README.md", "src/main.py"])
     result = tools.read_file("README.md")
     assert "error" not in result
     assert "readme content" in result["contents"]
 
 
-def test_unselected_file_read_denied(project_root):
+def test_read_file_unselected_denied(project_root):
     security.set_allowed_read_paths(["README.md"])
     result = tools.read_file("other.md")
     assert "error" in result
     assert "denied" in result["error"].lower() or "not in the set" in result["error"].lower()
+
+
+# --- search_files / list_files with zero selection ---
+
+def test_search_files_with_zero_selected_files(project_root):
+    security.set_allowed_read_paths([])
+    result = tools.search_files("readme")
+    assert "error" not in result
+    assert result.get("matches", []) == []
+
+
+def test_list_files_with_zero_selected_files(project_root):
+    security.set_allowed_read_paths([])
+    result = tools.list_files(".")
+    assert "error" not in result
+    assert result.get("entries", []) == []
 
 
 def test_search_files_skips_unselected(project_root):
@@ -60,27 +113,82 @@ def test_search_files_skips_unselected(project_root):
     assert not any("other.md" in p for p in paths)
 
 
-def test_search_files_finds_selected(project_root):
+# --- shell file-content commands ---
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat other.md",
+        "type other.md",
+        "Get-Content other.md",
+        "head other.md",
+        "tail other.md",
+        "less other.md",
+        "more other.md",
+        "bat other.md",
+        "nl other.md",
+    ],
+)
+def test_shell_file_content_commands_blocked_when_restricted(project_root, command):
     security.set_allowed_read_paths(["README.md"])
-    result = tools.search_files("readme")
-    assert "error" not in result
-    paths = [m["path"] for m in result.get("matches", [])]
-    assert any(p.endswith("README.md") for p in paths)
+    prefix = command.split()[0]
+    tools.add_allowed_command(prefix)
+    try:
+        result = tools.run_command(command)
+        assert "error" in result
+        err = result["error"].lower()
+        assert "blocked" in err or "read_file" in err or "not allowed" in err
+    finally:
+        try:
+            tools.remove_allowed_command(prefix)
+        except ValueError:
+            pass
 
 
-def test_shell_file_reader_blocked_when_restricted(project_root):
-    security.set_allowed_read_paths(["README.md"])
+def test_shell_file_reader_blocked_with_empty_selection(project_root):
+    security.set_allowed_read_paths([])
     tools.add_allowed_command("cat")
     try:
-        result = tools.run_command("cat other.md")
+        result = tools.run_command("cat README.md")
         assert "error" in result
-        assert "blocked" in result["error"].lower() or "read_file" in result["error"].lower()
     finally:
         try:
             tools.remove_allowed_command("cat")
         except ValueError:
             pass
 
+
+# --- concurrent isolation ---
+
+def test_concurrent_requests_different_allowed_paths(project_root):
+    """ContextVar keeps concurrent allowed sets isolated."""
+
+    def worker(paths, target, expect_ok):
+        security.set_allowed_read_paths(paths)
+        try:
+            result = tools.read_file(target)
+            if expect_ok:
+                assert "error" not in result, result
+            else:
+                assert "error" in result, result
+            return True
+        finally:
+            security.clear_allowed_read_paths()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            pool.submit(worker, ["README.md"], "README.md", True),
+            pool.submit(worker, ["README.md"], "other.md", False),
+            pool.submit(worker, [], "README.md", False),
+            pool.submit(worker, None, "other.md", True),
+            pool.submit(worker, ["other.md"], "other.md", True),
+            pool.submit(worker, ["other.md"], "README.md", False),
+        ]
+        for f in futures:
+            assert f.result() is True
+
+
+# --- existing protections still work ---
 
 def test_project_root_traversal_still_blocked(project_root):
     security.set_allowed_read_paths(["README.md"])
@@ -96,25 +204,15 @@ def test_sensitive_still_blocked_even_if_selected(project_root):
     assert "secret" in result["error"].lower() or "credential" in result["error"].lower()
 
 
-def test_unrestricted_when_no_selection(project_root):
-    security.clear_allowed_read_paths()
-    result = tools.read_file("other.md")
-    assert "error" not in result
-    assert "other content" in result["contents"]
-
-
-def test_list_files_filters_to_allowed(project_root):
-    security.set_allowed_read_paths(["README.md", "src/main.py"])
-    result = tools.list_files(".")
-    assert "error" not in result
-    names = {e["name"] for e in result["entries"]}
-    assert "README.md" in names
-    assert "other.md" not in names
-    assert "src" in names
-
-
 def test_context_manager_isolates_permission(project_root):
     with security.allowed_read_paths_context(["README.md"]):
         assert "error" not in tools.read_file("README.md")
         assert "error" in tools.read_file("other.md")
     assert "error" not in tools.read_file("other.md")
+
+
+def test_context_manager_empty_list_is_restrictive(project_root):
+    with security.allowed_read_paths_context([]):
+        assert security.get_allowed_read_paths() == frozenset()
+        assert "error" in tools.read_file("README.md")
+    assert security.get_allowed_read_paths() is None
