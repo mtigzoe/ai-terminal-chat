@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, test } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, test, vi } from 'vitest';
 import ChatArea, { AgentStatusRegion } from './components/ConversationDisplayArea';
 
 describe('ConversationDisplayArea accessibility', () => {
@@ -35,6 +35,35 @@ describe('ConversationDisplayArea accessibility', () => {
 
     expect(screen.getByLabelText(/your message, message 1/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/assistant message, message 2/i)).toBeInTheDocument();
+  });
+
+  test('renders a copy button only for completed assistant responses', () => {
+    const data = [
+      { role: 'user', parts: [{ text: 'hi' }] },
+      { role: 'model', parts: [{ text: 'hello' }] },
+    ];
+    render(<ChatArea data={data} streamdiv={false} answer="" streamToolActivity={[]} agentStatus={null} waiting={false} />);
+
+    expect(screen.getByRole('button', { name: 'Copy response' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+  });
+
+  test('copies the assistant response and reports success', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    const data = [{ role: 'model', parts: [{ text: 'hello from the assistant' }] }];
+    render(<ChatArea data={data} streamdiv={false} answer="" streamToolActivity={[]} agentStatus={null} waiting={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy response' }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('hello from the assistant');
+      expect(screen.getByRole('button', { name: 'Response copied' })).toBeInTheDocument();
+    });
   });
 
   test('the empty state renders no articles', () => {
