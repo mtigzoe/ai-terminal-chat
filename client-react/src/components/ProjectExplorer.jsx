@@ -234,6 +234,13 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     try {
       sessionStorage.setItem(`${storageKey}:expanded`, JSON.stringify(Array.from(expanded)));
       sessionStorage.setItem(`${storageKey}:selected`, JSON.stringify(Array.from(selectedFiles)));
+      // Keep chat agent read permissions in sync with the Project-page selection.
+      // [] means restriction active with no readable files; a non-empty list
+      // limits the agent to those relative paths only.
+      sessionStorage.setItem(
+        'ai-terminal-chat:allowed-paths',
+        JSON.stringify(Array.from(selectedFiles))
+      );
     } catch { /* ignore unavailable sessionStorage */ }
   }, [expanded, selectedFiles, storageKey]);
 

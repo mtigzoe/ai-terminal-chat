@@ -142,6 +142,33 @@ function App() {
     }
   };
 
+  // Re-read allowed paths when the chat page becomes visible again (user may
+  // have changed selection on the Project page in another tab/window).
+  useEffect(() => {
+    const sync = () => {
+      try {
+        const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+        if (!raw) {
+          setAllowedPaths(null);
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        setAllowedPaths(Array.isArray(parsed) ? parsed : null);
+      } catch {
+        setAllowedPaths(null);
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sync();
+    };
+    window.addEventListener('focus', sync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', sync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
   useEffect(() => {
     const regions = ['chat', 'terminal'];
 
