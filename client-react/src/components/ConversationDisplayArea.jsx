@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import userIcon from '../assets/user-icon.png';
 // TODO: Consider replacing chatbotIcon with its own distinct icon.
@@ -141,6 +141,47 @@ function ToolActivity({ activity = [], announceNew = false }) {
   );
 }
 
+function CopyResponseButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const resetTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+  }, []);
+
+  const handleCopy = async () => {
+    setCopyError(false);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+      setCopyError(true);
+    }
+  };
+
+  return (
+    <div className="response-actions">
+      <button
+        type="button"
+        className="copy-response-button"
+        onClick={handleCopy}
+        aria-label={copied ? 'Response copied' : 'Copy response'}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      {copyError && (
+        <span className="copy-response-status" role="status" aria-live="polite">
+          Unable to copy response.
+        </span>
+      )}
+    </div>
+  );
+}
+
 const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatus = null, waiting = false }) => (
   <main className="chat-area" id="main-conversation" aria-label="Conversation" aria-busy={waiting} tabIndex={-1}>
     <AgentStatusRegion status={agentStatus} />
@@ -153,12 +194,14 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
     {data.map((element, index) => {
       const isUser = element.role === 'user';
       const messageLabel = isUser ? 'Your message' : 'Assistant message';
+      const responseText = element.parts?.[0]?.text || '';
       return (
         <article key={index} className={element.role} aria-label={`${messageLabel}, message ${index + 1}`}>
           <img src={isUser ? userIcon : chatbotIcon} alt="" aria-hidden="true" />
           <div>
             {!isUser && <ToolActivity activity={element.toolActivity} />}
-            <div className="message-content"><Markdown>{element.parts[0].text}</Markdown></div>
+            <div className="message-content"><Markdown>{responseText}</Markdown></div>
+            {!isUser && responseText && <CopyResponseButton text={responseText} />}
           </div>
         </article>
       );
@@ -177,4 +220,4 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
 );
 
 export default ChatArea;
-export { AgentStatusRegion, ToolActivity };
+export { AgentStatusRegion, ToolActivity, CopyResponseButton };
