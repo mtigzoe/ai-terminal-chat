@@ -9,6 +9,7 @@ sys.path.insert(0, str(SERVER_DIR))
 
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
+import agent  # noqa: E402
 import app  # noqa: E402
 import security  # noqa: E402
 import tools  # noqa: E402
@@ -100,3 +101,34 @@ def test_stream_passes_selected_paths_into_agent_context(isolated_project, monke
     assert "error" in observed["unselected"]
     assert "contents" not in observed["unselected"]
     assert security.get_allowed_read_paths() == frozenset()
+
+
+def test_agent_tool_thread_inherits_selected_file_permissions(isolated_project):
+    """Regression test for ContextVar permissions being lost in tool threads."""
+    (isolated_project / "README.md").write_text("README secret contents")
+    (isolated_project / "selected.txt").write_text("selected contents")
+    security.set_allowed_read_paths(["selected.txt"])
+
+    result = agent._run_tool_with_timeout(
+        tools.read_file,
+        "read_file",
+        {"path": "README.md"},
+        5,
+    )
+
+    assert "error" in result
+    assert "contents" not in result
+
+
+def test_agent_tool_thread_allows_selected_file(isolated_project):
+    (isolated_project / "selected.txt").write_text("selected contents")
+    security.set_allowed_read_paths(["selected.txt"])
+
+    result = agent._run_tool_with_timeout(
+        tools.read_file,
+        "read_file",
+        {"path": "selected.txt"},
+        5,
+    )
+
+    assert result["contents"] == "selected contents"
