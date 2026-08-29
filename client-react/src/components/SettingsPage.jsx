@@ -3,6 +3,17 @@ import axios from 'axios';
 import MainNav from './MainNav.jsx';
 import ProjectRootManager from './ProjectRootManager.jsx';
 
+const formatOllamaHostname = (baseUrl) => {
+  const value = String(baseUrl || '').trim();
+  if (!value) return 'localhost:11434';
+  try {
+    const url = new URL(value.includes('://') ? value : `http://${value}`);
+    return `${url.hostname}${url.port ? `:${url.port}` : ''}`;
+  } catch {
+    return value.replace(/^https?:\/\//i, '').replace(/\/v1\/?$/i, '');
+  }
+};
+
 const SettingsPage = ({ host }) => {
   const [providerNames, setProviderNames] = useState([]);
   const [provider, setProvider] = useState('');
@@ -14,6 +25,7 @@ const SettingsPage = ({ host }) => {
   const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [ollamaHostname, setOllamaHostname] = useState('localhost:11434');
   const [statusMessage, setStatusMessage] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
   const [allowedCommands, setAllowedCommands] = useState([]);
@@ -66,6 +78,9 @@ const SettingsPage = ({ host }) => {
         setProviderNames(providerResponse.data.providers || []);
         setProvider(providerResponse.data.name || '');
         setModel(providerResponse.data.model || '');
+        if ((providerResponse.data.name || '').toLowerCase() === 'ollama') {
+          setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
+        }
         setAllowedCommands(allowedCommandsResponse.data.commands || []);
         setStatusMessage('');
         await loadModels(providerResponse.data.name, providerResponse.data.model || '');
@@ -90,6 +105,9 @@ const SettingsPage = ({ host }) => {
     setProvider(nextProvider);
     setModel('');
     setModelsError('');
+    if (nextProvider.toLowerCase() === 'ollama' && !ollamaHostname.trim()) {
+      setOllamaHostname('localhost:11434');
+    }
     await loadModels(nextProvider);
   };
 
@@ -106,6 +124,16 @@ const SettingsPage = ({ host }) => {
         provider,
         model: model || undefined,
       };
+      if (provider.toLowerCase() === 'ollama') {
+        const hostname = ollamaHostname.trim();
+        if (!hostname) {
+          setStatusIsError(true);
+          setStatusMessage('Enter the Ollama hostname and port.');
+          setSaving(false);
+          return;
+        }
+        payload.ollama_base_url = hostname;
+      }
       if (apiKey.trim()) {
         payload.api_key = apiKey.trim();
       }
@@ -114,6 +142,9 @@ const SettingsPage = ({ host }) => {
 
       setProvider(providerResponse.data.name || provider);
       setModel(providerResponse.data.model || model);
+      if ((providerResponse.data.name || provider).toLowerCase() === 'ollama') {
+        setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
+      }
       setApiKey('');
 
       const notes = providerResponse.data.capabilities?.notes;
@@ -240,6 +271,26 @@ const SettingsPage = ({ host }) => {
               ))}
             </select>
           </div>
+
+          {provider.toLowerCase() === 'ollama' ? (
+            <div className="settings-field">
+              <label htmlFor="settings-ollama-hostname">Ollama hostname</label>
+              <input
+                id="settings-ollama-hostname"
+                type="text"
+                value={ollamaHostname}
+                onChange={(event) => setOllamaHostname(event.target.value)}
+                disabled={saving}
+                placeholder="localhost:11434"
+                autoComplete="url"
+                spellCheck="false"
+                aria-describedby="settings-ollama-hostname-help"
+              />
+              <p id="settings-ollama-hostname-help" className="settings-help">
+                Enter the hostname and port where Ollama is running, such as localhost:11434 or cyber.local:11434. You do not need to edit the .env file.
+              </p>
+            </div>
+          ) : null}
 
           <div className="settings-field">
             <label htmlFor="settings-model">Model</label>
