@@ -250,7 +250,7 @@ const SettingsPage = ({ host }) => {
       <ProjectRootManager host={host} />
 
       <section className="settings-ai-providers" aria-labelledby="ai-providers-heading">
-        <h2 id="ai-providers-heading">AI Providers</h2>
+        <h2 id="ai-providers-heading">Provider settings</h2>
         <p className="settings-help">
           Choose the active AI provider, model, and optional API key. These settings are
           independent of the active project path above.
