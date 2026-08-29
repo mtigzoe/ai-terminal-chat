@@ -130,8 +130,11 @@ function App() {
   });
   const is_stream = toggled;
 
+  // Always read the current Project-page selection immediately before sending
+  // a request. The Project page persists its selection in sessionStorage, but
+  // React state in App can be stale when the user navigates between pages in
+  // the same SPA without a window focus/visibility event.
   const resolveAllowedPaths = () => {
-    if (Array.isArray(allowedPaths)) return allowedPaths;
     try {
       const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
       if (!raw) return [];
@@ -204,7 +207,6 @@ function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-
   function executeScroll() {
     const element = document.getElementById('checkpoint');
     if (element) element.scrollIntoView({ behavior: 'smooth' });
@@ -265,7 +267,7 @@ function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [] };
+    const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -295,7 +297,7 @@ function App() {
   };
   const handleStreamingChat = async (message) => {
     const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [] };
+    const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -304,113 +306,54 @@ function App() {
       let modelResponse = ""; let toolActivity = []; let cancelled = false;
       const requestId = generateRequestId(); requestIdRef.current = requestId; chatData.request_id = requestId;
       const controller = new AbortController(); abortControllerRef.current = controller;
-      const handleEvent = (event) => {
-        if (!event || typeof event !== "object") return;
-        if (event.type === "progress") { const status = statusFromProgressEvent(event); if (status) setAgentStatus(status); toolActivity.push({ type: "progress", phase: event.phase, message: event.message }); setStreamToolActivity([...toolActivity]); return; }
-        if (event.type === "pending_confirmation") { const status = statusFromPendingConfirmation(event); if (status) setAgentStatus(status); toolActivity.push(event); setStreamToolActivity([...toolActivity]); setPendingConfirmation(event); return; }
-        if (event.type === "text" || event.type === "final") { const text = event.text || ""; modelResponse += text; setAnswer((currentAnswer) => currentAnswer + text); if (event.type === "final") setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); }
-        else if (event.type === "tool_call" || event.type === "tool_result") { const activity = { type: event.type, name: event.name }; if (event.type === "tool_call") activity.args = event.args || {}; else activity.result = event.result || {}; toolActivity.push(activity); setStreamToolActivity([...toolActivity]); }
-        else if (event.type === "error") { const status = statusFromErrorEvent(event); if (status) setAgentStatus(status); const message = event.message || "Streaming request failed."; modelResponse += `\n[Error: ${message}]`; setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`); }
-        else if (event.type === "cancelled") { cancelled = true; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); }
-      };
-      const handlePlainLine = (line) => { if (isAgentStatusStreamLine(line)) { const status = statusFromStreamLine(line); if (status) { setAgentStatus(status); if (status.phase === 'cancelled') cancelled = true; toolActivity.push({ type: 'progress', phase: status.phase, message: status.message }); setStreamToolActivity([...toolActivity]); } return; } modelResponse += line; setAnswer((currentAnswer) => currentAnswer + line); };
+      const handleEvent = (event) => { if (!event || typeof event !== "object") return; if (event.type === "progress") { const status = statusFromProgressEvent(event); if (status) setAgentStatus(status); toolActivity.push({ type: "progress", phase: event.phase, message: event.message }); setStreamToolActivity([...toolActivity]); return; } if (event.type === "pending_confirmation") { const status = statusFromPendingConfirmation(event); if (status) setAgentStatus(status); toolActivity.push(event); setStreamToolActivity([...toolActivity]); setPendingConfirmation(event); return; } if (event.type === "text" || event.type === "final") { const text = event.text || ""; modelResponse += text; setAnswer((currentAnswer) => currentAnswer + text); if (event.type === "final") setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } else if (event.type === "tool_call" || event.type === "tool_result") { const activity = { type: event.type, name: event.name }; if (event.type === "tool_call") activity.args = event.args || {}; else activity.result = event.result || {}; toolActivity.push(activity); setStreamToolActivity([...toolActivity]); } else if (event.type === "error") { const status = statusFromErrorEvent(event); if (status) setAgentStatus(status); const message = event.message || "Streaming request failed."; modelResponse += `\n[Error: ${message}]`; setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`); } else if (event.type === "cancelled") { cancelled = true; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } };
+      const handlePlainLine = (line) => { if (isAgentStatusStreamLine(line)) { const status = statusFromStreamLine(line); if (status) setAgentStatus(status); return; } if (line) { modelResponse += line; setAnswer((currentAnswer) => currentAnswer + line); } };
       try {
-        setAnswer(""); setStreamToolActivity([]); showStreamdiv(true);
         const response = await fetch(streamUrl, { method: "POST", headers: headerConfig, body: JSON.stringify(chatData), signal: controller.signal });
-        if (!response.ok || !response.body) { let message = response.statusText || `HTTP ${response.status}`; try { const errorData = await response.json(); message = errorData.error || message; } catch {} throw new Error(message); }
-        const reader = response.body.getReader(); const txtdecoder = new TextDecoder(); let buffer = "";
-        while (true) { const { value, done } = await reader.read(); if (done) break; buffer += txtdecoder.decode(value, { stream: true }); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ""; for (const line of lines) { const trimmed = line.trim(); if (!trimmed) continue; try { handleEvent(JSON.parse(trimmed)); } catch { handlePlainLine(line); } } executeScroll(); }
-        buffer += txtdecoder.decode(); if (buffer.trim()) { try { handleEvent(JSON.parse(buffer.trim())); } catch { handlePlainLine(buffer); } }
-      } catch (err) {
-        if (err?.name === "AbortError") { cancelled = true; modelResponse += modelResponse.trim() ? "\n[Streaming stopped by user.]" : "[Streaming stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); }
-        else { const errorMessage = getErrorMessage(err, "Streaming request failed."); modelResponse = modelResponse ? `${modelResponse}\n[Error: ${errorMessage}]` : `Error: ${errorMessage}`; setAgentStatus({ phase: 'error', message: errorMessage, assertive: true }); }
+        if (!response.ok) { let detail = `HTTP ${response.status}`; try { const payload = await response.json(); if (payload?.error) detail = payload.error; } catch {} throw new Error(detail); }
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("Streaming is unavailable in this browser.");
+        const decoder = new TextDecoder(); let buffer = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/); buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line) continue;
+            try { handleEvent(JSON.parse(line)); } catch { handlePlainLine(line); }
+          }
+        }
+        if (buffer) { try { handleEvent(JSON.parse(buffer)); } catch { handlePlainLine(buffer); } }
+        if (cancelled && !modelResponse.trim()) modelResponse = "[Response stopped by user.]";
+      } catch (error) {
+        if (error?.name === "AbortError") { cancelled = true; if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; }
+        else { modelResponse += `\nError: ${getErrorMessage(error, 'Streaming request failed.')}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error, 'Streaming request failed.'), assertive: true }); }
       } finally {
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
-        if (requestIdRef.current === requestId) requestIdRef.current = null;
-        setAnswer(""); const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }];
-        flushSync(() => { setData(updatedData); setWaiting(false); }); showStreamdiv(false); setStreamToolActivity([]); executeScroll();
-        window.setTimeout(() => inputRef.current?.focus(), 0);
+        requestIdRef.current = null;
+        setData((current) => [...current, { role: "model", parts: [{ text: modelResponse }], toolActivity }]);
+        setWaiting(false); setAnswer(""); setStreamToolActivity([]); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0);
       }
     };
     fetchStreamData();
   };
-
-  // Consume pending file selection / terminal path hand-off from the Project page.
-  useEffect(() => {
-    let pendingFiles = null;
-    let pendingPath = null;
-
-    try {
-      const rawFiles = sessionStorage.getItem('ai-terminal-chat:pending-files');
-      if (rawFiles) {
-        pendingFiles = JSON.parse(rawFiles);
-        sessionStorage.removeItem('ai-terminal-chat:pending-files');
-      }
-      const rawPath = sessionStorage.getItem('ai-terminal-chat:pending-terminal-path');
-      if (rawPath) {
-        pendingPath = rawPath;
-        sessionStorage.removeItem('ai-terminal-chat:pending-terminal-path');
-      }
-    } catch {
-      // Ignore storage or parse errors.
-    }
-
-    if (Array.isArray(pendingFiles)) {
-      const paths = pendingFiles.map(({ path }) => path).filter(Boolean);
-      setAllowedPaths(paths);
-      try {
-        sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
-      } catch {
-        // ignore
-      }
-      if (pendingFiles.length > 0) {
-        const fileContext = pendingFiles
-          .map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`)
-          .join('\n');
-        const message =
-          `I explicitly selected these project files for you to inspect. ` +
-          `Use the supplied contents as context for your next response.\n${fileContext}`;
-        window.setTimeout(() => handleClick(message), 0);
-      }
-    }
-
-    if (pendingPath) {
-      setPathForTerminal(pendingPath);
-    }
-    // Intentional one-time hand-off on mount; handleClick is stable for this use.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   return (
-    <div style={{ textAlign: 'center' }}>
-      <nav className="skip-links" aria-label="Skip links">
-        <a className="skip-link" href="#main-conversation">Skip to conversation</a>
-        <a className="skip-link" href="#message-input-region">Skip to message input</a>
-        <a className="skip-link" href="#terminal-region">Skip to terminal</a>
-      </nav>
-      <div className="app-shell">
-        <div className="chat-app" data-focus-region="chat">
-          <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
-          <ProviderSelector host={host} waiting={waiting} />
-          <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
-          {waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}
-          <div id="message-input-region">
-            <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
-          </div>
-          <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
-        </div>
-
-        <aside id="workspace-panels" className="workspace-panels" aria-label="Terminal">
-          <div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-panel-heading">
-            <TerminalPanel
-              host={host}
-              onSendToChat={handleClick}
-              pathToInsert={pathForTerminal}
-              onPathInserted={() => setPathForTerminal(null)}
-            />
-          </div>
-        </aside>
-      </div>
+    <div className="chat-app">
+      <Header />
+      <main className="chat-main">
+        <ConversationDisplayArea data={data} />
+        <MessageInput
+          ref={inputRef}
+          onSend={handleClick}
+          onStop={stopCurrentRequest}
+          disabled={waiting}
+        />
+        <ProviderSelector />
+        <TerminalPanel onPathSelected={setPathForTerminal} />
+        {streamdiv && <pre className="stream-debug">{answer}</pre>}
+        <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
+      </main>
     </div>
   );
 }
