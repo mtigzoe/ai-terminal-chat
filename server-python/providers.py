@@ -122,13 +122,14 @@ def load_provider_config(name: str) -> ProviderConfig:
 def get_provider(name: str = None, model: str = None) -> Provider:
     """Build a Provider from environment configuration.
 
-    A Settings Save request may include ``project_path``. The path is
-    validated first, and only persisted after the requested provider is
-    successfully constructed, so a failed provider change cannot leave
-    the filesystem root partially updated.
+    A Settings Save request may include ``project_path`` and an Ollama
+    ``base_url``. Both are validated/applied before the requested provider
+    is constructed, so the UI can configure Ollama without requiring users
+    to edit the server's .env file.
     """
 
     pending_project_path = None
+    pending_ollama_base_url = None
 
     try:
         from flask import has_request_context, request
@@ -144,11 +145,21 @@ def get_provider(name: str = None, model: str = None) -> Provider:
                     raise ValueError(f"Project path does not exist: {pending_project_path}")
                 if not pending_project_path.is_dir():
                     raise ValueError(f"Project path is not a directory: {pending_project_path}")
+            if "ollama_base_url" in payload:
+                pending_ollama_base_url = str(payload.get("ollama_base_url") or "").strip()
     except Exception as exc:
         if exc.__class__.__name__ not in {"RuntimeError", "ImportError"}:
             raise
 
     name = (name or os.getenv("PROVIDER", "gemini")).lower()
+
+    if name == "ollama" and pending_ollama_base_url is not None:
+        if not pending_ollama_base_url:
+            raise ValueError("An Ollama hostname is required.")
+        if "://" not in pending_ollama_base_url:
+            pending_ollama_base_url = f"http://{pending_ollama_base_url}"
+        os.environ["OLLAMA_BASE_URL"] = pending_ollama_base_url
+
     config = load_provider_config(name)
     if model:
         config.model = model
