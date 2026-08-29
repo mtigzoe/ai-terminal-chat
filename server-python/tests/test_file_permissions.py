@@ -3,9 +3,10 @@
 Selected paths from the Project page are enforced in the Python backend
 for read_file, search_files, list_files, and file-reading shell commands.
 
-``allowed_paths`` omitted (None) => unrestricted (legacy).
-``allowed_paths: []`` => restriction active, no files readable.
+``allowed_paths`` omitted or [] => restriction active, no files readable.
 ``allowed_paths: ["README.md"]`` => only those paths readable.
+``set_allowed_read_paths(None)`` remains available for unrestricted
+internal/test use only; chat requests never pass None.
 """
 
 import os
@@ -45,8 +46,8 @@ def _clear_permissions():
 
 # --- representation: None vs [] vs non-empty ---
 
-def test_allowed_paths_omitted_is_unrestricted(project_root):
-    """No allowed_paths => legacy unrestricted reads."""
+def test_allowed_paths_none_still_unrestricted_for_internal_use(project_root):
+    """Explicit None remains unrestricted (internal/tests only)."""
     security.set_allowed_read_paths(None)
     assert security.get_allowed_read_paths() is None
     result = tools.read_file("other.md")

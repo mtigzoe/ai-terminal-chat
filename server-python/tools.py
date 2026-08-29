@@ -504,21 +504,35 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     """If a restriction is active, refuse shell commands that dump file contents.
 
     Returns an error dict when the command must be blocked, else None.
+    When the command targets only paths in the allowed set, it is permitted.
     """
 
     allowed = get_allowed_read_paths()
     if allowed is None:
         return None
 
-    if _command_reads_file_contents(command):
-        return {
-            "error": (
-                "This command can read arbitrary file contents and is blocked "
-                "while an agent file-selection is active. Use the read_file "
-                "tool on a selected file instead."
-            )
-        }
-    return None
+    if not _command_reads_file_contents(command):
+        return None
+
+    # Try to allow if every path argument is in the selected set.
+    try:
+        args = shlex.split(command, posix=False)
+    except ValueError:
+        args = command.split()
+
+    path_args = [a for a in args[1:] if a and not a.startswith("-")]
+    if path_args and all(
+        is_read_allowed(p) for p in path_args
+    ):
+        return None
+
+    return {
+        "error": (
+            "This command can read arbitrary file contents and is blocked "
+            "while an agent file-selection is active. Select the file on the "
+            "Project page, or use the read_file tool on a selected file."
+        )
+    }
 
 
 

@@ -286,12 +286,12 @@ def is_sensitive_path(file_path: Path) -> bool:
 # When the user selects files on the Project page, those relative paths become
 # the only files the agent may read through filesystem tools.  The set is
 # request-scoped via a context variable so concurrent chats stay isolated.
-# ``None`` means unrestricted (legacy / no allowed_paths in the request).
-# An empty frozenset means restriction is active and no files may be read.
+# Default is an empty frozenset: no selection means no reads.  ``None`` is
+# unrestricted and reserved for internal/tests only.
 # Existing PROJECT_ROOT and sensitive-file rules always still apply.
 
 _allowed_read_paths: ContextVar[Optional[frozenset[str]]] = ContextVar(
-    "allowed_read_paths", default=None
+    "allowed_read_paths", default=frozenset()
 )
 
 
@@ -336,9 +336,9 @@ def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> Optional[frozenset
 
 
 def clear_allowed_read_paths() -> None:
-    """Remove any agent read restriction for the current context."""
+    """Reset agent read restriction to deny-all for the current context."""
 
-    _allowed_read_paths.set(None)
+    _allowed_read_paths.set(frozenset())
 
 
 def get_allowed_read_paths() -> Optional[frozenset[str]]:
@@ -351,10 +351,13 @@ def get_allowed_read_paths() -> Optional[frozenset[str]]:
 def allowed_read_paths_context(paths: Optional[Iterable[str]]):
     """Context manager that sets allowed paths for a request then clears them."""
 
-    token = _allowed_read_paths.set(None)
+    token = _allowed_read_paths.set(frozenset())
     try:
         if paths is not None:
             set_allowed_read_paths(paths)
+        else:
+            # Explicit None from caller => unrestricted for this block only.
+            _allowed_read_paths.set(None)
         yield get_allowed_read_paths()
     finally:
         _allowed_read_paths.reset(token)
@@ -363,8 +366,8 @@ def allowed_read_paths_context(paths: Optional[Iterable[str]]):
 def is_read_allowed(path: str | Path) -> bool:
     """True if the path may be read under the current permission set.
 
-    Call after safe_path / sensitive checks.  When no restriction is active
-    (None), always returns True.
+    Call after safe_path / sensitive checks.  When unrestricted (None),
+    always returns True.  An empty frozenset (the default) denies all.
     """
 
     allowed = _allowed_read_paths.get()

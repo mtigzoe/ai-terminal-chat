@@ -121,24 +121,24 @@ function App() {
   const [allowedPaths, setAllowedPaths] = useState(() => {
     try {
       const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
-      if (!raw) return null;
+      if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : null;
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
-      return null;
+      return [];
     }
   });
   const is_stream = toggled;
 
   const resolveAllowedPaths = () => {
-    if (allowedPaths !== null) return allowedPaths;
+    if (Array.isArray(allowedPaths)) return allowedPaths;
     try {
       const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
-      if (!raw) return null;
+      if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : null;
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
-      return null;
+      return [];
     }
   };
 
@@ -149,13 +149,13 @@ function App() {
       try {
         const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
         if (!raw) {
-          setAllowedPaths(null);
+          setAllowedPaths([]);
           return;
         }
         const parsed = JSON.parse(raw);
-        setAllowedPaths(Array.isArray(parsed) ? parsed : null);
+        setAllowedPaths(Array.isArray(parsed) ? parsed : []);
       } catch {
-        setAllowedPaths(null);
+        setAllowedPaths([]);
       }
     };
     const onVisible = () => {
@@ -265,7 +265,7 @@ function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, request_id: requestId, ...(resolvedAllowedPaths !== null ? { allowed_paths: resolvedAllowedPaths } : {}) };
+    const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [] };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -295,7 +295,7 @@ function App() {
   };
   const handleStreamingChat = async (message) => {
     const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, ...(resolvedAllowedPaths !== null ? { allowed_paths: resolvedAllowedPaths } : {}) };
+    const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [] };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
