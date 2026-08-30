@@ -239,7 +239,6 @@ SENSITIVE_EXACT_NAMES = {
     "id_ecdsa",
 }
 SENSITIVE_SUFFIXES = (".pem", ".key")
-# Template env files document required keys without real secrets.
 ENV_TEMPLATE_NAMES = {
     ".env.example",
     ".env.sample",
@@ -284,7 +283,7 @@ def is_sensitive_path(file_path: Path) -> bool:
 # Agent read-permission set (selected Project files)
 # ---------------------------------------------------------------------------
 # When the user selects files on the Project page, those relative paths become
-# the only files the agent may read through filesystem tools.  The set is
+# the only files the agent may read through filesystem tools. The set is
 # request-scoped via a context variable so concurrent chats stay isolated.
 # Default is None (unrestricted) so the normal Project page can browse the
 # project. During an agent request, app.py explicitly installs the selected
@@ -299,7 +298,7 @@ _allowed_read_paths: ContextVar[Optional[frozenset[str]]] = ContextVar(
 def _normalize_allowed_path(path: str) -> str:
     """Normalize a user-supplied relative path to the form used for matching.
 
-    Uses safe_path so absolute / traversal paths are rejected.  Returns the
+    Uses safe_path so absolute / traversal paths are rejected. Returns the
     POSIX-style relative path string (forward slashes) under PROJECT_ROOT.
     """
 
@@ -313,7 +312,7 @@ def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> Optional[frozenset
 
     ``None`` means unrestricted (normal non-agent filesystem browsing).
     An empty iterable installs an empty frozenset: restriction active, no
-    files readable.  Invalid path entries are dropped.
+    files readable. Invalid path entries are dropped.
 
     Returns the value stored in the context variable (``None`` or a frozenset).
     """
@@ -337,9 +336,9 @@ def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> Optional[frozenset
 
 
 def clear_allowed_read_paths() -> None:
-    """Reset agent read restriction to deny-all for the current context."""
+    """Reset agent read restriction to normal unrestricted filesystem browsing."""
 
-    _allowed_read_paths.set(frozenset())
+    _allowed_read_paths.set(None)
 
 
 def get_allowed_read_paths() -> Optional[frozenset[str]]:
@@ -373,8 +372,8 @@ def allowed_read_paths_context(paths: Optional[Iterable[str]]):
 def is_read_allowed(path: str | Path) -> bool:
     """True if the path may be read under the current permission set.
 
-    Call after safe_path / sensitive checks.  When unrestricted (None),
-    always returns True.  An empty frozenset (the agent's no-selection case)
+    Call after safe_path / sensitive checks. When unrestricted (None),
+    always returns True. An empty frozenset (the agent's no-selection case)
     denies all.
     """
 
