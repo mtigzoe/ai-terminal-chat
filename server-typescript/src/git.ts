@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { getProjectRoot, safePath } from "./security.ts";
+import { getAllowedReadPaths, getProjectRoot, isReadAllowed, safePath } from "./security.ts";
 
 const GIT_STATUS_TIMEOUT = 10;
 const GIT_DIFF_TIMEOUT = 10;
@@ -41,16 +41,11 @@ export function gitStatus(): Record<string, unknown> {
     GIT_STATUS_TIMEOUT
   );
 
-  if (result.code === 127) {
-    return { error: "git is not installed or not on PATH." };
-  }
-  if (result.code !== 0) {
-    return { error: result.stderr.trim() || "git status failed." };
-  }
+  if (result.code === 127) return { error: "git is not installed or not on PATH." };
+  if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." };
 
   const statusText = result.stdout || "";
   const truncated = statusText.length > GIT_STATUS_MAX_CHARS;
-
   const payload: Record<string, unknown> = {
     status: statusText.slice(0, GIT_STATUS_MAX_CHARS),
     truncated,
@@ -65,9 +60,7 @@ export function gitStatus(): Record<string, unknown> {
 export function gitCommittedFileCount(): Record<string, unknown> {
   const result = runGit(["ls-tree", "-r", "--name-only", "HEAD"], GIT_STATUS_TIMEOUT);
 
-  if (result.code === 127) {
-    return { error: "git is not installed or not on PATH." };
-  }
+  if (result.code === 127) return { error: "git is not installed or not on PATH." };
   if (result.code !== 0) {
     return {
       error:
@@ -87,7 +80,27 @@ export function gitDiff(
 ): Record<string, unknown> {
   const args = ["diff"];
   if (staged) args.push("--staged");
-  if (relPath) {
+
+  const allowed = getAllowedReadPaths();
+  if (allowed !== undefined) {
+    if (relPath) {
+      try {
+        const filePath = safePath(relPath);
+        if (!isReadAllowed(relPath)) {
+          return { error: `Access denied: '${relPath}' is not selected for the agent.` };
+        }
+        args.push("--", path.relative(getProjectRoot(), filePath));
+      } catch (exc) {
+        return { error: String(exc) };
+      }
+    } else {
+      const selected = [...allowed];
+      if (selected.length === 0) {
+        return { diff: "", truncated: false };
+      }
+      args.push("--", ...selected);
+    }
+  } else if (relPath) {
     try {
       const filePath = safePath(relPath);
       args.push(path.relative(getProjectRoot(), filePath));
@@ -98,16 +111,11 @@ export function gitDiff(
 
   const result = runGit(args, GIT_DIFF_TIMEOUT);
 
-  if (result.code === 127) {
-    return { error: "git is not installed or not on PATH." };
-  }
-  if (result.code !== 0) {
-    return { error: result.stderr.trim() || "git diff failed." };
-  }
+  if (result.code === 127) return { error: "git is not installed or not on PATH." };
+  if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." };
 
   const diffText = result.stdout || "";
   const truncated = diffText.length > GIT_DIFF_MAX_CHARS;
-
   const payload: Record<string, unknown> = {
     diff: diffText.slice(0, GIT_DIFF_MAX_CHARS),
     truncated,
@@ -132,16 +140,11 @@ export function gitLog(maxCount = 10): Record<string, unknown> {
     GIT_LOG_TIMEOUT
   );
 
-  if (result.code === 127) {
-    return { error: "git is not installed or not on PATH." };
-  }
-  if (result.code !== 0) {
-    return { error: result.stderr.trim() || "git log failed." };
-  }
+  if (result.code === 127) return { error: "git is not installed or not on PATH." };
+  if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." };
 
   const logText = result.stdout || "";
   const truncated = logText.length > GIT_LOG_MAX_CHARS;
-
   const payload: Record<string, unknown> = {
     log: logText.slice(0, GIT_LOG_MAX_CHARS),
     truncated,
@@ -155,16 +158,11 @@ export function gitLog(maxCount = 10): Record<string, unknown> {
 export function gitBranch(): Record<string, unknown> {
   const result = runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT);
 
-  if (result.code === 127) {
-    return { error: "git is not installed or not on PATH." };
-  }
-  if (result.code !== 0) {
-    return { error: result.stderr.trim() || "git branch failed." };
-  }
+  if (result.code === 127) return { error: "git is not installed or not on PATH." };
+  if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." };
 
   const branchesText = result.stdout || "";
   const truncated = branchesText.length > GIT_BRANCH_MAX_CHARS;
-
   const payload: Record<string, unknown> = {
     branches: branchesText.slice(0, GIT_BRANCH_MAX_CHARS),
     truncated,
