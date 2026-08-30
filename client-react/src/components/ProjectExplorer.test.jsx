@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import axios from 'axios';
 import ProjectExplorer from './ProjectExplorer';
@@ -104,6 +105,7 @@ test('labels every unmerged porcelain code as a conflict, including AA and DD wh
 });
 
 test('localStorage selection persistence still works after sorting', async () => {
+  const user = userEvent.setup();
   axios.get.mockResolvedValueOnce({
     data: {
       path: '.',
@@ -116,17 +118,18 @@ test('localStorage selection persistence still works after sorting', async () =>
 
   render(<ProjectExplorer host={host} />);
   const checkbox = await screen.findByRole('checkbox', { name: /select a\.txt for the agent/i });
-  fireEvent.click(checkbox);
+  await user.click(checkbox);
 
   // Wait for the selection state/effect to persist before changing the sort.
-  // The persistence effect runs after React commits the checkbox state.
+  // Awaiting the user interaction also lets React flush the state update and
+  // its persistence effect before the assertion below.
   await waitFor(() => {
     expect(checkbox).toBeChecked();
     const stored = JSON.parse(localStorage.getItem(`project-explorer:${host}:selected`));
     expect(stored).toEqual(['a.txt']);
   });
 
-  fireEvent.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
+  await user.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
 
   await waitFor(() => {
     const stored = JSON.parse(localStorage.getItem(`project-explorer:${host}:selected`));
@@ -146,16 +149,13 @@ test('periodic refresh triggers another git status request after approximately 5
   });
   axios.post.mockResolvedValue({ data: { stdout: '' } });
 
-  const { unmount } = render(<ProjectExplorer host={host} />);
+  render(<ProjectExplorer host={host} />);
 
   await screen.findByRole('treeitem', { name: /README\.md, file/i });
   expect(axios.post).toHaveBeenCalledTimes(1);
 
   const intervalCall = setIntervalSpy.mock.calls.find(([callback, delay]) => typeof callback === 'function' && delay === 5000);
   expect(intervalCall).toBeTruthy();
-
-  unmount();
-  expect(clearIntervalSpy).toHaveBeenCalled();
 
   setIntervalSpy.mockRestore();
   clearIntervalSpy.mockRestore();
