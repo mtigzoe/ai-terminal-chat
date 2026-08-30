@@ -349,15 +349,21 @@ def get_allowed_read_paths() -> Optional[frozenset[str]]:
 
 @contextmanager
 def allowed_read_paths_context(paths: Optional[Iterable[str]]):
-    """Context manager that sets allowed paths for a request then clears them."""
+    """Context manager that sets allowed paths then restores the previous value."""
 
-    token = _allowed_read_paths.set(frozenset())
+    if paths is None:
+        token = _allowed_read_paths.set(None)
+    else:
+        normalized: set[str] = set()
+        for raw in paths:
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                normalized.add(_normalize_allowed_path(raw.strip()))
+            except ValueError:
+                continue
+        token = _allowed_read_paths.set(frozenset(normalized))
     try:
-        if paths is not None:
-            set_allowed_read_paths(paths)
-        else:
-            # Explicit None from caller => unrestricted for this block only.
-            _allowed_read_paths.set(None)
         yield get_allowed_read_paths()
     finally:
         _allowed_read_paths.reset(token)

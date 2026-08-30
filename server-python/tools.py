@@ -526,11 +526,13 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     ):
         return None
 
+    paths_hint = ", ".join(path_args) if path_args else "the requested file"
     return {
         "error": (
-            "This command can read arbitrary file contents and is blocked "
-            "while an agent file-selection is active. Select the file on the "
-            "Project page, or use the read_file tool on a selected file."
+            f"Access denied for {paths_hint}: this command can read arbitrary "
+            "file contents and is blocked while an agent file-selection is "
+            "active. Select the file on the Project page, or use the "
+            "read_file tool on a selected file."
         )
     }
 

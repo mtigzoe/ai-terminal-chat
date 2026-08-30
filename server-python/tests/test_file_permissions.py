@@ -206,16 +206,21 @@ def test_sensitive_still_blocked_even_if_selected(project_root):
 
 
 def test_context_manager_isolates_permission(project_root):
+    # Default is deny-all; temporarily unrestricted for outer state.
+    security.set_allowed_read_paths(None)
     with security.allowed_read_paths_context(["README.md"]):
         assert "error" not in tools.read_file("README.md")
         assert "error" in tools.read_file("other.md")
+    # Previous unrestricted state restored.
     assert "error" not in tools.read_file("other.md")
 
 
 def test_context_manager_empty_list_is_restrictive(project_root):
+    security.set_allowed_read_paths(None)
     with security.allowed_read_paths_context([]):
         assert security.get_allowed_read_paths() == frozenset()
         assert "error" in tools.read_file("README.md")
+    # Previous unrestricted state restored.
     assert security.get_allowed_read_paths() is None
 
 
