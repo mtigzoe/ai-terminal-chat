@@ -8,6 +8,44 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {}
 }
 
+// Reliable localStorage/sessionStorage shim for Vitest/jsdom.
+// Some jsdom/vitest combinations expose an incomplete or missing
+// localStorage object, which breaks tests and components that call
+// getItem/setItem/removeItem/clear.
+if (typeof window !== 'undefined') {
+  const createStorage = () => {
+    let store = {};
+    return {
+      getItem(key) {
+        return store[key] ?? null;
+      },
+      setItem(key, value) {
+        store[key] = String(value);
+      },
+      removeItem(key) {
+        delete store[key];
+      },
+      clear() {
+        store = {};
+      },
+      get length() {
+        return Object.keys(store).length;
+      },
+      key(index) {
+        const keys = Object.keys(store);
+        return keys[index] ?? null;
+      },
+    };
+  };
+
+  if (!window.localStorage || typeof window.localStorage.getItem !== 'function') {
+    window.localStorage = createStorage();
+  }
+  if (!window.sessionStorage || typeof window.sessionStorage.getItem !== 'function') {
+    window.sessionStorage = createStorage();
+  }
+}
+
 // React 18 warns when state updates from useEffect / promise callbacks
 // happen outside of act(). @testing-library/react already wraps fireEvent
 // and render in act(), but async useEffect updates still leak through.
