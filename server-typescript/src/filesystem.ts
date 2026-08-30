@@ -1,6 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getProjectRoot, isSensitiveFilename, isSensitivePath, safePath } from "./security.ts";
+import {
+  getAllowedReadPaths,
+  getProjectRoot,
+  isReadAllowed,
+  isSensitiveFilename,
+  isSensitivePath,
+  requireReadAllowed,
+  safePath,
+} from "./security.ts";
 
 const MAX_FILE_SIZE = 200_000;
 
@@ -35,8 +43,24 @@ export function listFiles(relPath = "."): Record<string, unknown> {
 
   const entries: { name: string; type: string }[] = [];
   const items = fs.readdirSync(directory, { withFileTypes: true });
+  const allowed = getAllowedReadPaths();
+  const directoryRelative = path.relative(getProjectRoot(), directory).split(path.sep).join("/");
 
   for (const item of items.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (allowed !== undefined) {
+      const itemRelative = directoryRelative
+        ? `${directoryRelative}/${item.name}`
+        : item.name;
+      if (item.isDirectory()) {
+        const prefix = `${itemRelative}/`;
+        if (![...allowed].some((candidate) => candidate === itemRelative || candidate.startsWith(prefix))) {
+          continue;
+        }
+      } else if (!allowed.has(itemRelative)) {
+        continue;
+      }
+    }
+
     entries.push({
       name: item.name,
       type: item.isDirectory() ? "directory" : "file",
@@ -61,6 +85,12 @@ export function readFile(relPath: string): Record<string, unknown> {
     return {
       error: `Refusing to read '${relPath}': it looks like a secrets/credentials file.`,
     };
+  }
+
+  try {
+    requireReadAllowed(relPath);
+  } catch (exc) {
+    return { error: String(exc) };
   }
 
   if (!fs.existsSync(filePath)) {
@@ -139,7 +169,16 @@ export function searchFiles(
 
     for (const d of dirs.sort()) {
       if (!SEARCH_EXCLUDED_DIR_NAMES.has(d)) {
-        walk(path.join(dir, d));
+        const childPath = path.join(dir, d);
+        if (getAllowedReadPaths() !== undefined) {
+          const childRelative = path.relative(getProjectRoot(), childPath).split(path.sep).join("/");
+          const prefix = `${childRelative}/`;
+          const allowed = getAllowedReadPaths()!;
+          if (![...allowed].some((candidate) => candidate === childRelative || candidate.startsWith(prefix))) {
+            continue;
+          }
+        }
+        walk(childPath);
       }
     }
 
@@ -148,6 +187,7 @@ export function searchFiles(
       if (isSensitiveFilename(file.name)) continue;
 
       const filePath = path.join(dir, file.name);
+      if (!isReadAllowed(filePath)) continue;
 
       let fileSize = 0;
       try {
