@@ -614,7 +614,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         <button type="button" onClick={selectAllVisible}>Select all visible</button>
         <button type="button" onClick={selectAllFiles} disabled={selectingAllFiles}>Select all files</button>
         <button type="button" onClick={clearSelection} disabled={selectedFiles.size === 0}>Clear selection</button>
-        <button type="button" onClick={useSelectedFiles}>Use selected files with agent ({selectedFiles.size})</button>
+         <button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>Use selected files with agent ({selectedFiles.size})</button>
         {onInsertPathIntoTerminal && <button type="button" onClick={() => {
           const path = activePath || Array.from(selectedFiles)[0] || '.';
           onInsertPathIntoTerminal(path); setStatus(`Sent path ${path} to the terminal command field.`);
