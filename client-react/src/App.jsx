@@ -131,9 +131,6 @@ function App() {
   });
   const is_stream = toggled;
 
-  // Always read selection from storage at send time. React state can be
-  // stale after the user changes selection on the Project page (separate
-  // document) without a focus/visibility event reaching this page.
   const resolveAllowedPaths = () => {
     try {
       const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
@@ -146,8 +143,6 @@ function App() {
     }
   };
 
-  // Re-read allowed paths when the chat page becomes visible again (user may
-  // have changed selection on the Project page in another tab/window).
   useEffect(() => {
     const sync = () => {
       try {
@@ -168,8 +163,6 @@ function App() {
     };
     window.addEventListener('focus', sync);
     document.addEventListener('visibilitychange', onVisible);
-    // Project page (other document) writes localStorage; storage events fire
-    // cross-tab so chat picks up selection changes without a focus event.
     const onStorage = (event) => {
       if (event.key === 'ai-terminal-chat:allowed-paths') sync();
     };
@@ -183,7 +176,6 @@ function App() {
 
   useEffect(() => {
     const regions = ['chat', 'terminal'];
-
     const focusRegion = (id) => {
       if (id === 'chat') {
         inputRef.current?.focus();
@@ -195,7 +187,6 @@ function App() {
         }, 0);
       }
     };
-
     const onKeyDown = (event) => {
       if (event.key !== 'F6') return;
       event.preventDefault();
@@ -212,7 +203,6 @@ function App() {
         : (index + 1) % regions.length;
       focusRegion(regions[nextIndex]);
     };
-
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
@@ -353,15 +343,15 @@ function App() {
     let pendingPath = null;
 
     try {
-      const rawFiles = sessionStorage.getItem('ai-terminal-chat:pending-files');
+      const rawFiles = localStorage.getItem('ai-terminal-chat:pending-files');
       if (rawFiles) {
         pendingFiles = JSON.parse(rawFiles);
-        sessionStorage.removeItem('ai-terminal-chat:pending-files');
+        localStorage.removeItem('ai-terminal-chat:pending-files');
       }
-      const rawPath = sessionStorage.getItem('ai-terminal-chat:pending-terminal-path');
+      const rawPath = localStorage.getItem('ai-terminal-chat:pending-terminal-path');
       if (rawPath) {
         pendingPath = rawPath;
-        sessionStorage.removeItem('ai-terminal-chat:pending-terminal-path');
+        localStorage.removeItem('ai-terminal-chat:pending-terminal-path');
       }
     } catch {
       // Ignore storage or parse errors.
@@ -389,8 +379,6 @@ function App() {
     if (pendingPath) {
       setPathForTerminal(pendingPath);
     }
-    // Intentional one-time hand-off on mount; handleClick is stable for this use.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
