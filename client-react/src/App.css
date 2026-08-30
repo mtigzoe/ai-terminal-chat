@@ -567,6 +567,269 @@ body {
   color: #111;
 }
 
+/* New chat link on Chat page */
+.new-chat-link-wrapper {
+  text-align: right;
+  padding: 0 12px;
+}
+.new-chat-link {
+  display: inline-block;
+  text-decoration: none;
+  color: #005fcc;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #005fcc;
+}
+.new-chat-link:hover {
+  background: #e4ebf5;
+}
+.new-chat-link:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* History page */
+.history-app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+  text-align: left;
+}
+.history-page h1 {
+  margin: 0 0 1rem;
+  font-size: 1.5rem;
+}
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.history-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.history-search {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #9a9caa;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  min-width: 220px;
+}
+.history-search:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+.history-clear-button {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid #a33;
+  border-radius: 6px;
+  background: #fff;
+  color: #a33;
+  font-weight: 600;
+  cursor: pointer;
+}
+.history-clear-button:hover:not(:disabled) {
+  background: #fdecec;
+}
+.history-clear-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.history-status {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #2e7d32;
+  background: #eef7ee;
+  color: #1a1a1a;
+}
+.history-status--error {
+  border-color: #a33;
+  background: #fdecec;
+  color: #6b1f1f;
+}
+.history-empty {
+  color: #555;
+  font-style: italic;
+}
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-item {
+  border: 1px solid #9a9caa;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+}
+.history-item-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.history-restore-button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-decoration: none;
+  color: #111;
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.history-restore-button:hover {
+  background: transparent;
+}
+.history-restore-button:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.history-item-title {
+  font-weight: 600;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+.history-item-date {
+  font-size: 0.85em;
+  color: #555;
+  white-space: nowrap;
+}
+.history-item-count {
+  font-size: 0.85em;
+  color: #777;
+  white-space: nowrap;
+}
+.history-item-actions {
+  display: flex;
+  gap: 8px;
+}
+.history-rename-button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid #9a9caa;
+  border-radius: 6px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.history-rename-button:hover {
+  background: #ece9e5;
+}
+.history-rename-button:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+.history-rename-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.history-rename-input {
+  flex: 1 1 260px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #505261;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+}
+.history-rename-input:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
+/* Settings page memory toggle */
+.settings-memory {
+  text-align: left;
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #9a9caa;
+  background: #f7f6f3;
+}
+.settings-memory h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+.settings-toggle-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+.settings-toggle-text {
+  font-weight: 600;
+}
+.settings-toggle-state {
+  font-size: 0.9em;
+  color: #555;
+}
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.settings-toggle-row input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.settings-toggle-visual {
+  display: inline-flex;
+  align-items: center;
+  width: 48px;
+  height: 28px;
+  border-radius: 99px;
+  background: #ccc;
+  position: relative;
+  transition: background 0.2s ease;
+}
+.settings-toggle-row input:checked + .settings-toggle-visual {
+  background: #2e7d32;
+}
+.settings-toggle-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  transition: left 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.settings-toggle-row input:checked + .settings-toggle-visual .settings-toggle-thumb {
+  left: 23px;
+}
+.settings-toggle-visual:focus-within {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
 /* Dedicated Project page */
 .project-page {
   max-width: 960px;

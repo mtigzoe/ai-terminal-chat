@@ -118,6 +118,14 @@ function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const [pathForTerminal, setPathForTerminal] = useState(null);
+  const [chatId, setChatId] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ai-terminal-chat:current-chat-id');
+      if (saved) return saved;
+    } catch { /* ignore */ }
+    return `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  });
+  const [newChatAvailable, setNewChatAvailable] = useState(false);
   const [allowedPaths, setAllowedPaths] = useState(() => {
     try {
       const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
@@ -142,6 +150,91 @@ function App() {
       return [];
     }
   };
+
+  const CHAT_STORAGE_KEY = 'ai-terminal-chat:chats';
+
+  const isMemoryEnabled = () => {
+    try {
+      const raw = localStorage.getItem('ai-terminal-chat:memory-enabled');
+      return raw ? raw !== 'false' : true;
+    } catch {
+      return true;
+    }
+  };
+
+  const loadChats = () => {
+    if (!isMemoryEnabled()) return [];
+    try {
+      const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveChats = (chats) => {
+    if (!isMemoryEnabled()) return;
+    try {
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const saveCurrentChat = (currentData) => {
+    if (!isMemoryEnabled()) return;
+    if (!Array.isArray(currentData) || currentData.length === 0) return;
+    const chats = loadChats();
+    const existingIndex = chats.findIndex((c) => c.id === chatId);
+    const firstUserMessage = currentData.find((m) => m.role === 'user');
+    const title = firstUserMessage?.parts?.[0]?.text || firstUserMessage?.text || 'Untitled chat';
+    const trimmedTitle = String(title).trim().slice(0, 80);
+    const chatEntry = {
+      id: chatId,
+      title: trimmedTitle || 'Untitled chat',
+      date: new Date().toISOString(),
+      messages: currentData,
+    };
+    if (existingIndex >= 0) {
+      chats[existingIndex] = chatEntry;
+    } else {
+      chats.unshift(chatEntry);
+    }
+    saveChats(chats);
+    setNewChatAvailable(true);
+  };
+
+  const handleNewChat = () => {
+    const newId = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setChatId(newId);
+    try {
+      localStorage.setItem('ai-terminal-chat:current-chat-id', newId);
+    } catch { /* ignore */ }
+    setData([]);
+    setAnswer('');
+    showStreamdiv(false);
+    setStreamToolActivity([]);
+    setAgentStatus(null);
+    setPendingConfirmation(null);
+    setConfirmationResolving(false);
+    setPathForTerminal(null);
+    setWaiting(false);
+    setNewChatAvailable(false);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  useEffect(() => {
+    if (data.length === 0) {
+      setNewChatAvailable(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      saveCurrentChat(data);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [data, chatId]);
 
   useEffect(() => {
     const sync = () => {
@@ -337,10 +430,12 @@ function App() {
     fetchStreamData();
   };
 
-  // Consume pending file selection / terminal path hand-off from the Project page.
+  // Consume pending file selection / terminal path hand-off from the Project page,
+  // and restore a chat if History passed a restore request.
   useEffect(() => {
     let pendingFiles = null;
     let pendingPath = null;
+    let restoreChatId = null;
 
     try {
       const rawFiles = localStorage.getItem('ai-terminal-chat:pending-files');
@@ -353,8 +448,29 @@ function App() {
         pendingPath = rawPath;
         localStorage.removeItem('ai-terminal-chat:pending-terminal-path');
       }
+      const rawRestore = localStorage.getItem('ai-terminal-chat:restore-chat-id');
+      if (rawRestore) {
+        restoreChatId = rawRestore;
+        localStorage.removeItem('ai-terminal-chat:restore-chat-id');
+      }
     } catch {
       // Ignore storage or parse errors.
+    }
+
+    if (restoreChatId) {
+      try {
+        const rawChats = localStorage.getItem(CHAT_STORAGE_KEY);
+        const chats = rawChats ? JSON.parse(rawChats) : [];
+        const chat = Array.isArray(chats) ? chats.find((c) => c.id === restoreChatId) : null;
+        if (chat && Array.isArray(chat.messages)) {
+          setChatId(chat.id);
+          try {
+            localStorage.setItem('ai-terminal-chat:current-chat-id', chat.id);
+          } catch { /* ignore */ }
+          setData(chat.messages);
+          setNewChatAvailable(true);
+        }
+      } catch { /* ignore */ }
     }
 
     if (Array.isArray(pendingFiles)) {
@@ -392,6 +508,13 @@ function App() {
         <div className="chat-app" data-focus-region="chat">
           <Header toggled={toggled} setToggled={setToggled} waiting={waiting} />
           <ProviderSelector host={host} waiting={waiting} />
+          {newChatAvailable && (
+            <div className="new-chat-link-wrapper">
+              <a href="./index.html" className="new-chat-link" onClick={(event) => { event.preventDefault(); handleNewChat(); }}>
+                New chat
+              </a>
+            </div>
+          )}
           <ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />
           {waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}
           <div id="message-input-region">

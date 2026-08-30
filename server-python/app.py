@@ -26,6 +26,8 @@ from security import (
     clear_allowed_read_paths,
     get_project_root,
     is_sensitive_filename,
+    load_provider_selection,
+    persist_provider_selection,
     safe_path,
     set_allowed_read_paths,
     set_project_root,
@@ -47,8 +49,21 @@ from tools import (
 )  # noqa: F401
 
 load_dotenv()
-provider = get_provider()
+
 _provider_lock = Lock()
+
+try:
+    _saved = load_provider_selection()
+except Exception:
+    _saved = {}
+
+if _saved.get("provider"):
+    try:
+        provider = get_provider(_saved["provider"], model=_saved.get("model"))
+    except Exception:
+        provider = get_provider()
+else:
+    provider = get_provider()
 
 API_KEY_ENV_VARS = {
     "gemini": "GOOGLE_API_KEY",
@@ -325,6 +340,15 @@ def select_provider():
 
     with _provider_lock:
         provider = candidate
+
+    try:
+        persist_provider_selection(
+            name,
+            model=model,
+            ollama_base_url=data.get("ollama_base_url"),
+        )
+    except Exception as exc:
+        print(f"[Warning] Could not persist provider selection: {exc}")
 
     return _provider_status(probe=True)
 

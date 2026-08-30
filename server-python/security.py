@@ -145,6 +145,62 @@ def _persist_project_root(root: Path) -> None:
     _persist_config(payload)
 
 
+def load_provider_selection() -> dict:
+    """Return the persisted provider selection from the config file.
+
+    Returns a dict that may contain ``provider``, ``model``, and
+    ``ollama_base_url``. Missing or empty values are omitted so callers
+    can distinguish "not set" from an empty string.
+    """
+
+    data = _load_config()
+    out = {}
+    provider = data.get("provider")
+    if isinstance(provider, str) and provider.strip():
+        out["provider"] = provider.strip().lower()
+    model = data.get("model")
+    if isinstance(model, str) and model.strip():
+        out["model"] = model.strip()
+    ollama_base_url = data.get("ollama_base_url")
+    if isinstance(ollama_base_url, str) and ollama_base_url.strip():
+        out["ollama_base_url"] = ollama_base_url.strip()
+    return out
+
+
+def persist_provider_selection(
+    provider: str,
+    model: str | None = None,
+    ollama_base_url: str | None = None,
+) -> None:
+    """Persist the active provider selection to the config file.
+
+    Merges into any existing configuration. When ``ollama_base_url`` is
+    provided it is normalised to include a scheme; when the active provider
+    is not Ollama the stored URL is removed so stale values do not leak
+    across provider switches.
+    """
+
+    payload = _load_config()
+    payload["provider"] = str(provider).strip().lower()
+    if model is not None:
+        model_s = str(model).strip()
+        if model_s:
+            payload["model"] = model_s
+        else:
+            payload.pop("model", None)
+    if ollama_base_url is not None:
+        url = str(ollama_base_url).strip()
+        if url:
+            if "://" not in url:
+                url = f"http://{url}"
+            payload["ollama_base_url"] = url
+        else:
+            payload.pop("ollama_base_url", None)
+    elif payload.get("provider") != "ollama":
+        payload.pop("ollama_base_url", None)
+    _persist_config(payload)
+
+
 def _choose_project_root() -> Path:
     """Open the local operating-system folder picker and return its selection."""
 

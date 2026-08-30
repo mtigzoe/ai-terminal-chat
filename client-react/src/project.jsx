@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import axios from 'axios';
 import './index.css';
@@ -11,11 +11,15 @@ const host = (import.meta.env.VITE_API_URL || 'http://localhost:9000').replace(/
 
 function ProjectPage() {
   const [projectRoot, setProjectRoot] = useState('');
+  const previousRootRef = useRef('');
 
   const refreshProjectRoot = useCallback(() => {
     axios
       .get(`${host}/project-root`)
-      .then((response) => setProjectRoot(response.data.path || ''))
+      .then((response) => {
+        const next = response.data.path || '';
+        setProjectRoot(next);
+      })
       .catch(() => setProjectRoot(''));
   }, []);
 
@@ -35,6 +39,17 @@ function ProjectPage() {
       window.removeEventListener('focus', onFocus);
     };
   }, [refreshProjectRoot]);
+
+  useEffect(() => {
+    const oldRoot = previousRootRef.current;
+    if (oldRoot && oldRoot !== projectRoot) {
+      try {
+        localStorage.removeItem(`project-explorer:${oldRoot}:expanded`);
+        localStorage.removeItem(`project-explorer:${oldRoot}:selected`);
+      } catch { /* ignore */ }
+    }
+    previousRootRef.current = projectRoot;
+  }, [projectRoot]);
 
   const handleUseSelectedFiles = (files) => {
     if (!Array.isArray(files)) return;

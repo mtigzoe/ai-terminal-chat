@@ -86,11 +86,10 @@ describe('App-level focus and skip links', () => {
   test('skip links are present and target major regions in document order', () => {
     render(<App />);
     const skipLinks = screen.getAllByRole('link', { name: /skip to/i });
-    expect(skipLinks).toHaveLength(4);
+    expect(skipLinks).toHaveLength(3);
     expect(skipLinks[0]).toHaveAttribute('href', '#main-conversation');
     expect(skipLinks[1]).toHaveAttribute('href', '#message-input-region');
     expect(skipLinks[2]).toHaveAttribute('href', '#terminal-region');
-    expect(skipLinks[3]).toHaveAttribute('href', '#project-region');
   });
 
   test('F6 moves focus from chat to terminal', async () => {
@@ -105,15 +104,14 @@ describe('App-level focus and skip links', () => {
     });
   });
 
-  test('F6 moves focus from terminal to project tree', async () => {
+  test('F6 moves focus from terminal to chat', async () => {
     render(<App />);
     const terminalInput = document.querySelector('[data-focus-target="terminal-input"]');
     terminalInput?.focus();
 
     fireEvent.keyDown(document, { key: 'F6' });
     await waitFor(() => {
-      const tree = document.querySelector('[data-focus-target="project-tree"]');
-      expect(document.activeElement).toBe(tree?.querySelector('[role="treeitem"]') || tree);
+      expect(document.activeElement).toBe(screen.getByLabelText(/^message$/i));
     });
   });
 

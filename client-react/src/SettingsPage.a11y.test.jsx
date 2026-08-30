@@ -60,7 +60,7 @@ describe('SettingsPage accessibility', () => {
 
   test('form fields are associated with labels', async () => {
     await renderLoaded();
-    expect(screen.getByLabelText(/default project path/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/project path/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/ai provider/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/model/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/api key/i)).toBeInTheDocument();
@@ -68,9 +68,9 @@ describe('SettingsPage accessibility', () => {
 
   test('help text is linked via aria-describedby', async () => {
     await renderLoaded();
-    const projectRootInput = screen.getByLabelText(/default project path/i);
-    expect(projectRootInput).toHaveAttribute('aria-describedby', 'settings-project-root-help');
-    expect(screen.getByText(/the backend uses this directory/i)).toBeInTheDocument();
+    const projectRootInput = screen.getByLabelText(/project path/i);
+    expect(projectRootInput).toHaveAttribute('aria-describedby', 'active-project-help');
+    expect(screen.getByText(/In the desktop app, choose a folder/i)).toBeInTheDocument();
   });
 
   test('status region has role=status and aria-live=polite', async () => {
@@ -146,12 +146,6 @@ describe('SettingsPage accessibility', () => {
     expect(table).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /shortcut/i })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /action/i })).toBeInTheDocument();
-  });
-
-  test('back link navigates to chat', async () => {
-    await renderLoaded();
-    const backLink = screen.getByRole('link', { name: /back to chat/i });
-    expect(backLink).toHaveAttribute('href', '/');
   });
 
   test('allowed commands section is labelled', async () => {

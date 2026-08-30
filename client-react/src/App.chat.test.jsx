@@ -296,16 +296,6 @@ describe('tool confirmation resolution', () => {
   });
 });
 
-describe('project root loading', () => {
-  test('shows a status message when the current project cannot be loaded', async () => {
-    axios.get.mockRejectedValue(new Error('network down'));
-
-    render(<App />);
-
-    await screen.findByText(/unable to load project directory/i);
-  });
-});
-
 describe('allowed_paths from project selection', () => {
   afterEach(() => {
     try {

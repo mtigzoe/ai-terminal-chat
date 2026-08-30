@@ -34,6 +34,48 @@ const SettingsPage = ({ host }) => {
   const [allowedCommandsStatus, setAllowedCommandsStatus] = useState('');
   const [allowedCommandsError, setAllowedCommandsError] = useState(false);
   const [allowedCommandsBusy, setAllowedCommandsBusy] = useState(false);
+  const [memoryEnabled, setMemoryEnabled] = useState(() => {
+    try {
+      const raw = localStorage.getItem('ai-terminal-chat:memory-enabled');
+      return raw ? raw !== 'false' : true;
+    } catch {
+      return true;
+    }
+  });
+  const [memoryStatus, setMemoryStatus] = useState('');
+
+  const STORAGE_KEY = 'ai-terminal-chat:provider-selection';
+
+  const readStoredProvider = () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+
+  const writeStoredProvider = (selection) => {
+    try {
+      if (selection && selection.provider) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(selection));
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  useEffect(() => {
+    const cached = readStoredProvider();
+    if (cached?.provider) {
+      setProvider(cached.provider);
+      if (cached.model) setModel(cached.model);
+      if (cached.ollama_hostname) setOllamaHostname(cached.ollama_hostname);
+    }
+  }, []);
 
   const loadModels = async (providerName, preserveModel = '') => {
     if (!providerName) return;
@@ -108,6 +150,7 @@ const SettingsPage = ({ host }) => {
     if (nextProvider.toLowerCase() === 'ollama' && !ollamaHostname.trim()) {
       setOllamaHostname('localhost:11434');
     }
+    writeStoredProvider({ provider: nextProvider });
     await loadModels(nextProvider);
   };
 
@@ -140,10 +183,16 @@ const SettingsPage = ({ host }) => {
 
       const providerResponse = await axios.post(`${host}/providers/select`, payload);
 
-      setProvider(providerResponse.data.name || provider);
-      setModel(providerResponse.data.model || model);
-      if ((providerResponse.data.name || provider).toLowerCase() === 'ollama') {
-        setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
+      const savedName = providerResponse.data.name || provider;
+      const savedModel = providerResponse.data.model || model;
+      setProvider(savedName);
+      setModel(savedModel);
+      if (savedName.toLowerCase() === 'ollama') {
+        const nextHostname = formatOllamaHostname(providerResponse.data.base_url);
+        setOllamaHostname(nextHostname);
+        writeStoredProvider({ provider: savedName, model: savedModel, ollama_hostname: nextHostname });
+      } else {
+        writeStoredProvider({ provider: savedName, model: savedModel });
       }
       setApiKey('');
 
@@ -232,6 +281,19 @@ const SettingsPage = ({ host }) => {
     }
   };
 
+  const handleMemoryToggle = async (event) => {
+    const next = event.target.checked;
+    setMemoryEnabled(next);
+    setMemoryStatus('');
+    try {
+      localStorage.setItem('ai-terminal-chat:memory-enabled', next ? 'true' : 'false');
+      setMemoryStatus(next ? 'Memory persistence enabled.' : 'Memory persistence disabled.');
+    } catch {
+      setMemoryStatus('Could not save memory setting.');
+      setMemoryEnabled(!next);
+    }
+  };
+
   if (loading) {
     return (
       <main className="settings-page" aria-labelledby="settings-heading">
@@ -294,18 +356,36 @@ const SettingsPage = ({ host }) => {
 
           <div className="settings-field">
             <label htmlFor="settings-model">Model</label>
-            {models.length > 0 && modelsSupported ? (
-              <select
-                id="settings-model"
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-                disabled={saving || loadingModels}
-                aria-describedby="settings-model-help"
-              >
-                {models.map((item) => (
-                  <option key={item.id} value={item.id}>{item.id}</option>
-                ))}
-              </select>
+            {modelsSupported ? (
+              <>
+                <select
+                  id="settings-model"
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  disabled={saving || loadingModels}
+                  aria-describedby="settings-model-help"
+                >
+                  {models.length === 0 && model ? (
+                    <option value={model} disabled>{model} (not installed)</option>
+                  ) : models.length === 0 ? (
+                    <option value="" disabled>No models available</option>
+                  ) : null}
+                  {models.map((item) => (
+                    <option key={item.id} value={item.id}>{item.id}</option>
+                  ))}
+                </select>
+                {models.length === 0 && (
+                  <input
+                    id="settings-model-custom"
+                    type="text"
+                    value={model}
+                    onChange={(event) => setModel(event.target.value)}
+                    disabled={saving}
+                    placeholder="Or type a custom model name"
+                    aria-describedby="settings-model-help"
+                  />
+                )}
+              </>
             ) : (
               <input
                 id="settings-model"
@@ -439,6 +519,45 @@ const SettingsPage = ({ host }) => {
         >
           {allowedCommandsStatus}
         </div>
+      </section>
+
+      <section className="settings-memory" aria-labelledby="memory-heading">
+        <h2 id="memory-heading">Memory</h2>
+        <p className="settings-help">
+          When enabled, the app stores conversation history and context
+          persistently so you can resume chats later. When disabled, chats
+          are kept only in memory for the current session.
+        </p>
+        <div className="settings-field">
+          <label className="settings-toggle-label" htmlFor="settings-memory-toggle">
+            <span className="settings-toggle-text">Persistent memory</span>
+            <span className="settings-toggle-state" aria-live="polite">
+              {memoryEnabled ? 'On' : 'Off'}
+            </span>
+          </label>
+          <div className="settings-toggle-row">
+            <input
+              id="settings-memory-toggle"
+              type="checkbox"
+              role="switch"
+              checked={memoryEnabled}
+              onChange={handleMemoryToggle}
+            />
+            <span className="settings-toggle-visual" aria-hidden="true">
+              <span className="settings-toggle-thumb" />
+            </span>
+          </div>
+        </div>
+        {memoryStatus && (
+          <div
+            className={`settings-status${memoryStatus.startsWith('Could not') ? ' settings-status--error' : ''}`}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {memoryStatus}
+          </div>
+        )}
       </section>
 
       <section className="keyboard-shortcuts" aria-labelledby="keyboard-shortcuts-heading">
