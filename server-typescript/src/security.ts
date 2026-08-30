@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -155,4 +156,64 @@ export function isSensitivePath(filePath: string): boolean {
     return true;
   }
   return isSensitiveFilename(path.basename(filePath));
+}
+
+// Agent read permissions are request-scoped. Undefined means this function is
+// being called outside an agent request (for example by the Project page), so
+// normal project reads remain available. A Set, including an empty Set, means
+// an agent request is active and only the selected relative paths are readable.
+const allowedReadPaths = new AsyncLocalStorage<ReadonlySet<string>>();
+
+function normalizeAllowedPath(requested: string): string {
+  const resolved = safePath(requested);
+  return path.relative(getProjectRoot(), resolved).split(path.sep).join("/");
+}
+
+export function getAllowedReadPaths(): ReadonlySet<string> | undefined {
+  return allowedReadPaths.getStore();
+}
+
+export function setAllowedReadPaths(paths: unknown): ReadonlySet<string> {
+  const normalized = new Set<string>();
+  if (Array.isArray(paths)) {
+    for (const raw of paths) {
+      if (typeof raw !== "string" || !raw.trim()) continue;
+      try {
+        normalized.add(normalizeAllowedPath(raw.trim()));
+      } catch {
+        // Invalid, absolute, or traversal paths are simply not granted.
+      }
+    }
+  }
+  return normalized;
+}
+
+export async function runWithAllowedReadPaths<T>(
+  paths: unknown,
+  callback: () => T | Promise<T>
+): Promise<T> {
+  const allowed = setAllowedReadPaths(paths);
+  return allowedReadPaths.run(allowed, callback);
+}
+
+export function isReadAllowed(requested: string): boolean {
+  const allowed = getAllowedReadPaths();
+  if (allowed === undefined) return true;
+
+  try {
+    return allowed.has(normalizeAllowedPath(requested));
+  } catch {
+    return false;
+  }
+}
+
+export function requireReadAllowed(requested: string): void {
+  const allowed = getAllowedReadPaths();
+  if (allowed === undefined) return;
+
+  if (!isReadAllowed(requested)) {
+    throw new Error(
+      `Access denied: '${requested}' is not in the set of files the user selected for the agent. Select it on the Project page first.`
+    );
+  }
 }
