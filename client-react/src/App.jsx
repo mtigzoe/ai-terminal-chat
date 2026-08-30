@@ -120,7 +120,8 @@ function App() {
   const [pathForTerminal, setPathForTerminal] = useState(null);
   const [allowedPaths, setAllowedPaths] = useState(() => {
     try {
-      const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+      const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
+        ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths');
       if (!raw) return [];
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed : [];
@@ -130,13 +131,16 @@ function App() {
   });
   const is_stream = toggled;
 
+  // Always read selection from storage at send time. React state can be
+  // stale after the user changes selection on the Project page (separate
+  // document) without a focus/visibility event reaching this page.
   const resolveAllowedPaths = () => {
-    if (Array.isArray(allowedPaths)) return allowedPaths;
     try {
-      const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+      const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
+        ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths');
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : [];
     } catch {
       return [];
     }
@@ -147,7 +151,8 @@ function App() {
   useEffect(() => {
     const sync = () => {
       try {
-        const raw = sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+        const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
+          ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths');
         if (!raw) {
           setAllowedPaths([]);
           return;
@@ -163,9 +168,16 @@ function App() {
     };
     window.addEventListener('focus', sync);
     document.addEventListener('visibilitychange', onVisible);
+    // Project page (other document) writes localStorage; storage events fire
+    // cross-tab so chat picks up selection changes without a focus event.
+    const onStorage = (event) => {
+      if (event.key === 'ai-terminal-chat:allowed-paths') sync();
+    };
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener('focus', sync);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
 
@@ -359,7 +371,7 @@ function App() {
       const paths = pendingFiles.map(({ path }) => path).filter(Boolean);
       setAllowedPaths(paths);
       try {
-        sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
+        localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
       } catch {
         // ignore
       }

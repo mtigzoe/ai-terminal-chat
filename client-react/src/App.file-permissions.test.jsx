@@ -22,7 +22,7 @@ function getSendButton() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  sessionStorage.clear();
+  localStorage.clear();
   axios.get.mockResolvedValue({ data: { path: '/tmp/project' } });
   axios.post.mockResolvedValue({ data: { text: 'done', tool_activity: [] } });
 });
@@ -30,11 +30,11 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   delete global.fetch;
-  sessionStorage.clear();
+  localStorage.clear();
 });
 
 test('non-streaming chat sends selected Project paths as allowed_paths', async () => {
-  sessionStorage.setItem(
+  localStorage.setItem(
     'ai-terminal-chat:allowed-paths',
     JSON.stringify(['README.md', 'src/App.jsx'])
   );
@@ -61,7 +61,7 @@ test('non-streaming chat sends an empty selection when no Project files are sele
 });
 
 test('streaming chat sends selected Project paths as allowed_paths', async () => {
-  sessionStorage.setItem(
+  localStorage.setItem(
     'ai-terminal-chat:allowed-paths',
     JSON.stringify(['README.md'])
   );

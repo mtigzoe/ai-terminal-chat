@@ -309,9 +309,9 @@ describe('project root loading', () => {
 describe('allowed_paths from project selection', () => {
   afterEach(() => {
     try {
-      sessionStorage.clear();
+      localStorage.clear();
     } catch {
-      // ignore unavailable sessionStorage
+      // ignore unavailable localStorage
     }
   });
 
@@ -320,7 +320,7 @@ describe('allowed_paths from project selection', () => {
   }
 
   test('non-streaming chat sends allowed_paths: [] when no project files are selected', async () => {
-    sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
+    localStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
 
     axios.post.mockResolvedValue({
       data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
@@ -339,7 +339,7 @@ describe('allowed_paths from project selection', () => {
   });
 
   test('non-streaming chat sends selected file paths as allowed_paths', async () => {
-    sessionStorage.setItem(
+    localStorage.setItem(
       'ai-terminal-chat:pending-files',
       JSON.stringify([{ path: 'README.md', content: '# README' }])
     );
@@ -361,8 +361,8 @@ describe('allowed_paths from project selection', () => {
   });
 
   test('non-streaming chat overwrites stale allowed_paths with [] when project files are deselected', async () => {
-    sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['README.md']));
-    sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
+    localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['README.md']));
+    localStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
 
     axios.post.mockResolvedValue({
       data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
@@ -379,11 +379,11 @@ describe('allowed_paths from project selection', () => {
       );
     });
 
-    expect(sessionStorage.getItem('ai-terminal-chat:allowed-paths')).toBe('[]');
+    expect(localStorage.getItem('ai-terminal-chat:allowed-paths')).toBe('[]');
   });
 
   test('streaming chat sends allowed_paths: [] when no project files are selected', async () => {
-    sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
+    localStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([]));
 
     global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(['streamed ']));
 
@@ -400,7 +400,7 @@ describe('allowed_paths from project selection', () => {
   });
 
   test('streaming chat sends selected file paths as allowed_paths', async () => {
-    sessionStorage.setItem(
+    localStorage.setItem(
       'ai-terminal-chat:pending-files',
       JSON.stringify([{ path: 'README.md', content: '# README' }])
     );

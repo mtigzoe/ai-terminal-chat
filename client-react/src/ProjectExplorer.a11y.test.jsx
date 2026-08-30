@@ -19,7 +19,7 @@ beforeEach(() => {
   axiosInstance.post.mockReset();
   axiosInstance.post.mockResolvedValue({ data: { stdout: '' } });
   try {
-    sessionStorage.clear();
+    localStorage.clear();
   } catch {
     // ignore
   }

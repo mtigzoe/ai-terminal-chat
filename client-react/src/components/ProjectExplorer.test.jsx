@@ -17,9 +17,9 @@ beforeEach(() => {
   axios.post.mockReset();
   axios.post.mockResolvedValue({ data: { stdout: '' } });
   try {
-    sessionStorage.clear();
+    localStorage.clear();
   } catch {
-    // ignore unavailable sessionStorage
+    // ignore unavailable localStorage
   }
 });
 
@@ -301,7 +301,7 @@ test('"Select all files" recursively selects files inside collapsed/unloaded dir
   expect(await screen.findByRole('button', { name: /use selected files with agent \(2\)/i })).toBeInTheDocument();
   expect(axios.get).toHaveBeenCalledWith(`${host}/project/list`, { params: { path: 'sub' } });
   await waitFor(() => {
-    const stored = JSON.parse(sessionStorage.getItem(`project-explorer:${host}:selected`));
+    const stored = JSON.parse(localStorage.getItem(`project-explorer:${host}:selected`));
     expect(stored.sort()).toEqual(['a.txt', 'sub/b.txt']);
   });
 });
@@ -620,7 +620,7 @@ test('sort headers are real buttons; Size and Modified are static, non-sortable 
   expect(screen.queryByRole('button', { name: /^modified$/i })).not.toBeInTheDocument();
 });
 
-test('sessionStorage selection persistence still works after sorting', async () => {
+test('localStorage selection persistence still works after sorting', async () => {
   axios.get.mockResolvedValueOnce({
     data: {
       path: '.',
@@ -637,7 +637,7 @@ test('sessionStorage selection persistence still works after sorting', async () 
   fireEvent.click(screen.getByRole('button', { name: /name, sorted ascending/i }));
 
   await waitFor(() => {
-    const stored = JSON.parse(sessionStorage.getItem(`project-explorer:${host}:selected`));
+    const stored = JSON.parse(localStorage.getItem(`project-explorer:${host}:selected`));
     expect(stored).toEqual(['a.txt']);
   });
 });
