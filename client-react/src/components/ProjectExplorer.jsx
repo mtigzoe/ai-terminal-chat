@@ -67,7 +67,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
   const readStored = (key, fallback) => {
     try {
-      const raw = sessionStorage.getItem(`${storageKey}:${key}`);
+      const raw = localStorage.getItem(`${storageKey}:${key}`) ?? sessionStorage.getItem(`${storageKey}:${key}`);
       if (!raw) return fallback;
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed : fallback;
@@ -232,9 +232,16 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
       return;
     }
     try {
-      sessionStorage.setItem(`${storageKey}:expanded`, JSON.stringify(Array.from(expanded)));
-      sessionStorage.setItem(`${storageKey}:selected`, JSON.stringify(Array.from(selectedFiles)));
-    } catch { /* ignore unavailable sessionStorage */ }
+      localStorage.setItem(`${storageKey}:expanded`, JSON.stringify(Array.from(expanded)));
+      localStorage.setItem(`${storageKey}:selected`, JSON.stringify(Array.from(selectedFiles)));
+      // Keep chat agent read permissions in sync with the Project-page selection.
+      // [] means restriction active with no readable files; a non-empty list
+      // limits the agent to those relative paths only.
+      localStorage.setItem(
+        'ai-terminal-chat:allowed-paths',
+        JSON.stringify(Array.from(selectedFiles))
+      );
+    } catch { /* ignore unavailable localStorage */ }
   }, [expanded, selectedFiles, storageKey]);
 
   const toggleDirectory = async (path, name) => {
@@ -460,6 +467,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     const paths = Array.from(selectedFiles);
     if (!paths.length) {
       setStatus('No files are selected for the agent.');
+      onUseSelectedFiles?.([]);
       return;
     }
     setStatus(`Reading ${paths.length} selected ${paths.length === 1 ? 'file' : 'files'} for the agent.`);
@@ -600,13 +608,13 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         <button type="button" onClick={expandAll}>Expand all</button>
         <button type="button" onClick={async () => {
           setChildren({}); setExpanded(new Set()); setActivePath(null);
-          try { sessionStorage.removeItem(`${storageKey}:expanded`); } catch { /* ignore */ }
+          try { localStorage.removeItem(`${storageKey}:expanded`); sessionStorage.removeItem(`${storageKey}:expanded`); } catch { /* ignore */ }
           const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus();
         }}>Refresh</button>
         <button type="button" onClick={selectAllVisible}>Select all visible</button>
         <button type="button" onClick={selectAllFiles} disabled={selectingAllFiles}>Select all files</button>
         <button type="button" onClick={clearSelection} disabled={selectedFiles.size === 0}>Clear selection</button>
-        <button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>Use selected files with agent ({selectedFiles.size})</button>
+         <button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>Use selected files with agent ({selectedFiles.size})</button>
         {onInsertPathIntoTerminal && <button type="button" onClick={() => {
           const path = activePath || Array.from(selectedFiles)[0] || '.';
           onInsertPathIntoTerminal(path); setStatus(`Sent path ${path} to the terminal command field.`);

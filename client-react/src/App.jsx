@@ -118,11 +118,64 @@ function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const [pathForTerminal, setPathForTerminal] = useState(null);
+  const [allowedPaths, setAllowedPaths] = useState(() => {
+    try {
+      const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
+        ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const is_stream = toggled;
+
+  const resolveAllowedPaths = () => {
+    try {
+      const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
+        ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    const sync = () => {
+      try {
+        const raw = localStorage.getItem('ai-terminal-chat:allowed-paths')
+          ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths');
+        if (!raw) {
+          setAllowedPaths([]);
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        setAllowedPaths(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setAllowedPaths([]);
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sync();
+    };
+    window.addEventListener('focus', sync);
+    document.addEventListener('visibilitychange', onVisible);
+    const onStorage = (event) => {
+      if (event.key === 'ai-terminal-chat:allowed-paths') sync();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('focus', sync);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   useEffect(() => {
     const regions = ['chat', 'terminal'];
-
     const focusRegion = (id) => {
       if (id === 'chat') {
         inputRef.current?.focus();
@@ -134,7 +187,6 @@ function App() {
         }, 0);
       }
     };
-
     const onKeyDown = (event) => {
       if (event.key !== 'F6') return;
       event.preventDefault();
@@ -151,7 +203,6 @@ function App() {
         : (index + 1) % regions.length;
       focusRegion(regions[nextIndex]);
     };
-
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
@@ -215,7 +266,8 @@ function App() {
     requestIdRef.current = requestId;
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const chatData = { chat: message, history: data, request_id: requestId };
+    const resolvedAllowedPaths = resolveAllowedPaths();
+    const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [] };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -244,7 +296,8 @@ function App() {
     fetchData();
   };
   const handleStreamingChat = async (message) => {
-    const chatData = { chat: message, history: data };
+    const resolvedAllowedPaths = resolveAllowedPaths();
+    const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [] };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -290,35 +343,42 @@ function App() {
     let pendingPath = null;
 
     try {
-      const rawFiles = sessionStorage.getItem('ai-terminal-chat:pending-files');
+      const rawFiles = localStorage.getItem('ai-terminal-chat:pending-files');
       if (rawFiles) {
         pendingFiles = JSON.parse(rawFiles);
-        sessionStorage.removeItem('ai-terminal-chat:pending-files');
+        localStorage.removeItem('ai-terminal-chat:pending-files');
       }
-      const rawPath = sessionStorage.getItem('ai-terminal-chat:pending-terminal-path');
+      const rawPath = localStorage.getItem('ai-terminal-chat:pending-terminal-path');
       if (rawPath) {
         pendingPath = rawPath;
-        sessionStorage.removeItem('ai-terminal-chat:pending-terminal-path');
+        localStorage.removeItem('ai-terminal-chat:pending-terminal-path');
       }
     } catch {
       // Ignore storage or parse errors.
     }
 
-    if (Array.isArray(pendingFiles) && pendingFiles.length > 0) {
-      const fileContext = pendingFiles
-        .map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`)
-        .join('\n');
-      const message =
-        `I explicitly selected these project files for you to inspect. ` +
-        `Use the supplied contents as context for your next response.\n${fileContext}`;
-      window.setTimeout(() => handleClick(message), 0);
+    if (Array.isArray(pendingFiles)) {
+      const paths = pendingFiles.map(({ path }) => path).filter(Boolean);
+      setAllowedPaths(paths);
+      try {
+        localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
+      } catch {
+        // ignore
+      }
+      if (pendingFiles.length > 0) {
+        const fileContext = pendingFiles
+          .map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`)
+          .join('\n');
+        const message =
+          `I explicitly selected these project files for you to inspect. ` +
+          `Use the supplied contents as context for your next response.\n${fileContext}`;
+        window.setTimeout(() => handleClick(message), 0);
+      }
     }
 
     if (pendingPath) {
       setPathForTerminal(pendingPath);
     }
-    // Intentional one-time hand-off on mount; handleClick is stable for this use.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

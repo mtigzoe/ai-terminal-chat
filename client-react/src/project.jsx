@@ -37,21 +37,26 @@ function ProjectPage() {
   }, [refreshProjectRoot]);
 
   const handleUseSelectedFiles = (files) => {
-    if (!Array.isArray(files) || files.length === 0) return;
+    if (!Array.isArray(files)) return;
     try {
-      sessionStorage.setItem(
+      localStorage.setItem(
         'ai-terminal-chat:pending-files',
         JSON.stringify(files)
       );
+      const paths = files.map((f) => f.path).filter(Boolean);
+      localStorage.setItem(
+        'ai-terminal-chat:allowed-paths',
+        JSON.stringify(paths)
+      );
     } catch {
-      // sessionStorage may be unavailable
+      // storage may be unavailable
     }
     window.location.assign('./index.html');
   };
 
   const handleInsertPathIntoTerminal = (path) => {
     try {
-      sessionStorage.setItem('ai-terminal-chat:pending-terminal-path', path);
+      localStorage.setItem('ai-terminal-chat:pending-terminal-path', path);
     } catch {
       // ignore
     }

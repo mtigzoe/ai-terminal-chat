@@ -1,6 +1,7 @@
 """Provider-agnostic tool-calling loop with explicit write confirmation."""
 
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextvars import copy_context
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Optional
@@ -140,20 +141,21 @@ def _cancelled_event():
 
 
 def _run_tool_with_timeout(function, function_name: str, function_args: dict, timeout_seconds: float) -> dict:
-    """Run a tool with a timeout without leaving a non-daemon worker behind.
+    """Run a tool with a timeout while preserving request-scoped context.
 
-    Python cannot safely kill an arbitrary running thread. A timed-out tool
-    therefore remains in the background, but the worker is daemonized so a
-    hung tool cannot keep the server or test process alive indefinitely.
-    Tools that spawn subprocesses should enforce their own subprocess timeout
-    as well; run_command does that in tools.py.
+    Agent file permissions are stored in a ContextVar. Python does not
+    automatically propagate ContextVar values into a newly created thread,
+    so the current context is copied before the worker starts and executed
+    explicitly inside that worker. This keeps the Project-page file
+    selection attached to the actual tool invocation.
     """
 
     result_queue: Queue = Queue(maxsize=1)
+    context = copy_context()
 
     def worker():
         try:
-            result_queue.put(function(**function_args))
+            result_queue.put(context.run(function, **function_args))
         except TypeError as exc:
             result_queue.put({
                 "error": f"Malformed arguments for {function_name}: {exc}"

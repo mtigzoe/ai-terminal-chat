@@ -67,12 +67,16 @@ export class OpenAICompatibleProvider extends Provider {
   private async request(
     method: string,
     url: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    timeoutSeconds?: number
   ): Promise<Response> {
     const controller = new AbortController();
+    // Probes/list use a short timeout; chat completions use the full
+    // configured timeout (Ollama cold starts often exceed 10s).
+    const seconds = timeoutSeconds ?? Math.min(this.timeout, 10);
     const timeoutId = setTimeout(
       () => controller.abort(),
-      Math.min(this.timeout, 10) * 1000
+      seconds * 1000
     );
 
     try {
@@ -185,9 +189,14 @@ export class OpenAICompatibleProvider extends Provider {
       body.tools = this.tools;
     }
 
-    const response = await this.request("POST", `${this.baseUrl}/chat/completions`, {
-      body: JSON.stringify(body),
-    });
+    const response = await this.request(
+      "POST",
+      `${this.baseUrl}/chat/completions`,
+      {
+        body: JSON.stringify(body),
+      },
+      this.timeout
+    );
 
     if (!response.ok) {
       const text = await response.text();

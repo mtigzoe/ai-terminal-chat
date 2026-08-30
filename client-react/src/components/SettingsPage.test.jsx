@@ -60,7 +60,7 @@ describe('loading settings', () => {
     await renderLoaded();
 
     expect(screen.getByRole('heading', { name: /active project/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /ai providers/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /provider settings/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/ai provider/i)).toHaveValue('gemini');
     expect(screen.getByLabelText(/^model$/i)).toHaveValue('gemini-3.6-flash');
   });
@@ -209,14 +209,14 @@ describe('saving settings', () => {
 });
 
 describe('page structure', () => {
-  test('places Active Project between navigation and AI Providers', async () => {
+  test('places Active Project between navigation and Provider settings', async () => {
     await renderLoaded();
 
     const nav = screen.getByRole('navigation', { name: /main/i });
     const activeProject = screen.getByRole('heading', { name: /active project/i });
-    const aiProviders = screen.getByRole('heading', { name: /ai providers/i });
+    const providerSettings = screen.getByRole('heading', { name: /provider settings/i });
 
     expect(nav.compareDocumentPosition(activeProject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(activeProject.compareDocumentPosition(aiProviders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(activeProject.compareDocumentPosition(providerSettings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { getProjectRoot } from "./security.ts";
+import { getAllowedReadPaths, getProjectRoot, isReadAllowed } from "./security.ts";
 
 const DEFAULT_ALLOWED_COMMAND_PREFIXES: string[] = [
   "git status",
@@ -214,14 +214,6 @@ export function isCommandAllowed(command: string): boolean {
 
 const MAX_OUTPUT = 20_000;
 
-/**
- * Split a command string into argv-style tokens, mirroring the reference
- * implementation's use of Python's `shlex.split(command, posix=False)`.
- *
- * Whitespace separates tokens; single/double quoted spans are kept intact
- * (including the quote characters themselves, matching posix=False) so a
- * quoted argument containing spaces is not split apart.
- */
 function shlexSplit(command: string): string[] {
   const tokens: string[] = [];
   let current = "";
@@ -232,9 +224,7 @@ function shlexSplit(command: string): string[] {
     if (quoteChar) {
       current += c;
       hasToken = true;
-      if (c === quoteChar) {
-        quoteChar = null;
-      }
+      if (c === quoteChar) quoteChar = null;
       continue;
     }
 
@@ -258,24 +248,91 @@ function shlexSplit(command: string): string[] {
     hasToken = true;
   }
 
-  if (hasToken) {
-    tokens.push(current);
+  if (hasToken) tokens.push(current);
+  return tokens;
+}
+
+const FILE_CONTENT_COMMAND_PREFIXES = [
+  "cat",
+  "type",
+  "Get-Content",
+  "gc",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "nl",
+  "git show",
+  "git diff",
+];
+
+function commandReadsFileContents(command: string): boolean {
+  const trimmed = command.trim();
+  return FILE_CONTENT_COMMAND_PREFIXES.some(
+    (prefix) =>
+      trimmed === prefix ||
+      trimmed.startsWith(prefix + " ") ||
+      trimmed.toLowerCase().startsWith(prefix.toLowerCase() + " ")
+  );
+}
+
+function contentPathArguments(command: string): string[] {
+  const args = shlexSplit(command);
+  if (args.length < 2) return [];
+  return args.slice(1).filter((arg) => arg && !arg.startsWith("-"));
+}
+
+function gitShowPathAllowed(arg: string): boolean {
+  // `git show REF:path` names a repository path after the first colon.
+  const colon = arg.indexOf(":");
+  if (colon >= 0 && colon + 1 < arg.length) {
+    return isReadAllowed(arg.slice(colon + 1));
+  }
+  return false;
+}
+
+function runCommandRespectsReadPermissions(command: string): Record<string, unknown> | null {
+  const allowed = getAllowedReadPaths();
+  if (allowed === undefined || !commandReadsFileContents(command)) return null;
+
+  const args = contentPathArguments(command);
+  const lower = command.toLowerCase();
+
+  if (lower.startsWith("git show ")) {
+    if (args.length === 1 && gitShowPathAllowed(args[0])) return null;
+    return {
+      error:
+        "Access denied: git show can expose file contents and the requested file was not selected on the Project page.",
+    };
   }
 
-  return tokens;
+  if (lower === "git diff" || lower.startsWith("git diff ")) {
+    if (args.length > 0 && args.every((arg) => arg === "--" || isReadAllowed(arg))) {
+      const realPaths = args.filter((arg) => arg !== "--");
+      if (realPaths.length > 0 && realPaths.every((arg) => isReadAllowed(arg))) return null;
+    }
+    return {
+      error:
+        "Access denied: git diff can expose file contents and is blocked unless it is scoped to selected files.",
+    };
+  }
+
+  if (args.length > 0 && args.every((arg) => isReadAllowed(arg))) return null;
+
+  return {
+    error:
+      `Access denied for ${args.join(", ") || "the requested file"}: this command can read arbitrary file contents and is blocked while agent file selection is active. Select the file on the Project page first.`,
+  };
 }
 
 export function runCommand(command: string): Record<string, unknown> {
   const trimmed = (command || "").trim();
-  if (!trimmed) {
-    return { error: "No command was provided." };
-  }
+  if (!trimmed) return { error: "No command was provided." };
 
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(trimmed)) {
-      return {
-        error: `This command is blocked for safety: ${trimmed}`,
-      };
+      return { error: `This command is blocked for safety: ${trimmed}` };
     }
   }
 
@@ -294,11 +351,12 @@ export function runCommand(command: string): Record<string, unknown> {
     };
   }
 
+  const permissionError = runCommandRespectsReadPermissions(trimmed);
+  if (permissionError) return permissionError;
+
   try {
     const parsedArgs = shlexSplit(trimmed);
-    if (parsedArgs.length === 0) {
-      return { error: "No command was provided." };
-    }
+    if (parsedArgs.length === 0) return { error: "No command was provided." };
 
     let args: string[];
     if (process.platform === "win32") {
@@ -320,9 +378,7 @@ export function runCommand(command: string): Record<string, unknown> {
 
     if (result.error) {
       const err = result.error as NodeJS.ErrnoException;
-      if (err.code === "ETIMEDOUT") {
-        return { error: "Command timed out after 60 seconds." };
-      }
+      if (err.code === "ETIMEDOUT") return { error: "Command timed out after 60 seconds." };
       return { error: `Could not execute command: ${err.message}` };
     }
 

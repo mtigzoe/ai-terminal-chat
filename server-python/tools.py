@@ -19,8 +19,11 @@ from pathlib import Path
 
 from security import (
     PROJECT_ROOT,
+    get_allowed_read_paths,
+    is_read_allowed,
     is_sensitive_filename,
     is_sensitive_path,
+    require_read_allowed,
     safe_path,
 )
 
@@ -51,11 +54,24 @@ def list_files(path: str = ".") -> dict:
         return {"error": f"Not a directory: {path}"}
 
     entries = []
+    allowed = get_allowed_read_paths()
+    dir_rel = directory.relative_to(PROJECT_ROOT).as_posix()
 
     for item in sorted(
         directory.iterdir(),
         key=lambda p: p.name.lower()
     ):
+        if allowed is not None:
+            item_rel = (
+                f"{dir_rel}/{item.name}" if dir_rel not in (".", "") else item.name
+            )
+            if item.is_dir():
+                prefix = item_rel.rstrip("/") + "/"
+                if not any(a == item_rel or a.startswith(prefix) for a in allowed):
+                    continue
+            else:
+                if item_rel not in allowed:
+                    continue
         entries.append(
             {
                 "name": item.name,
@@ -92,6 +108,11 @@ def read_file(path: str) -> dict:
                 f"exposed to the model."
             )
         }
+
+    try:
+        require_read_allowed(file_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     if not file_path.exists():
         return {"error": f"File does not exist: {path}"}
@@ -186,6 +207,8 @@ def search_files(query: str, path: str = ".") -> dict:
                 continue
 
             file_path = Path(root) / filename
+            if not is_read_allowed(file_path):
+                continue
 
             try:
                 if file_path.stat().st_size > max_file_size:
@@ -446,6 +469,75 @@ def remove_allowed_command(prefix: str) -> list[str]:
 # Load any user-configured allowlist at import time.
 reload_allowed_commands()
 
+# Commands that can print arbitrary file contents. When an allowed-read set is
+# active these must not be used to bypass read_file permission checks.
+_FILE_CONTENT_COMMAND_PREFIXES = (
+    "cat",
+    "type",
+    "Get-Content",
+    "gc",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "bat",
+    "nl",
+    # Git content dumpers — can expose unselected file bodies
+    "git show",
+    "git diff",
+)
+
+
+def _command_reads_file_contents(command: str) -> bool:
+    """True if the command is a known file-content printer."""
+
+    cmd = command.strip()
+    for prefix in _FILE_CONTENT_COMMAND_PREFIXES:
+        if cmd == prefix or cmd.startswith(prefix + " "):
+            return True
+        if cmd.lower().startswith(prefix.lower() + " "):
+            return True
+    return False
+
+
+def _run_command_respects_read_permissions(command: str) -> dict | None:
+    """If a restriction is active, refuse shell commands that dump file contents.
+
+    Returns an error dict when the command must be blocked, else None.
+    When the command targets only paths in the allowed set, it is permitted.
+    """
+
+    allowed = get_allowed_read_paths()
+    if allowed is None:
+        return None
+
+    if not _command_reads_file_contents(command):
+        return None
+
+    # Try to allow if every path argument is in the selected set.
+    try:
+        args = shlex.split(command, posix=False)
+    except ValueError:
+        args = command.split()
+
+    path_args = [a for a in args[1:] if a and not a.startswith("-")]
+    if path_args and all(
+        is_read_allowed(p) for p in path_args
+    ):
+        return None
+
+    paths_hint = ", ".join(path_args) if path_args else "the requested file"
+    return {
+        "error": (
+            f"Access denied for {paths_hint}: this command can read arbitrary "
+            "file contents and is blocked while an agent file-selection is "
+            "active. Select the file on the Project page, or use the "
+            "read_file tool on a selected file."
+        )
+    }
+
+
+
 
 def is_command_allowed(command: str) -> bool:
     """True if the command matches one of the allowed dev-command prefixes."""
@@ -502,6 +594,10 @@ def run_command(command: str) -> dict:
                 f"prefixes: {sorted(ALLOWED_COMMAND_PREFIXES)}"
             )
         }
+
+    permission_error = _run_command_respects_read_permissions(command)
+    if permission_error is not None:
+        return permission_error
 
     try:
         args = shlex.split(command, posix=False)
@@ -845,7 +941,20 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
         except ValueError as exc:
             return {"error": str(exc)}
 
+        try:
+            require_read_allowed(file_path)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
         args.append(str(file_path.relative_to(PROJECT_ROOT)))
+    elif get_allowed_read_paths() is not None:
+        return {
+            "error": (
+                "A path is required while agent file-selection is active. "
+                "Pass an allowed relative path, or use read_file on a "
+                "selected file."
+            )
+        }
 
     try:
         result = subprocess.run(

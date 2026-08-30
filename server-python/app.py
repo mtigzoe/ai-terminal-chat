@@ -23,9 +23,11 @@ from pending import get_pending, pop_pending
 from providers import SUPPORTED_PROVIDERS, get_provider
 from security import (
     PROJECT_ROOT,
+    clear_allowed_read_paths,
     get_project_root,
     is_sensitive_filename,
     safe_path,
+    set_allowed_read_paths,
     set_project_root,
 )  # noqa: F401
 from tools import (
@@ -416,6 +418,23 @@ def confirm_action():
     }
 
 
+
+def _extract_allowed_paths(data: dict):
+    """Return allowed_paths from the request body.
+
+    Always returns a list. Missing key, non-list, or empty list means the
+    agent may not read any project files until the user selects some on
+    the Project page. Only explicitly listed relative paths are readable.
+    """
+
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("allowed_paths")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, str) and item.strip()]
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json(silent=True) or {}
@@ -439,6 +458,8 @@ def chat():
     error_message = None
     cancelled = False
     cancel_event = cancellation.register(request_id)
+    allowed_paths = _extract_allowed_paths(data)
+    set_allowed_read_paths(allowed_paths)
 
     try:
         for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
@@ -473,6 +494,7 @@ def chat():
     except Exception as exc:
         error_message = f"Unexpected server error: {exc}"
     finally:
+        clear_allowed_read_paths()
         cancellation.release(request_id)
 
     if cancelled:
@@ -522,6 +544,8 @@ def stream():
             return
 
         cancel_event = cancellation.register(request_id)
+        allowed_paths = _extract_allowed_paths(data)
+        set_allowed_read_paths(allowed_paths)
 
         try:
             for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
@@ -549,6 +573,7 @@ def stream():
         except Exception as exc:
             yield f"\n[Error: {exc}]"
         finally:
+            clear_allowed_read_paths()
             cancellation.release(request_id)
 
     return Response(stream_with_context(generate()), mimetype="text/plain")
