@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { safePath, getProjectRoot, setProjectRoot, isSensitiveFilename, isSensitivePath } from "../src/security.ts";
+import { safePath, getProjectRoot, setProjectRoot, isSensitiveFilename, isSensitivePath, runWithAllowedReadPaths } from "../src/security.ts";
 import { listFiles, readFile, searchFiles } from "../src/filesystem.ts";
 import { runCommand, getAllowedCommands, isCommandAllowed, addAllowedCommand, removeAllowedCommand } from "../src/terminal.ts";
 import { git_add as gitAdd } from "../src/write-tools.ts";
@@ -149,15 +149,10 @@ describe("runCommand", () => {
     const result = runCommand("node --version");
     expect(result.error).toBeUndefined();
     expect(result.returncode).toBe(0);
-    // Regression check: a naive implementation that fails to split the
-    // command into argv tokens silently "succeeds" with empty output
-    // instead of actually running the binary, so assert real output.
     expect(String(result.stdout).trim()).toMatch(/^v?\d+\.\d+\.\d+/);
   });
 
   it("correctly splits multi-word allowed commands into argv", () => {
-    // "node --version" must be spawned as `node` with arg `--version`,
-    // not as a single executable literally named "node --version".
     const result = runCommand("node --version");
     expect(result.error).toBeUndefined();
     expect(result.command).toBe("node --version");
@@ -165,12 +160,65 @@ describe("runCommand", () => {
   });
 
   it("surfaces an error instead of a fake success for a missing binary", () => {
-    // "wsl" is allowlisted by default but won't exist on this (Linux) test
-    // host, so it exercises the ENOENT path without mutating the shared
-    // allowlist config used by other tests.
     const result = runCommand("wsl");
     expect(result.error).toBeDefined();
     expect(result.returncode).toBeUndefined();
+  });
+});
+
+describe("agent file-read permissions", () => {
+  it("denies an unselected file and allows a selected file", async () => {
+    fs.writeFileSync(path.join(TEST_DIR, "README.md"), "README secret contents");
+    fs.writeFileSync(path.join(TEST_DIR, "selected.txt"), "selected contents");
+
+    await runWithAllowedReadPaths(["selected.txt"], () => {
+      const denied = readFile("README.md");
+      expect(denied.error).toContain("not in the set of files the user selected");
+      expect(denied.contents).toBeUndefined();
+
+      const allowed = readFile("selected.txt");
+      expect(allowed.contents).toBe("selected contents");
+    });
+  });
+
+  it("filters unselected files from list and search", async () => {
+    fs.mkdirSync(path.join(TEST_DIR, "src"));
+    fs.writeFileSync(path.join(TEST_DIR, "README.md"), "README secret contents");
+    fs.writeFileSync(path.join(TEST_DIR, "src", "selected.ts"), "selected secret contents");
+
+    await runWithAllowedReadPaths(["src/selected.ts"], () => {
+      const root = listFiles(".");
+      const rootNames = (root.entries as { name: string }[]).map((entry) => entry.name);
+      expect(rootNames).not.toContain("README.md");
+      expect(rootNames).toContain("src");
+
+      const matches = searchFiles("secret", ".");
+      expect(matches.matches).toHaveLength(1);
+      expect(matches.matches[0].path).toContain("selected.ts");
+    });
+  });
+
+  it("blocks a file-content shell command even when that command is allowlisted", async () => {
+    fs.writeFileSync(path.join(TEST_DIR, "README.md"), "README secret contents");
+
+    const alreadyAllowed = getAllowedCommands().includes("cat");
+    if (!alreadyAllowed) addAllowedCommand("cat");
+    try {
+      await runWithAllowedReadPaths(["selected.txt"], () => {
+        const result = runCommand("cat README.md");
+        expect(result.error).toContain("Access denied");
+        expect(result.stdout).toBeUndefined();
+      });
+    } finally {
+      if (!alreadyAllowed) removeAllowedCommand("cat");
+    }
+  });
+
+  it("blocks git show of an unselected file", async () => {
+    await runWithAllowedReadPaths(["selected.txt"], () => {
+      const result = runCommand("git show HEAD:README.md");
+      expect(result.error).toContain("Access denied");
+    });
   });
 });
 
