@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   getAllowedReadPaths,
   getProjectRoot,
-  isReadAllowed,
   isSensitiveFilename,
   isSensitivePath,
   requireReadAllowed,
@@ -187,7 +186,9 @@ export function searchFiles(
       if (isSensitiveFilename(file.name)) continue;
 
       const filePath = path.join(dir, file.name);
-      if (!isReadAllowed(filePath)) continue;
+      const fileRelative = path.relative(getProjectRoot(), filePath).split(path.sep).join("/");
+      const allowed = getAllowedReadPaths();
+      if (allowed !== undefined && !allowed.has(fileRelative)) continue;
 
       let fileSize = 0;
       try {

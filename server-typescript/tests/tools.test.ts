@@ -160,7 +160,7 @@ describe("runCommand", () => {
   });
 
   it("surfaces an error instead of a fake success for a missing binary", () => {
-    const result = runCommand("wsl");
+    const result = runCommand("wsl-not-installed-xyz");
     expect(result.error).toBeDefined();
     expect(result.returncode).toBeUndefined();
   });
