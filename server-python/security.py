@@ -286,12 +286,13 @@ def is_sensitive_path(file_path: Path) -> bool:
 # When the user selects files on the Project page, those relative paths become
 # the only files the agent may read through filesystem tools.  The set is
 # request-scoped via a context variable so concurrent chats stay isolated.
-# Default is an empty frozenset: no selection means no reads.  ``None`` is
-# unrestricted and reserved for internal/tests only.
+# Default is None (unrestricted) so the normal Project page can browse the
+# project. During an agent request, app.py explicitly installs the selected
+# paths; an empty list then means restriction active with no readable files.
 # Existing PROJECT_ROOT and sensitive-file rules always still apply.
 
 _allowed_read_paths: ContextVar[Optional[frozenset[str]]] = ContextVar(
-    "allowed_read_paths", default=frozenset()
+    "allowed_read_paths", default=None
 )
 
 
@@ -310,7 +311,7 @@ def _normalize_allowed_path(path: str) -> str:
 def set_allowed_read_paths(paths: Optional[Iterable[str]]) -> Optional[frozenset[str]]:
     """Validate and install the allowed read set for the current context.
 
-    ``None`` means unrestricted (no permission information / legacy).
+    ``None`` means unrestricted (normal non-agent filesystem browsing).
     An empty iterable installs an empty frozenset: restriction active, no
     files readable.  Invalid path entries are dropped.
 
@@ -373,7 +374,8 @@ def is_read_allowed(path: str | Path) -> bool:
     """True if the path may be read under the current permission set.
 
     Call after safe_path / sensitive checks.  When unrestricted (None),
-    always returns True.  An empty frozenset (the default) denies all.
+    always returns True.  An empty frozenset (the agent's no-selection case)
+    denies all.
     """
 
     allowed = _allowed_read_paths.get()
