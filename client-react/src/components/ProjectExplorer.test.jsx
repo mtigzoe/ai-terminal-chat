@@ -149,13 +149,16 @@ test('periodic refresh triggers another git status request after approximately 5
   });
   axios.post.mockResolvedValue({ data: { stdout: '' } });
 
-  render(<ProjectExplorer host={host} />);
+  const { unmount } = render(<ProjectExplorer host={host} />);
 
   await screen.findByRole('treeitem', { name: /README\.md, file/i });
   expect(axios.post).toHaveBeenCalledTimes(1);
 
   const intervalCall = setIntervalSpy.mock.calls.find(([callback, delay]) => typeof callback === 'function' && delay === 5000);
   expect(intervalCall).toBeTruthy();
+
+  unmount();
+  expect(clearIntervalSpy).toHaveBeenCalled();
 
   setIntervalSpy.mockRestore();
   clearIntervalSpy.mockRestore();
