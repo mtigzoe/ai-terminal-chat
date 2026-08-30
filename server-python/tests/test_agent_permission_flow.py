@@ -55,7 +55,7 @@ def test_chat_passes_selected_paths_into_agent_context(isolated_project, monkeyp
     assert observed["selected"]["contents"] == "selected contents"
     assert "error" in observed["unselected"]
     assert "contents" not in observed["unselected"]
-    assert security.get_allowed_read_paths() == frozenset()
+    assert security.get_allowed_read_paths() is None
 
 
 def test_chat_with_no_selection_denies_file_reads(isolated_project, monkeypatch):
@@ -77,7 +77,7 @@ def test_chat_with_no_selection_denies_file_reads(isolated_project, monkeypatch)
     assert response.status_code == 200
     assert "error" in observed["result"]
     assert "selected" in observed["result"]["error"].lower()
-    assert security.get_allowed_read_paths() == frozenset()
+    assert security.get_allowed_read_paths() is None
 
 
 def test_stream_passes_selected_paths_into_agent_context(isolated_project, monkeypatch):
@@ -100,7 +100,7 @@ def test_stream_passes_selected_paths_into_agent_context(isolated_project, monke
     assert observed["selected"]["contents"] == "selected contents"
     assert "error" in observed["unselected"]
     assert "contents" not in observed["unselected"]
-    assert security.get_allowed_read_paths() == frozenset()
+    assert security.get_allowed_read_paths() is None
 
 
 def test_agent_tool_thread_inherits_selected_file_permissions(isolated_project):
