@@ -535,9 +535,11 @@ Main endpoints implemented by the Flask backend:
 
 ### Future work
 
-- Continue improving cross-platform startup and developer tooling.
-- Expand accessibility regression coverage and manual screen-reader testing guidance.
-- Evaluate additional local/offline model integrations.
+* **Real-time Git status:** Show the current Git status to the user while the AI agent is working, without requiring the user to run a separate `git status` command. This should provide useful repository information such as the current branch, working-tree changes, and other relevant Git state in real time. The feature should work across the supported Windows, Linux, and macOS environments.
+
+* **Cross-platform startup and developer tooling:** Continue improving the development and startup scripts for Windows PowerShell and Linux/macOS shell environments. Keep the commands and script organization consistent across platforms while preserving compatibility with the existing Python and TypeScript backends, React web application, and Electron development workflow.
+
+* **Accessibility regression coverage:** Expand automated accessibility tests and manual screen-reader testing guidance to help prevent regressions. Testing should continue to consider keyboard-only use and screen-reader workflows, including JAWS, NVDA, and other supported accessibility environments.
 
 ## Testing
 
