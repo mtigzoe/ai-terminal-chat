@@ -205,6 +205,11 @@ export function removeAllowedCommand(prefix: string): string[] {
   return getAllowedCommands();
 }
 
+/** Replace the runtime allowlist without persisting it; intended for tests. */
+export function __setAllowedCommandsForTests(prefixes: string[]): void {
+  allowedCommandPrefixes = [...prefixes];
+}
+
 /** True when a command is exactly a prefix or starts with the prefix plus whitespace. */
 export function isCommandAllowed(command: string): boolean {
   return allowedCommandPrefixes.some(
