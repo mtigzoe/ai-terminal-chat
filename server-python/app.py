@@ -41,6 +41,7 @@ from tools import (
     WRITE_TOOL_NAMES,
     add_allowed_command,
     get_allowed_commands,
+    git_status,
     is_command_allowed,
     list_files,
     read_file,
@@ -465,6 +466,13 @@ def chat():
     msg = data.get("chat", "")
     history = data.get("history", [])
     request_id = str(data.get("request_id") or uuid.uuid4().hex)
+    user_instructions = str(data.get("instructions") or "").strip()
+    if user_instructions and msg:
+        msg = (
+            "[User special instructions — follow these for this request]\n"
+            f"{user_instructions}\n\n"
+            f"{msg}"
+        )
 
     if not msg or not str(msg).strip():
         return {"text": "", "error": "Message must not be empty."}, 400
@@ -556,6 +564,13 @@ def stream():
         msg = data.get("chat", "")
         history = data.get("history", [])
         request_id = str(data.get("request_id") or uuid.uuid4().hex)
+        user_instructions = str(data.get("instructions") or "").strip()
+        if user_instructions and msg:
+            msg = (
+                "[User special instructions — follow these for this request]\n"
+                f"{user_instructions}\n\n"
+                f"{msg}"
+            )
 
         if not msg or not str(msg).strip():
             yield "Please enter a message."
@@ -657,6 +672,21 @@ def terminal_run():
     if not command:
         return {"error": "command is required."}, 400
     result = run_command(command)
+    if isinstance(result, dict) and result.get("error"):
+        return result, 400
+    return result
+
+
+@app.route("/git-status", methods=["GET"])
+def git_status_endpoint():
+    """Lightweight structured Git status for the chat UI.
+
+    Reuses tools.git_status so the panel stays consistent with the
+    agent-facing Git status tool. Intended for frequent polling while
+    an agent request is active; does not block the /stream response.
+    """
+
+    result = git_status()
     if isinstance(result, dict) and result.get("error"):
         return result, 400
     return result

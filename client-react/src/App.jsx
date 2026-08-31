@@ -4,6 +4,7 @@ import { flushSync } from 'react-dom';
 import './App.css';
 
 import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
+import GitStatusPanel from './components/GitStatusPanel.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import ProviderSelector from './components/ProviderSelector.jsx';
@@ -137,6 +138,16 @@ function App() {
       return [];
     }
   });
+
+  const readUserInstructions = () => {
+    try {
+      const raw = localStorage.getItem('ai-terminal-chat:user-instructions');
+      return typeof raw === 'string' ? raw.trim() : '';
+    } catch {
+      return '';
+    }
+  };
+
   const is_stream = toggled;
 
   const resolveAllowedPaths = () => {
@@ -360,7 +371,8 @@ function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [] };
+    const userInstructions = readUserInstructions();
+    const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], ...(userInstructions ? { instructions: userInstructions } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -390,7 +402,8 @@ function App() {
   };
   const handleStreamingChat = async (message) => {
     const resolvedAllowedPaths = resolveAllowedPaths();
-    const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [] };
+    const userInstructions = readUserInstructions();
+    const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [], ...(userInstructions ? { instructions: userInstructions } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
@@ -520,6 +533,7 @@ function App() {
           <div id="message-input-region">
             <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
           </div>
+          <GitStatusPanel host={host} waiting={waiting} />
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
 

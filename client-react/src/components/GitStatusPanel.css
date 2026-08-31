@@ -1,0 +1,33 @@
+.git-status-panel {
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  text-align: left;
+}
+
+.git-status-panel.clean {
+  opacity: 0.75;
+}
+
+.git-status-panel.dirty {
+  font-weight: 600;
+}
+
+.git-status-error {
+  color: #a33;
+}
+
+@media (forced-colors: active) {
+  .git-status-panel {
+    border-color: ButtonText;
+    color: ButtonText;
+  }
+
+  .git-status-error {
+    color: ButtonText;
+  }
+}

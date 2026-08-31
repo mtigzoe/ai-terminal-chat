@@ -402,6 +402,18 @@ app.post("/terminal/run", async (c) => {
   return c.json(result);
 });
 
+app.get("/git-status", async (c) => {
+  // Lightweight structured Git status for the chat UI.
+  // Reuses gitStatusSummary so the panel stays consistent with the
+  // agent-facing git_status tool. Intended for frequent polling while
+  // an agent request is active; does not block the /stream response.
+  const result = await gitStatusSummary();
+  if (result && typeof result === "object" && "error" in result) {
+    return c.json(result, 400 as any);
+  }
+  return c.json(result);
+});
+
 app.post("/chat", async (c) => {
   let data: Record<string, unknown> = {};
   try {
@@ -410,9 +422,17 @@ app.post("/chat", async (c) => {
     return c.json({ text: "", error: "Invalid JSON body." }, 400 as any);
   }
 
-  const msg = String(data.chat || "").trim();
+  let msg = String(data.chat || "").trim();
   const history: unknown[] = Array.isArray(data.history) ? data.history : [];
   const requestId = String(data.request_id || crypto.randomUUID());
+  const userInstructions = String(data.instructions || "").trim();
+  if (userInstructions && msg) {
+    msg =
+      "[User special instructions — follow these for this request]\n" +
+      userInstructions +
+      "\n\n" +
+      msg;
+  }
 
   if (!msg) {
     return c.json({ text: "", error: "Message must not be empty." }, 400 as any);
@@ -510,9 +530,17 @@ app.post("/stream", async (c) => {
     return c.text("Please enter a message.");
   }
 
-  const msg = String(data.chat || "").trim();
+  let msg = String(data.chat || "").trim();
   const history: unknown[] = Array.isArray(data.history) ? data.history : [];
   const requestId = String(data.request_id || crypto.randomUUID());
+  const userInstructions = String(data.instructions || "").trim();
+  if (userInstructions && msg) {
+    msg =
+      "[User special instructions — follow these for this request]\n" +
+      userInstructions +
+      "\n\n" +
+      msg;
+  }
 
   if (!msg) {
     return c.text("Please enter a message.");

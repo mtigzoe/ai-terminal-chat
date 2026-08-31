@@ -118,14 +118,64 @@ const SettingsPage = ({ host }) => {
         ]);
         if (!active) return;
         setProviderNames(providerResponse.data.providers || []);
-        setProvider(providerResponse.data.name || '');
-        setModel(providerResponse.data.model || '');
-        if ((providerResponse.data.name || '').toLowerCase() === 'ollama') {
-          setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
-        }
         setAllowedCommands(allowedCommandsResponse.data.commands || []);
         setStatusMessage('');
-        await loadModels(providerResponse.data.name, providerResponse.data.model || '');
+
+        const serverName = (providerResponse.data.name || '').toLowerCase();
+        const serverModel = providerResponse.data.model || '';
+        const cached = readStoredProvider();
+        const cachedName = (cached?.provider || '').toLowerCase();
+
+        // Prefer the last saved selection from this browser when the server
+        // still has a different default (e.g. after a backend restart that
+        // did not restore config, or a first open on a new machine).
+        if (cachedName && cachedName !== serverName) {
+          try {
+            const restorePayload = {
+              provider: cached.provider,
+              model: cached.model || undefined,
+            };
+            if (cachedName === 'ollama' && cached.ollama_hostname) {
+              restorePayload.ollama_base_url = cached.ollama_hostname;
+            }
+            const restored = await axios.post(`${host}/providers/select`, restorePayload);
+            const name = restored.data.name || cached.provider;
+            const modelName = restored.data.model || cached.model || '';
+            setProvider(name);
+            setModel(modelName);
+            if (String(name).toLowerCase() === 'ollama') {
+              const nextHost = formatOllamaHostname(restored.data.base_url) || cached.ollama_hostname || 'localhost:11434';
+              setOllamaHostname(nextHost);
+              writeStoredProvider({ provider: name, model: modelName, ollama_hostname: nextHost });
+            } else {
+              writeStoredProvider({ provider: name, model: modelName });
+            }
+            await loadModels(name, modelName);
+          } catch {
+            setProvider(providerResponse.data.name || '');
+            setModel(serverModel);
+            if (serverName === 'ollama') {
+              setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
+            }
+            await loadModels(providerResponse.data.name, serverModel);
+          }
+        } else {
+          setProvider(providerResponse.data.name || '');
+          setModel(serverModel);
+          if (serverName === 'ollama') {
+            setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
+          }
+          if (cachedName === serverName && cached?.model) {
+            writeStoredProvider({
+              provider: providerResponse.data.name || cached.provider,
+              model: serverModel || cached.model,
+              ...(serverName === 'ollama'
+                ? { ollama_hostname: formatOllamaHostname(providerResponse.data.base_url) || cached.ollama_hostname }
+                : {}),
+            });
+          }
+          await loadModels(providerResponse.data.name, serverModel);
+        }
       } catch {
         if (active) {
           setStatusIsError(true);
@@ -351,6 +401,44 @@ const SettingsPage = ({ host }) => {
               <p id="settings-ollama-hostname-help" className="settings-help">
                 Enter the hostname and port where Ollama is running, such as localhost:11434 or cyber.local:11434. You do not need to edit the .env file.
               </p>
+              <div className="settings-ollama-actions" style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                <a
+                  href="https://ollama.com/download"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="settings-secondary-button"
+                >
+                  Install Ollama
+                </a>
+                <button
+                  type="button"
+                  className="settings-secondary-button"
+                  disabled={!model}
+                  onClick={() => {
+                    const cmd = `ollama run ${model}`;
+                    if (navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(cmd).then(
+                        () => {
+                          setStatusIsError(false);
+                          setStatusMessage(`Copied: ${cmd}`);
+                        },
+                        () => {
+                          setStatusIsError(false);
+                          setStatusMessage(`Run in a terminal: ${cmd}`);
+                        }
+                      );
+                    } else {
+                      setStatusIsError(false);
+                      setStatusMessage(`Run in a terminal: ${cmd}`);
+                    }
+                  }}
+                >
+                  Copy ollama run
+                </button>
+                <span className="settings-help" style={{ margin: 0 }}>
+                  Install from the website, then use <code>ollama run</code> for the selected model without typing the full command.
+                </span>
+              </div>
             </div>
           ) : null}
 
