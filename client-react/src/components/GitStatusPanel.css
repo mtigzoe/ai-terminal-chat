@@ -17,6 +17,10 @@
   font-weight: 600;
 }
 
+.git-status-summary {
+  margin: 0;
+}
+
 .git-status-error {
   color: #a33;
 }

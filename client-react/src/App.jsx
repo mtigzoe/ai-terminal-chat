@@ -4,7 +4,7 @@ import { flushSync } from 'react-dom';
 import './App.css';
 
 import ConversationDisplayArea from './components/ConversationDisplayArea.jsx';
-import GitStatusPanel from './components/GitStatusPanel.jsx';
+import GitStatusPanel, { REPO_MUTATING_TOOLS } from './components/GitStatusPanel.jsx';
 import Header from './components/Header.jsx';
 import MessageInput from './components/MessageInput.jsx';
 import ProviderSelector from './components/ProviderSelector.jsx';
@@ -115,6 +115,8 @@ function App() {
   const [streamToolActivity, setStreamToolActivity] = useState([]);
   const [toggled, setToggled] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  const [gitStatusRefresh, setGitStatusRefresh] = useState(0);
+  const bumpGitStatus = () => setGitStatusRefresh((n) => n + 1);
   const [agentStatus, setAgentStatus] = useState(null);
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
@@ -351,7 +353,7 @@ function App() {
         if (lastModelIndex === -1) return current;
         return current.map((message, index) => index !== lastModelIndex ? message : { ...message, toolActivity: [...(message.toolActivity || []), resultEvent] });
       });
-      setAgentStatus({ phase: confirmed ? 'complete' : 'cancelled', message: confirmed ? 'Action approved and completed.' : 'Action denied by user.', assertive: false });
+      setAgentStatus({ phase: confirmed ? 'complete' : 'cancelled', message: confirmed ? 'Action approved and completed.' : 'Action denied by user.', assertive: false }); if (confirmed && REPO_MUTATING_TOOLS.has(action.name)) bumpGitStatus();
       setPendingConfirmation(null);
     } catch (error) {
       setAgentStatus({ phase: 'error', message: getErrorMessage(error, 'Could not resolve confirmation.'), assertive: true });
@@ -374,7 +376,7 @@ function App() {
     const userInstructions = readUserInstructions();
     const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], ...(userInstructions ? { instructions: userInstructions } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
-    flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
+    flushSync(() => { setData(ndata); setWaiting(true); bumpGitStatus(); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
     const headerConfig = { headers: { 'Content-Type': 'application/json;charset=UTF-8' }, signal: controller.signal };
     const fetchData = async () => {
@@ -393,7 +395,7 @@ function App() {
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
         requestIdRef.current = null;
         const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }];
-        flushSync(() => { setData(updatedData); setWaiting(false); });
+        flushSync(() => { setData(updatedData); setWaiting(false); bumpGitStatus(); });
         executeScroll();
         window.setTimeout(() => inputRef.current?.focus(), 0);
       }
@@ -405,7 +407,7 @@ function App() {
     const userInstructions = readUserInstructions();
     const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [], ...(userInstructions ? { instructions: userInstructions } : {}) };
     const ndata = [...data, { role: "user", parts: [{ text: message }] }];
-    flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
+    flushSync(() => { setData(ndata); setWaiting(true); bumpGitStatus(); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
     const headerConfig = { Accept: "application/x-ndjson, text/plain", "Content-Type": "application/json" };
     const fetchStreamData = async () => {
@@ -417,7 +419,7 @@ function App() {
         if (event.type === "progress") { const status = statusFromProgressEvent(event); if (status) setAgentStatus(status); toolActivity.push({ type: "progress", phase: event.phase, message: event.message }); setStreamToolActivity([...toolActivity]); return; }
         if (event.type === "pending_confirmation") { const status = statusFromPendingConfirmation(event); if (status) setAgentStatus(status); toolActivity.push(event); setStreamToolActivity([...toolActivity]); setPendingConfirmation(event); return; }
         if (event.type === "text" || event.type === "final") { const text = event.text || ""; modelResponse += text; setAnswer((currentAnswer) => currentAnswer + text); if (event.type === "final") setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); }
-        else if (event.type === "tool_call" || event.type === "tool_result") { const activity = { type: event.type, name: event.name }; if (event.type === "tool_call") activity.args = event.args || {}; else activity.result = event.result || {}; toolActivity.push(activity); setStreamToolActivity([...toolActivity]); }
+        else if (event.type === "tool_call" || event.type === "tool_result") { const activity = { type: event.type, name: event.name }; if (event.type === "tool_call") activity.args = event.args || {}; else activity.result = event.result || {}; toolActivity.push(activity); setStreamToolActivity([...toolActivity]); if (event.type === "tool_result" && REPO_MUTATING_TOOLS.has(event.name) && !(event.result && event.result.error)) { bumpGitStatus(); } }
         else if (event.type === "error") { const status = statusFromErrorEvent(event); if (status) setAgentStatus(status); const message = event.message || "Streaming request failed."; modelResponse += `\n[Error: ${message}]`; setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`); }
         else if (event.type === "cancelled") { cancelled = true; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); }
       };
@@ -436,7 +438,7 @@ function App() {
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
         if (requestIdRef.current === requestId) requestIdRef.current = null;
         setAnswer(""); const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }];
-        flushSync(() => { setData(updatedData); setWaiting(false); }); showStreamdiv(false); setStreamToolActivity([]); executeScroll();
+        flushSync(() => { setData(updatedData); setWaiting(false); bumpGitStatus(); }); showStreamdiv(false); setStreamToolActivity([]); executeScroll();
         window.setTimeout(() => inputRef.current?.focus(), 0);
       }
     };
@@ -533,7 +535,7 @@ function App() {
           <div id="message-input-region">
             <MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} />
           </div>
-          <GitStatusPanel host={host} waiting={waiting} />
+          <GitStatusPanel host={host} waiting={waiting} refreshToken={gitStatusRefresh} />
           <ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} />
         </div>
 
