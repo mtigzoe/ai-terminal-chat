@@ -44,8 +44,7 @@ vi.mock("../src/git.ts", () => ({
 import { app } from "../src/routes.js";
 import { clear as clearPending } from "../src/pending.js";
 import { clear as clearCancellation } from "../src/cancellation.js";
-import { setProjectRoot, getProjectRoot } from "../src/security.js";
-
+import { setProjectRoot } from "../src/security.js";
 function createTestApp() {
   return app;
 }
@@ -90,6 +89,7 @@ describe("POST /providers/select", () => {
       body: JSON.stringify({ provider: "unknown" }),
     });
     expect(res.status).toBe(400);
+	
     const data = await res.json();
     expect(data.error).toContain("Unknown provider");
   });
@@ -268,6 +268,10 @@ describe("DELETE /allowed-commands/:command", () => {
 });
 
 describe("POST /terminal/run", () => {
+  beforeEach(() => {
+    setProjectRoot(process.cwd());
+  });
+  
   it("returns error for missing command", async () => {
     const res = await createTestApp().request("http://localhost/terminal/run", {
       method: "POST",
@@ -296,6 +300,8 @@ describe("POST /terminal/run", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: "pwd" }),
     });
+	  
+
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.command).toBe("pwd");

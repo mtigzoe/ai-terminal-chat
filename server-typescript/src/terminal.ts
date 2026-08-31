@@ -54,7 +54,16 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "uv run",
 ] as const;
 
-export const DANGEROUS_COMMAND_CHARACTERS = [";", "&", "|", "`", "$(", ">", "<", "\n"] as const;
+export const DANGEROUS_COMMAND_CHARACTERS = [
+  ";",
+  "&",
+  "|",
+  "`",
+  "$(",
+  ">",
+  "<",
+  "\n",
+] as const;
 
 export const BLOCKED_COMMAND_PATTERNS = [
   /\brm\s+-rf\b/i,
@@ -103,20 +112,30 @@ function normalizePrefix(prefix: string): string {
 
 function isForbiddenPrefix(prefix: string): boolean {
   const normalized = normalizePrefix(prefix).toLowerCase();
+
   if (!normalized) return true;
-  if (FORBIDDEN_ALLOWED_COMMAND_PREFIXES.some(
-    (forbidden) => normalized === forbidden || normalized.startsWith(`${forbidden} `),
-  )) {
+
+  if (
+    FORBIDDEN_ALLOWED_COMMAND_PREFIXES.some(
+      (forbidden) =>
+        normalized === forbidden ||
+        normalized.startsWith(`${forbidden} `),
+    )
+  ) {
     return true;
   }
-  return DANGEROUS_COMMAND_CHARACTERS.some((character) => normalized.includes(character));
+
+  return DANGEROUS_COMMAND_CHARACTERS.some((character) =>
+    normalized.includes(character),
+  );
 }
 
 function loadAllowedCommandsFromConfig(): string[] | null {
   const raw = loadAppConfig().allowed_commands;
   if (!Array.isArray(raw)) return null;
 
-  const prefixes = raw.filter((item): item is string => typeof item === "string")
+  const prefixes = raw
+    .filter((item): item is string => typeof item === "string")
     .map(normalizePrefix)
     .filter((prefix) => Boolean(prefix) && !isForbiddenPrefix(prefix));
 
@@ -131,7 +150,9 @@ function persistAllowedCommands(prefixes: string[]): void {
 
 /** Reload the runtime allowlist from the shared configuration file. */
 export function reloadAllowedCommands(): string[] {
-  allowedCommandPrefixes = loadAllowedCommandsFromConfig() ?? [...DEFAULT_ALLOWED_COMMAND_PREFIXES];
+  allowedCommandPrefixes =
+    loadAllowedCommandsFromConfig() ?? [...DEFAULT_ALLOWED_COMMAND_PREFIXES];
+
   return getAllowedCommands();
 }
 
@@ -143,32 +164,52 @@ export function getAllowedCommands(): string[] {
 /** Add a safe command prefix and persist the updated list. */
 export function addAllowedCommand(prefix: string): string[] {
   const normalized = normalizePrefix(prefix);
-  if (!normalized) throw new Error("A non-empty command prefix is required.");
-  if (isForbiddenPrefix(normalized)) {
-    throw new Error(`Command prefix '${normalized}' is not permitted for safety reasons.`);
+
+  if (!normalized) {
+    throw new Error("A non-empty command prefix is required.");
   }
+
+  if (isForbiddenPrefix(normalized)) {
+    throw new Error(
+      `Command prefix '${normalized}' is not permitted for safety reasons.`,
+    );
+  }
+
   if (!allowedCommandPrefixes.includes(normalized)) {
     allowedCommandPrefixes.push(normalized);
     persistAllowedCommands(allowedCommandPrefixes);
   }
+
   return getAllowedCommands();
 }
 
 /** Remove an existing command prefix and persist the updated list. */
 export function removeAllowedCommand(prefix: string): string[] {
   const normalized = normalizePrefix(prefix);
-  if (!normalized) throw new Error("A non-empty command prefix is required.");
+
+  if (!normalized) {
+    throw new Error("A non-empty command prefix is required.");
+  }
+
   const index = allowedCommandPrefixes.indexOf(normalized);
-  if (index < 0) throw new Error(`Command prefix '${normalized}' is not in the allowlist.`);
+
+  if (index < 0) {
+    throw new Error(
+      `Command prefix '${normalized}' is not in the allowlist.`,
+    );
+  }
+
   allowedCommandPrefixes.splice(index, 1);
   persistAllowedCommands(allowedCommandPrefixes);
+
   return getAllowedCommands();
 }
 
 /** True when a command is exactly a prefix or starts with the prefix plus whitespace. */
 export function isCommandAllowed(command: string): boolean {
   return allowedCommandPrefixes.some(
-    (prefix) => command === prefix || command.startsWith(`${prefix} `),
+    (prefix) =>
+      command === prefix || command.startsWith(`${prefix} `),
   );
 }
 
@@ -189,19 +230,26 @@ export function tokenizeCommand(command: string): string[] {
       escaping = false;
       continue;
     }
+
     if (char === "\\" && quote !== "'") {
       escaping = true;
       continue;
     }
+
     if (quote !== null) {
-      if (char === quote) quote = null;
-      else current += char;
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
       continue;
     }
+
     if (char === "'" || char === '"') {
       quote = char;
       continue;
     }
+
     if (/\s/.test(char)) {
       if (current) {
         tokens.push(current);
@@ -209,18 +257,24 @@ export function tokenizeCommand(command: string): string[] {
       }
       continue;
     }
+
     current += char;
   }
 
   if (escaping) current += "\\";
-  if (quote !== null) throw new Error("Unterminated quote in command.");
+
+  if (quote !== null) {
+    throw new Error("Unterminated quote in command.");
+  }
+
   if (current) tokens.push(current);
+
   return tokens;
 }
 
-
 function commandReadsFileContents(command: string): boolean {
   const trimmed = command.trim();
+
   const prefixes = [
     "cat",
     "type",
@@ -246,28 +300,45 @@ function commandReadsFileContents(command: string): boolean {
 
 function contentPathArguments(command: string): string[] {
   const args = tokenizeCommand(command);
+
   if (args.length < 2) return [];
-  return args.slice(1).filter((arg) => arg && !arg.startsWith("-"));
+
+  return args
+    .slice(1)
+    .filter((arg) => arg && !arg.startsWith("-"));
 }
 
 function gitShowPathAllowed(arg: string): boolean {
   const colon = arg.indexOf(":");
+
   if (colon >= 0 && colon + 1 < arg.length) {
     return isReadAllowed(arg.slice(colon + 1));
   }
+
   return false;
 }
 
-function runCommandRespectsReadPermissions(command: string): string | null {
+function runCommandRespectsReadPermissions(
+  command: string,
+): string | null {
   const allowed = getAllowedReadPaths();
-  if (allowed === undefined || !commandReadsFileContents(command)) return null;
+
+  if (allowed === undefined || !commandReadsFileContents(command)) {
+    return null;
+  }
 
   const args = contentPathArguments(command);
   const lower = command.toLowerCase();
 
   if (lower.startsWith("git show ")) {
-    if (args.length === 1 && gitShowPathAllowed(args[0])) return null;
-    return "Access denied: git show can expose file contents and the requested file was not selected on the Project page.";
+    if (args.length === 1 && gitShowPathAllowed(args[0])) {
+      return null;
+    }
+
+    return (
+      "Access denied: git show can expose file contents and the requested " +
+      "file was not selected on the Project page."
+    );
   }
 
   if (lower === "git diff" || lower.startsWith("git diff ")) {
@@ -276,6 +347,7 @@ function runCommandRespectsReadPermissions(command: string): string | null {
       args.every((arg) => arg === "--" || isReadAllowed(arg))
     ) {
       const realPaths = args.filter((arg) => arg !== "--");
+
       if (
         realPaths.length > 0 &&
         realPaths.every((arg) => isReadAllowed(arg))
@@ -284,7 +356,10 @@ function runCommandRespectsReadPermissions(command: string): string | null {
       }
     }
 
-    return "Access denied: git diff can expose file contents and is blocked unless it is scoped to selected files.";
+    return (
+      "Access denied: git diff can expose file contents and is blocked " +
+      "unless it is scoped to selected files."
+    );
   }
 
   if (args.length > 0 && args.every((arg) => isReadAllowed(arg))) {
@@ -298,64 +373,131 @@ function runCommandRespectsReadPermissions(command: string): string | null {
 
 function commandBlocked(command: string): string | null {
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
-    if (pattern.test(command)) return `This command is blocked for safety: ${command}`;
+    if (pattern.test(command)) {
+      return `This command is blocked for safety: ${command}`;
+    }
   }
-  if (DANGEROUS_COMMAND_CHARACTERS.some((character) => command.includes(character))) {
-    return "Command chaining, piping, redirection, and substitution are not allowed. Run one plain command at a time.";
+
+  if (
+    DANGEROUS_COMMAND_CHARACTERS.some((character) =>
+      command.includes(character),
+    )
+  ) {
+    return (
+      "Command chaining, piping, redirection, and substitution are not " +
+      "allowed. Run one plain command at a time."
+    );
   }
+
   return null;
 }
 
-function executableForCommand(args: string[]): { file: string; args: string[] } {
-  if (process.platform === "win32" && args.length > 0 && ["ls", "dir"].includes(args[0].toLowerCase())) {
-    return { file: "cmd", args: ["/c", "dir", ...args.slice(1)] };
+function executableForCommand(args: string[]): {
+  file: string;
+  args: string[];
+} {
+  if (process.platform === "win32" && args.length > 0) {
+    const command = args[0].toLowerCase();
+
+    // Windows has no standalone `pwd` executable. `cd` with no argument
+    // prints the current directory when executed through cmd.exe.
+    if (command === "pwd") {
+      return {
+        file: "cmd",
+        args: ["/c", "cd"],
+      };
+    }
+
+    // `dir` and `ls` are both supported as directory-listing commands.
+    // `ls` is translated to Windows `dir`.
+    if (command === "dir" || command === "ls") {
+      return {
+        file: "cmd",
+        args: ["/c", "dir", ...args.slice(1)],
+      };
+    }
   }
-  return { file: args[0], args: args.slice(1) };
+
+  return {
+    file: args[0],
+    args: args.slice(1),
+  };
 }
 
-function capOutput(value: string): { value: string; truncated: boolean } {
-  return { value: value.slice(0, MAX_OUTPUT_CHARS), truncated: value.length > MAX_OUTPUT_CHARS };
+function capOutput(value: string): {
+  value: string;
+  truncated: boolean;
+} {
+  return {
+    value: value.slice(0, MAX_OUTPUT_CHARS),
+    truncated: value.length > MAX_OUTPUT_CHARS,
+  };
 }
 
 /** Execute one allowlisted command in the configured project root. */
-export async function runCommand(command: string): Promise<RunCommandResult> {
-  if (!command || !command.trim()) return { error: "No command was provided." };
+export async function runCommand(
+  command: string,
+): Promise<RunCommandResult> {
+  if (!command || !command.trim()) {
+    return { error: "No command was provided." };
+  }
+
   const normalized = command.trim();
 
   const blocked = commandBlocked(normalized);
-  if (blocked) return { error: blocked };
+  if (blocked) {
+    return { error: blocked };
+  }
 
   if (!isCommandAllowed(normalized)) {
     return {
-      error: `Command not allowed: '${normalized}'. Allowed command prefixes: ${JSON.stringify(getAllowedCommands())}`,
+      error:
+        `Command not allowed: '${normalized}'. ` +
+        `Allowed command prefixes: ${JSON.stringify(getAllowedCommands())}`,
     };
   }
 
-  const permissionError = runCommandRespectsReadPermissions(normalized);
-  if (permissionError) return { error: permissionError };
+  const permissionError =
+    runCommandRespectsReadPermissions(normalized);
+
+  if (permissionError) {
+    return { error: permissionError };
+  }
 
   let args: string[];
+
   try {
     args = tokenizeCommand(normalized);
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return {
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
-  if (args.length === 0) return { error: "No command was provided." };
+
+  if (args.length === 0) {
+    return { error: "No command was provided." };
+  }
 
   const { file, args: fileArgs } = executableForCommand(args);
 
   try {
-    const { stdout, stderr } = await execFileAsync(file, fileArgs, {
-      cwd: getProjectRoot(),
-      shell: false,
-      timeout: COMMAND_TIMEOUT_MS,
-      windowsHide: true,
-      maxBuffer: MAX_OUTPUT_CHARS * 2,
-      encoding: "utf8",
-    });
+    const { stdout, stderr } = await execFileAsync(
+      file,
+      fileArgs,
+      {
+        cwd: getProjectRoot(),
+        shell: false,
+        timeout: COMMAND_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: MAX_OUTPUT_CHARS * 2,
+        encoding: "utf8",
+      },
+    );
+
     const out = capOutput(String(stdout ?? ""));
     const err = capOutput(String(stderr ?? ""));
     const truncated = out.truncated || err.truncated;
+
     const payload: RunCommandResult = {
       command: normalized,
       returncode: 0,
@@ -363,23 +505,43 @@ export async function runCommand(command: string): Promise<RunCommandResult> {
       stderr: err.value,
       truncated,
     };
+
     if (truncated && !("error" in payload)) {
-      payload.truncation_note = `Output was truncated to ${MAX_OUTPUT_CHARS} characters per stream.`;
+      payload.truncation_note =
+        `Output was truncated to ${MAX_OUTPUT_CHARS} ` +
+        "characters per stream.";
     }
+
     return payload;
   } catch (err) {
-    const error = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string; killed?: boolean };
+    const error = err as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      code?: number | string;
+      killed?: boolean;
+      signal?: string;
+    };
+
     if (error.killed && error.signal === "SIGTERM") {
-      return { error: `Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds.` };
+      return {
+        error:
+          `Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds.`,
+      };
     }
+
     if (error.code === "ENOENT") {
-      return { error: `${args[0]} is not installed or not on PATH.` };
+      return {
+        error:
+          `${args[0]} is not installed or not on PATH.`,
+      };
     }
 
     const stdout = String(error.stdout ?? "");
     const stderr = String(error.stderr ?? "");
+
     const out = capOutput(stdout);
     const errText = capOutput(stderr);
+
     if (typeof error.code === "number") {
       const payload: RunCommandResult = {
         command: normalized,
@@ -388,12 +550,22 @@ export async function runCommand(command: string): Promise<RunCommandResult> {
         stderr: errText.value,
         truncated: out.truncated || errText.truncated,
       };
+
       if (payload.truncated && !("error" in payload)) {
-        payload.truncation_note = `Output was truncated to ${MAX_OUTPUT_CHARS} characters per stream.`;
+        payload.truncation_note =
+          `Output was truncated to ${MAX_OUTPUT_CHARS} ` +
+          "characters per stream.";
       }
+
       return payload;
     }
-    return { error: `Could not execute command: ${error.message ?? String(err)}` };
+
+    return {
+      error:
+        `Could not execute command: ${
+          error.message ?? String(err)
+        }`,
+    };
   }
 }
 
