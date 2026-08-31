@@ -112,55 +112,55 @@ describe("searchFiles", () => {
 });
 
 describe("runCommand", () => {
-  it("rejects command chaining", () => {
-    const result = runCommand("git status && whoami");
+  it("rejects command chaining", async () => {
+    const result = await runCommand("git status && whoami");
     expect(result.error).toBeDefined();
   });
 
-  it("rejects piping", () => {
-    const result = runCommand("git log | grep secret");
+  it("rejects piping", async () => {
+    const result = await runCommand("git log | grep secret");
     expect(result.error).toBeDefined();
   });
 
-  it("rejects redirection", () => {
-    const result = runCommand("git log > /tmp/leak.txt");
+  it("rejects redirection", async () => {
+    const result = await runCommand("git log > /tmp/leak.txt");
     expect(result.error).toBeDefined();
   });
 
-  it("rejects shell substitution", () => {
-    const result = runCommand("git status `whoami`");
+  it("rejects shell substitution", async () => {
+    const result = await runCommand("git status `whoami`");
     expect(result.error).toBeDefined();
   });
 
-  it("rejects dangerous commands", () => {
+  it("rejects dangerous commands", async () => {
     const dangerous = ["rm -rf /", "sudo rm -rf .", "shutdown -h now", "reboot", "poweroff", "halt", "mkfs.ext4 /dev/sda1", "dd if=/dev/zero of=/dev/sda", "chmod 777 /etc/passwd", "chown root:root /etc/passwd", "printenv", "cat .env", "cat id_rsa"];
     for (const cmd of dangerous) {
-      const result = runCommand(cmd);
+      const result = await runCommand(cmd);
       expect(result.error).toBeDefined();
     }
   });
 
-  it("rejects commands outside the allowlist", () => {
-    const result = runCommand("whoami");
+  it("rejects commands outside the allowlist", async () => {
+    const result = await runCommand("whoami");
     expect(result.error).toBeDefined();
   });
 
-  it("executes allowed commands", () => {
-    const result = runCommand("node --version");
+  it("executes allowed commands", async () => {
+    const result = await runCommand("node --version");
     expect(result.error).toBeUndefined();
     expect(result.returncode).toBe(0);
     expect(String(result.stdout).trim()).toMatch(/^v?\d+\.\d+\.\d+/);
   });
 
-  it("correctly splits multi-word allowed commands into argv", () => {
-    const result = runCommand("node --version");
+  it("correctly splits multi-word allowed commands into argv", async () => {
+    const result = await runCommand("node --version");
     expect(result.error).toBeUndefined();
     expect(result.command).toBe("node --version");
     expect(String(result.stdout)).not.toBe("");
   });
 
-  it("surfaces an error instead of a fake success for a missing binary", () => {
-    const result = runCommand("wsl-not-installed-xyz");
+  it("surfaces an error instead of a fake success for a missing binary", async () => {
+    const result = await runCommand("wsl-not-installed-xyz");
     expect(result.error).toBeDefined();
     expect(result.returncode).toBeUndefined();
   });
@@ -171,7 +171,7 @@ describe("agent file-read permissions", () => {
     fs.writeFileSync(path.join(TEST_DIR, "README.md"), "README secret contents");
     fs.writeFileSync(path.join(TEST_DIR, "selected.txt"), "selected contents");
 
-    await runWithAllowedReadPaths(["selected.txt"], () => {
+    await runWithAllowedReadPaths(["selected.txt"], async () => {
       const denied = readFile("README.md");
       expect(denied.error).toContain("not in the set of files the user selected");
       expect(denied.contents).toBeUndefined();
@@ -186,7 +186,7 @@ describe("agent file-read permissions", () => {
     fs.writeFileSync(path.join(TEST_DIR, "README.md"), "README secret contents");
     fs.writeFileSync(path.join(TEST_DIR, "src", "selected.ts"), "selected secret contents");
 
-    await runWithAllowedReadPaths(["src/selected.ts"], () => {
+    await runWithAllowedReadPaths(["src/selected.ts"], async () => {
       const root = listFiles(".");
       const rootNames = (root.entries as { name: string }[]).map((entry) => entry.name);
       expect(rootNames).not.toContain("README.md");
@@ -204,8 +204,8 @@ describe("agent file-read permissions", () => {
     const alreadyAllowed = getAllowedCommands().includes("cat");
     if (!alreadyAllowed) addAllowedCommand("cat");
     try {
-      await runWithAllowedReadPaths(["selected.txt"], () => {
-        const result = runCommand("cat README.md");
+      await runWithAllowedReadPaths(["selected.txt"], async () => {
+        const result = await runCommand("cat README.md");
         expect(result.error).toContain("Access denied");
         expect(result.stdout).toBeUndefined();
       });
@@ -215,8 +215,8 @@ describe("agent file-read permissions", () => {
   });
 
   it("blocks git show of an unselected file", async () => {
-    await runWithAllowedReadPaths(["selected.txt"], () => {
-      const result = runCommand("git show HEAD:README.md");
+    await runWithAllowedReadPaths(["selected.txt"], async () => {
+      const result = await runCommand("git show HEAD:README.md");
       expect(result.error).toContain("Access denied");
     });
   });
