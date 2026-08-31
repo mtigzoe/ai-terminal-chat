@@ -7,6 +7,22 @@ export const CONFIG_DIR = path.join(os.homedir(), ".ai-terminal-chat");
 export const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 export const CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__";
 
+/** Optional override so tests can isolate config.json without racing the real file. */
+let _configFileOverride: string | undefined;
+
+export function getConfigFile(): string {
+  return _configFileOverride ?? CONFIG_FILE;
+}
+
+export function getConfigDir(): string {
+  return path.dirname(getConfigFile());
+}
+
+/** Test-only: redirect all config reads/writes. Pass null to reset. */
+export function setConfigFileForTests(filePath: string | null): void {
+  _configFileOverride = filePath ? filePath : undefined;
+}
+
 function defaultProjectRoot(): string {
   return process.cwd();
 }
@@ -21,7 +37,7 @@ function loadProjectRoot(): string {
   }
 
   try {
-    const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    const data = JSON.parse(fs.readFileSync(getConfigFile(), "utf-8"));
     const configured = String(data.project_root ?? "").trim();
     if (configured) {
       const candidate = path.resolve(configured);
@@ -68,7 +84,7 @@ export function setProjectRoot(newRoot: string): string {
 
 function _loadConfig(): Record<string, unknown> {
   try {
-    const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
+    const raw = fs.readFileSync(getConfigFile(), "utf-8");
     const data = JSON.parse(raw);
     if (typeof data === "object" && data !== null) {
       return data;
@@ -80,14 +96,83 @@ function _loadConfig(): Record<string, unknown> {
 }
 
 function _persistConfig(payload: Record<string, unknown>): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(getConfigDir(), { recursive: true });
   const json = JSON.stringify(payload, undefined, 2) + "\n";
-  fs.writeFileSync(CONFIG_FILE, json, "utf-8");
+  fs.writeFileSync(getConfigFile(), json, "utf-8");
 }
 
 function _persistProjectRoot(root: string): void {
   const payload = _loadConfig();
   payload["project_root"] = root;
+  _persistConfig(payload);
+}
+
+export interface ProviderSelection {
+  provider?: string;
+  model?: string;
+  ollama_base_url?: string;
+}
+
+/** Load persisted provider selection from config.json (mirrors Python). */
+export function loadProviderSelection(): ProviderSelection {
+  const data = _loadConfig();
+  const out: ProviderSelection = {};
+  const provider = data.provider;
+  if (typeof provider === "string" && provider.trim()) {
+    out.provider = provider.trim().toLowerCase();
+  }
+  const model = data.model;
+  if (typeof model === "string" && model.trim()) {
+    out.model = model.trim();
+  }
+  const ollamaBaseUrl = data.ollama_base_url;
+  if (typeof ollamaBaseUrl === "string" && ollamaBaseUrl.trim()) {
+    out.ollama_base_url = ollamaBaseUrl.trim();
+  }
+  return out;
+}
+
+/**
+ * Persist provider selection to config.json (mirrors Python).
+ * When ollama_base_url is provided it is scheme-normalised; when the
+ * active provider is not ollama and no new URL is passed, a stored URL
+ * is removed so stale values do not leak across provider switches.
+ */
+export function persistProviderSelection(
+  provider: string,
+  model?: string | null,
+  ollamaBaseUrl?: string | null
+): void {
+  const payload = _loadConfig();
+  const normalizedProvider = String(provider).trim().toLowerCase();
+  payload["provider"] = normalizedProvider;
+
+  if (model !== undefined && model !== null) {
+    const modelS = String(model).trim();
+    if (modelS) {
+      payload["model"] = modelS;
+    } else {
+      delete payload["model"];
+    }
+  }
+
+  // Match Python: only touch ollama_base_url when the caller passes a value
+  // (including ""). When the arg is omitted/undefined/null and provider is
+  // still ollama, leave any previously stored URL in place.
+  if (ollamaBaseUrl !== undefined && ollamaBaseUrl !== null) {
+    let url = String(ollamaBaseUrl).trim();
+    if (url) {
+      if (!url.includes("://")) {
+        url = `http://${url}`;
+      }
+      payload["ollama_base_url"] = url;
+    } else {
+      delete payload["ollama_base_url"];
+    }
+  } else if (normalizedProvider !== "ollama") {
+    delete payload["ollama_base_url"];
+  }
+
   _persistConfig(payload);
 }
 

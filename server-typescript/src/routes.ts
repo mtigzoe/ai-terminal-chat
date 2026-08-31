@@ -3,7 +3,14 @@ import { cors } from "hono/cors";
 import { getProvider, buildProviderStatus } from "./providers/factory.ts";
 import type { Provider } from "./providers/base.ts";
 import { SUPPORTED_PROVIDERS } from "./providers/config.ts";
-import { getProjectRoot, setProjectRoot } from "./security.ts";
+import {
+  getProjectRoot,
+  setProjectRoot,
+  loadProviderSelection,
+  persistProviderSelection,
+} from "./security.ts";
+import fs from "node:fs";
+import path from "node:path";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
 import { gitCommittedFileCount, gitDiff, gitLog, gitBranch } from "./git.ts";
 import { gitStatusSummary } from "./git-status-summary.ts";
@@ -37,6 +44,65 @@ function getActiveProvider(): Provider {
   return activeProvider ?? getProvider();
 }
 
+/**
+ * Restore provider + model from config.json at startup.
+ * Matches Python: does NOT re-apply persisted ollama_base_url to env.
+ */
+export function restoreProviderFromConfig(): void {
+  try {
+    const saved = loadProviderSelection();
+    if (saved.provider) {
+      activeProvider = getProvider(
+        saved.provider,
+        saved.model ? { model: saved.model } : undefined
+      );
+    }
+  } catch {
+    // Fall back to env / default provider on any restore failure.
+  }
+}
+
+restoreProviderFromConfig();
+
+/** Scheme-normalise an Ollama host/URL for config persistence (matches Python). */
+function normalizeOllamaBaseUrlForPersist(raw: string): string {
+  let url = raw.trim();
+  if (!url) {
+    throw new Error("An Ollama hostname is required.");
+  }
+  if (!url.includes("://")) {
+    url = `http://${url}`;
+  }
+  return url;
+}
+
+/**
+ * Apply Ollama base URL to process env for provider construction.
+ * OpenAI-compatible TS client appends /models and /chat/completions, so the
+ * env value must include a single /v1 (avoid /v1/v1).
+ */
+function applyOllamaBaseUrlToEnv(schemeNormalized: string): void {
+  const stripped = schemeNormalized.replace(/\/+$/, "");
+  process.env.OLLAMA_BASE_URL = stripped.endsWith("/v1")
+    ? stripped
+    : `${stripped}/v1`;
+}
+
+function validateProjectPath(projectPath: string): string {
+  const trimmed = String(projectPath).trim();
+  if (!trimmed) {
+    throw new Error("A project path is required.");
+  }
+  const candidate = path.resolve(trimmed);
+  if (!fs.existsSync(candidate)) {
+    throw new Error(`Project path does not exist: ${candidate}`);
+  }
+  if (!fs.statSync(candidate).isDirectory()) {
+    throw new Error(`Project path is not a directory: ${candidate}`);
+  }
+  return candidate;
+}
+
 app.use("*", cors());
 
 app.get("/providers", async (c) => {
@@ -62,6 +128,16 @@ app.post("/providers/select", async (c) => {
   const model = data.model ? String(data.model).trim() : null;
   const hasApiKey = "api_key" in data;
   const apiKey = data.api_key ? String(data.api_key).trim() : "";
+  const hasOllamaBaseUrl = "ollama_base_url" in data;
+  const ollamaBaseUrlRaw =
+    data.ollama_base_url !== undefined && data.ollama_base_url !== null
+      ? String(data.ollama_base_url)
+      : null;
+  const hasProjectPath = "project_path" in data;
+  const projectPathRaw =
+    data.project_path !== undefined && data.project_path !== null
+      ? String(data.project_path)
+      : null;
 
   if (!name) {
     return c.json({ error: "provider is required." }, 400 as any);
@@ -74,6 +150,31 @@ app.post("/providers/select", async (c) => {
       },
       400 as any
     );
+  }
+
+  let pendingProjectPath: string | null = null;
+  if (hasProjectPath) {
+    try {
+      pendingProjectPath = validateProjectPath(projectPathRaw ?? "");
+    } catch (exc) {
+      return c.json(
+        { error: `Could not switch to '${name}': ${exc instanceof Error ? exc.message : String(exc)}` },
+        400 as any
+      );
+    }
+  }
+
+  let normalizedOllamaUrl: string | null = null;
+  if (name === "ollama" && hasOllamaBaseUrl) {
+    try {
+      normalizedOllamaUrl = normalizeOllamaBaseUrlForPersist(ollamaBaseUrlRaw ?? "");
+      applyOllamaBaseUrlToEnv(normalizedOllamaUrl);
+    } catch (exc) {
+      return c.json(
+        { error: `Could not switch to '${name}': ${exc instanceof Error ? exc.message : String(exc)}` },
+        400 as any
+      );
+    }
   }
 
   const envApiKeyMap: Record<string, string | undefined> = {
@@ -98,6 +199,27 @@ app.post("/providers/select", async (c) => {
   try {
     const candidate = getProvider(name, model ? { model } : undefined);
     activeProvider = candidate;
+
+    if (pendingProjectPath !== null) {
+      setProjectRoot(pendingProjectPath);
+    }
+
+    try {
+      persistProviderSelection(
+        name,
+        model,
+        name === "ollama" && hasOllamaBaseUrl
+          ? normalizedOllamaUrl
+          : name === "ollama"
+            ? undefined
+            : null
+      );
+    } catch (persistExc) {
+      console.warn(
+        `[Warning] Could not persist provider selection: ${persistExc}`
+      );
+    }
+
     const status = await buildProviderStatus(candidate, true);
     return c.json(status);
   } catch (exc) {
