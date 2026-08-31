@@ -151,13 +151,19 @@ export const CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__";
 
 let currentProjectRoot: string | null = null;
 let configDirOverride: string | null = null;
+let configFileOverride: string | null = null;
 
 function configDir(): string {
   return configDirOverride ?? join(homedir(), ".ai-terminal-chat");
 }
 
 function configFilePath(): string {
-  return join(configDir(), "config.json");
+  return configFileOverride ?? join(configDir(), "config.json");
+}
+
+/** Return the config file path currently in effect (respects test overrides). */
+export function getConfigFile(): string {
+  return configFilePath();
 }
 
 function isExistingDirectory(candidate: string): boolean {
@@ -192,7 +198,16 @@ function loadConfig(): Record<string, unknown> {
  * Mirrors security.py's `_persist_config()`.
  */
 function persistConfig(payload: Record<string, unknown>): void {
-  const dir = configDir();
+  const targetFile = configFilePath();
+  // Write the temp file into the *same* directory as the actual target
+  // (which, under setConfigFileForTests(), may differ from configDir()).
+  // Renaming across directories/volumes is not guaranteed atomic and can
+  // fail outright on Windows (EPERM/EXDEV), and — worse — if the temp file
+  // were written under the real configDir() while the target was
+  // overridden to a temp test file elsewhere, a mismatched tempPath/target
+  // pairing could end up touching the user's real config.json. Deriving
+  // both from the same resolved target file keeps them consistent.
+  const dir = dirname(targetFile);
   mkdirSync(dir, { recursive: true });
 
   const serialized = `${JSON.stringify(payload, null, 2)}\n`;
@@ -205,7 +220,7 @@ function persistConfig(payload: Record<string, unknown>): void {
     writeFileSync(tempPath, serialized, "utf8");
     // Atomic on both POSIX (rename(2)) and Windows (MoveFileExW with
     // MOVEFILE_REPLACE_EXISTING), matching Python's os.replace().
-    renameSync(tempPath, configFilePath());
+    renameSync(tempPath, targetFile);
   } catch (err) {
     try {
       rmSync(tempPath, { force: true });
@@ -344,6 +359,20 @@ export function __resetProjectRootForTests(): void {
  */
 export function __setConfigDirForTests(dir: string | null): void {
   configDirOverride = dir;
+}
+
+/**
+ * Test-only: override the exact config *file* path used by
+ * loadConfig()/persistConfig() (and therefore
+ * loadProviderSelection()/persistProviderSelection()/getConfigFile()), so
+ * tests can redirect config storage to a throwaway temp file instead of the
+ * real `~/.ai-terminal-chat/config.json`. Pass `null` to restore the
+ * default (configDir()-derived) path. Distinct from
+ * `__setConfigDirForTests()`, which only overrides the directory and keeps
+ * the `config.json` filename.
+ */
+export function setConfigFileForTests(file: string | null): void {
+  configFileOverride = file;
 }
 
 // ---------------------------------------------------------------------------
@@ -535,7 +564,7 @@ export function setAllowedReadPaths(paths: unknown): ReadonlySet<string> {
   return normalized;
 }
 
-export async function runWithAllowedReadPaths<T>(
+export function runWithAllowedReadPaths<T>(
   paths: unknown,
   callback: () => T | Promise<T>,
 ): Promise<T> {
@@ -570,5 +599,7 @@ export function requireReadAllowed(requested: string): void {
     );
   }
 }
+
+
 
 

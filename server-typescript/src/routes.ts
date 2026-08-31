@@ -395,7 +395,7 @@ app.post("/terminal/run", async (c) => {
   if (!command) {
     return c.json({ error: "command is required." }, 400 as any);
   }
-  const result = runCommand(command);
+  const result = await runCommand(command);
   if (result && typeof result === "object" && "error" in result) {
     return c.json(result, 400 as any);
   }
