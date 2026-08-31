@@ -54,6 +54,7 @@ async function runGit(args: string[], timeout: number): Promise<{
       stderr?: string;
       status?: number;
       code?: number | string;
+      killed?: boolean;
     };
     if (value.code === "ENOENT") throw error;
     if (value.code === "ETIMEDOUT" || value.killed) {

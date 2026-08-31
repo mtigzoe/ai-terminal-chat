@@ -62,7 +62,7 @@ export class SecurityValidationError extends Error {
 
 /** True if `inputPath` is absolute under POSIX *or* Windows rules, regardless
  * of the host OS — matches security.py's use of both PurePosixPath and
- * PureWindowsPath so a Windows-style absolute path (`C:\...`, `\\server\share\...`)
+ * PureWindowsPath so a Windows-style absolute path (`C:\\...`, `\\\\server\\share\\...`)
  * is rejected even when the backend happens to be running on Linux, and vice versa. */
 export function isAbsoluteOnAnyPlatform(inputPath: string): boolean {
   return posix.isAbsolute(inputPath) || win32.isAbsolute(inputPath);
@@ -569,7 +569,7 @@ export function runWithAllowedReadPaths<T>(
   callback: () => T | Promise<T>,
 ): Promise<T> {
   const allowed = setAllowedReadPaths(paths);
-  return allowedReadPaths.run(allowed, callback);
+  return Promise.resolve(allowedReadPaths.run(allowed, callback));
 }
 
 export function isReadAllowed(requested: string): boolean {

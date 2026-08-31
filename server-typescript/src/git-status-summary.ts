@@ -19,8 +19,8 @@ export interface GitStatusSummary {
  * This is deliberately deterministic so users do not have to decode Git's
  * two-column status codes or guess whether commits have been pushed.
  */
-export function gitStatusSummary(): GitStatusSummary | { error: string } {
-  const result = gitStatus();
+export async function gitStatusSummary(): Promise<GitStatusSummary | { error: string }> {
+  const result = await gitStatus();
   if ("error" in result) return result as { error: string };
 
   const status = String(result.status || "");
