@@ -1,15 +1,13 @@
-# Startup Scripts
+# Startup and development scripts
 
-Helper scripts that prepare the backend environment, install frontend dependencies when needed, and start the backend, Vite development server, and (optionally) the Electron shell. Companion stop scripts free the default development ports.
-
-Two backend implementations exist (`server-python` and `server-typescript`), so most start scripts come in two variants — a plain name for the Python/Flask backend (via `uv`), and a `-ts` suffixed name for the TypeScript backend (via `npm`). Both expose the same API on port 9000, so the Vite frontend and Electron shell work unmodified with either one. Only run one backend at a time — the scripts detect port 9000 is already in use and won't start a second backend on top of it, so make sure the previous one is stopped (`stop-services.sh`) before switching backends.
+Scripts are organized by purpose and shell environment. The original backend startup scripts remain under `scripts/powershell/` and `scripts/sh/` for compatibility. New application-focused entry points are grouped under `electron/`, `web/`, and `makefile/`.
 
 ## Layout
 
 ```text
 scripts/
-├── powershell/                 # Windows PowerShell helpers
-├── sh/                         # Linux / macOS Bash helpers
+├── powershell/                 # Existing Windows PowerShell helpers
+├── sh/                         # Existing Linux/macOS Bash helpers
 ├── electron/                   # Application-focused Electron scripts
 │   ├── powershell/
 │   │   └── dev.ps1
@@ -36,37 +34,53 @@ The root `Makefile` remains at the repository root.
 
 ## Prerequisites
 
-- `uv` (required for the Python scripts; no pip fallback)
-- Node.js / `npm` (required for all scripts — it's also how the TypeScript backend and Vite are installed/run)
-- For offline / Ollama workflows: a reachable Ollama instance
-- For Electron scripts: the `electron` package (installed via `npm ci` / `npm install` when missing)
-- For `stop-services.sh`: `lsof` or `fuser` (usually present on Linux/macOS)
+The existing startup scripts support both the Python and TypeScript backends.
+
+* Python backend scripts require `uv` and `npm`.
+* TypeScript backend scripts (`-ts`) require `npm`; they do not require `uv`.
+* The backend services use port `9000`.
+* The Vite development server uses port `3000`.
+* Only one backend should run at a time.
 
 ## Existing compatibility scripts
 
-The original backend startup scripts remain under `scripts/powershell/` and `scripts/sh/` so existing commands are not broken. They include Python/Flask backend startup, TypeScript backend startup, full Electron development startup, offline-AI startup, and service-stop helpers.
+The original backend startup scripts remain under `scripts/powershell/` and `scripts/sh/` so existing commands are not broken.
+
+They include:
+
+* Python/Flask backend startup
+* TypeScript backend startup
+* Full Electron development startup
+* Offline-AI startup
+* Service-stop helpers
+
+Existing startup scripts detect whether ports `9000` and `3000` are already in use and only start missing services.
+
+Both backends expose the same API contract on port `9000`, so the Vite frontend and Electron shell can work with either backend.
 
 ## Application-focused Electron scripts
 
-These scripts launch the Electron shell directly from the repository root without replacing the existing full-stack startup scripts.
+These scripts launch the Electron shell directly from `client-react`. They do not replace the existing full-stack startup scripts.
 
-Windows PowerShell:
+### Windows PowerShell
 
 ```powershell
 .\scripts\electron\powershell\dev.ps1
 ```
 
-Linux/macOS:
+### Linux/macOS
 
 ```bash
 ./scripts/electron/sh/dev.sh
 ```
 
+For the full workflow that automatically starts the backend and Vite, use the existing scripts under `scripts/powershell/` or `scripts/sh/`.
+
 ## Application-focused web scripts
 
 These scripts operate on `client-react` only.
 
-Windows PowerShell:
+### Windows PowerShell
 
 ```powershell
 .\scripts\web\powershell\install.ps1
@@ -74,7 +88,7 @@ Windows PowerShell:
 .\scripts\web\powershell\build.ps1
 ```
 
-Linux/macOS:
+### Linux/macOS
 
 ```bash
 ./scripts/web/sh/install.sh
@@ -84,7 +98,9 @@ Linux/macOS:
 
 ## Makefile test helpers
 
-Windows users do not need GNU Make to run the tests:
+Windows users do not need GNU Make to run the tests.
+
+### Windows PowerShell
 
 ```powershell
 .\scripts\makefile\powershell\test.ps1
@@ -93,7 +109,7 @@ Windows users do not need GNU Make to run the tests:
 .\scripts\makefile\powershell\test.ps1 react
 ```
 
-Linux/macOS:
+### Linux/macOS
 
 ```bash
 bash ./scripts/makefile/sh/test.sh
@@ -113,59 +129,90 @@ make typecheck-typescript
 make build-react
 ```
 
-## Usage (from repository root)
+## Usage from the repository root
 
-### Windows (PowerShell)
+### Windows PowerShell
+
+Existing full-stack Electron workflow using the Python backend:
 
 ```powershell
-# Existing full-stack Electron workflow, Python backend
 .\scripts\powershell\run-electron.ps1
+```
 
-# Existing full-stack Electron workflow, TypeScript backend
+Existing full-stack Electron workflow using the TypeScript backend:
+
+```powershell
 .\scripts\powershell\run-electron-ts.ps1
+```
 
-# Application-focused Electron shell
+Application-focused Electron shell:
+
+```powershell
 .\scripts\electron\powershell\dev.ps1
+```
 
-# Web application only
+Web application only:
+
+```powershell
 .\scripts\web\powershell\install.ps1
 .\scripts\web\powershell\dev.ps1
 .\scripts\web\powershell\build.ps1
+```
 
-# Stop existing services
+Stop existing services:
+
+```powershell
 .\scripts\powershell\stop-services.ps1
 ```
 
-### Linux / macOS (Bash)
+### Linux/macOS
+
+Make existing scripts executable once, if needed:
 
 ```bash
-# Make existing scripts executable once, if needed
-chmod +x scripts/sh/*.sh scripts/electron/sh/*.sh scripts/web/sh/*.sh
+chmod +x scripts/sh/*.sh scripts/electron/sh/*.sh scripts/web/sh/*.sh scripts/makefile/sh/*.sh
+```
 
-# Existing full-stack Electron workflow, Python backend
+Existing full-stack Electron workflow using the Python backend:
+
+```bash
 ./scripts/sh/run-electron.sh
+```
 
-# Existing full-stack Electron workflow, TypeScript backend
+Existing full-stack Electron workflow using the TypeScript backend:
+
+```bash
 ./scripts/sh/run-electron-ts.sh
+```
 
-# Application-focused Electron shell
+Application-focused Electron shell:
+
+```bash
 ./scripts/electron/sh/dev.sh
+```
 
-# Web application only
+Web application only:
+
+```bash
 ./scripts/web/sh/install.sh
 ./scripts/web/sh/dev.sh
 ./scripts/web/sh/build.sh
+```
 
-# Stop existing services
+Stop existing services:
+
+```bash
 ./scripts/sh/stop-services.sh
 ```
 
-## Behaviour notes
+## Behavior and compatibility
 
-- Existing start scripts detect whether ports 9000 (backend — Flask or TypeScript) and 3000 (Vite) are already in use and only start the missing services.
-- Application-focused Electron scripts intentionally launch Electron directly and do not replace the full-stack startup scripts.
-- Application-focused web scripts only install, develop, or build the React client.
-- Processes started by the existing Electron scripts are cleaned up when Electron exits (only those launched by the script itself).
-- The offline-AI scripts open the backend and frontend in separate processes/windows and leave them running; they do not launch Electron.
-- Python start scripts refuse to run if `uv` or `npm` is missing from `PATH`. TypeScript start scripts (`-ts`) refuse to run if `npm` is missing from `PATH`; they don't need `uv`.
-- Both backends serve an identical API contract on port 9000, so the Vite frontend and Electron shell require no changes to work with either.
+* Existing startup scripts remain available for compatibility.
+* Existing Electron startup scripts can start the backend, Vite, and Electron together.
+* Application-focused Electron scripts launch Electron directly from `client-react`.
+* Application-focused web scripts only install, develop, or build the React client.
+* Makefile test helpers provide convenient test commands without requiring GNU Make on Windows.
+* Processes started by the existing Electron scripts are cleaned up when Electron exits, limited to processes launched by the script itself.
+* Offline-AI scripts open the backend and frontend separately and leave them running; they do not launch Electron.
+* The backend startup scripts refuse to start a second backend when port `9000` is already in use.
+* The Python and TypeScript backends expose the same API contract on port `9000`.
