@@ -1,7 +1,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { getAllowedReadPaths, getProjectRoot, isReadAllowed } from "./security.ts";
+import {
+  getAllowedReadPaths,
+  getConfigFile,
+  getProjectRoot,
+  isReadAllowed,
+} from "./security.ts";
 
 const DEFAULT_ALLOWED_COMMAND_PREFIXES: string[] = [
   "git status",
@@ -88,12 +93,6 @@ const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git add",
 ];
 
-const CONFIG_FILE = path.join(
-  process.env.HOME || process.env.USERPROFILE || "",
-  ".ai-terminal-chat",
-  "config.json"
-);
-
 function normalizeCommandPrefix(prefix: string): string {
   return (prefix || "").trim();
 }
@@ -119,7 +118,7 @@ function isForbiddenPrefix(prefix: string): boolean {
 
 function loadAllowedCommandsFromConfig(): string[] | null {
   try {
-    const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
+    const raw = fs.readFileSync(getConfigFile(), "utf-8");
     const data = JSON.parse(raw);
     const rawList = data.allowed_commands;
     if (!Array.isArray(rawList)) return null;
@@ -139,12 +138,13 @@ function loadAllowedCommandsFromConfig(): string[] | null {
 }
 
 function persistAllowedCommands(prefixes: string[]): void {
-  const dir = path.dirname(CONFIG_FILE);
+  const configFile = getConfigFile();
+  const dir = path.dirname(configFile);
   fs.mkdirSync(dir, { recursive: true });
 
   let payload: Record<string, unknown> = {};
   try {
-    const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
+    const raw = fs.readFileSync(configFile, "utf-8");
     payload = JSON.parse(raw);
     if (typeof payload !== "object" || payload === null) {
       payload = {};
@@ -155,9 +155,9 @@ function persistAllowedCommands(prefixes: string[]): void {
 
   payload["allowed_commands"] = [...prefixes];
 
-  const tmpFile = CONFIG_FILE + ".tmp";
+  const tmpFile = configFile + ".tmp";
   fs.writeFileSync(tmpFile, JSON.stringify(payload, undefined, 2) + "\n", "utf-8");
-  fs.renameSync(tmpFile, CONFIG_FILE);
+  fs.renameSync(tmpFile, configFile);
 }
 
 export function reloadAllowedCommands(): string[] {
