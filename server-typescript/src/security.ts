@@ -91,6 +91,71 @@ function _persistProjectRoot(root: string): void {
   _persistConfig(payload);
 }
 
+export interface ProviderSelection {
+  provider?: string;
+  model?: string;
+  ollama_base_url?: string;
+}
+
+/** Load persisted provider selection from config.json (mirrors Python). */
+export function loadProviderSelection(): ProviderSelection {
+  const data = _loadConfig();
+  const out: ProviderSelection = {};
+  const provider = data.provider;
+  if (typeof provider === "string" && provider.trim()) {
+    out.provider = provider.trim().toLowerCase();
+  }
+  const model = data.model;
+  if (typeof model === "string" && model.trim()) {
+    out.model = model.trim();
+  }
+  const ollamaBaseUrl = data.ollama_base_url;
+  if (typeof ollamaBaseUrl === "string" && ollamaBaseUrl.trim()) {
+    out.ollama_base_url = ollamaBaseUrl.trim();
+  }
+  return out;
+}
+
+/**
+ * Persist provider selection to config.json (mirrors Python).
+ * When ollama_base_url is provided it is scheme-normalised; when the
+ * active provider is not ollama and no new URL is passed, a stored URL
+ * is removed so stale values do not leak across provider switches.
+ */
+export function persistProviderSelection(
+  provider: string,
+  model?: string | null,
+  ollamaBaseUrl?: string | null
+): void {
+  const payload = _loadConfig();
+  payload["provider"] = String(provider).trim().toLowerCase();
+
+  if (model !== undefined && model !== null) {
+    const modelS = String(model).trim();
+    if (modelS) {
+      payload["model"] = modelS;
+    } else {
+      delete payload["model"];
+    }
+  }
+
+  if (ollamaBaseUrl !== undefined && ollamaBaseUrl !== null) {
+    let url = String(ollamaBaseUrl).trim();
+    if (url) {
+      if (!url.includes("://")) {
+        url = `http://${url}`;
+      }
+      payload["ollama_base_url"] = url;
+    } else {
+      delete payload["ollama_base_url"];
+    }
+  } else if (payload["provider"] !== "ollama") {
+    delete payload["ollama_base_url"];
+  }
+
+  _persistConfig(payload);
+}
+
 export function safePath(requested: string): string {
   if (!requested || !String(requested).trim()) {
     throw new Error("A path is required.");
