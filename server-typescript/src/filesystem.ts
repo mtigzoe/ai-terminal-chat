@@ -19,7 +19,14 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative } from "node:path";
 
-import { getProjectRoot, isSensitiveFilename, isSensitivePath, safePath } from "./security.js";
+import {
+  getAllowedReadPaths,
+  getProjectRoot,
+  isSensitiveFilename,
+  isSensitivePath,
+  requireReadAllowed,
+  safePath,
+} from "./security.js";
 import type {
   FileEntry,
   ListFilesResult,
@@ -32,10 +39,27 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** "." for the project root itself, otherwise the path relative to it — mirrors `str(p.relative_to(PROJECT_ROOT))`, which pathlib renders as "." for the root. */
 function relativeToProjectRoot(absolutePath: string): string {
   const root = getProjectRoot();
   return relative(root, absolutePath) || ".";
+}
+
+function allowedPathFor(absolutePath: string): string {
+  return relative(getProjectRoot(), absolutePath).split("\\").join("/");
+}
+
+/** True when an agent may see this path, including a directory containing a selected file. */
+function isListedPathAllowed(absolutePath: string, isDirectory: boolean): boolean {
+  const allowed = getAllowedReadPaths();
+  if (allowed === undefined) return true;
+
+  const itemRelative = allowedPathFor(absolutePath);
+  if (!isDirectory) return allowed.has(itemRelative);
+
+  const prefix = `${itemRelative}/`;
+  return [...allowed].some(
+    (candidate) => candidate === itemRelative || candidate.startsWith(prefix),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -50,11 +74,6 @@ const localeAwareCompare = (a: string, b: string): number => {
   return 0;
 };
 
-/**
- * List files and directories inside the application project.
- *
- * @param inputPath Relative directory path inside the project. "." for the project root.
- */
 export function listFiles(inputPath = "."): ListFilesResult {
   let directory: string;
   try {
@@ -71,19 +90,20 @@ export function listFiles(inputPath = "."): ListFilesResult {
   }
 
   const entries: FileEntry[] = readdirSync(directory, { withFileTypes: true })
-    .map((dirent): FileEntry => {
-      // Python's Path.is_dir() follows symlinks; fs.Dirent.isDirectory()
-      // does not. stat() through the symlink to match — falling back to
-      // the non-dereferencing dirent type (i.e. "file") for a broken
-      // symlink, which is also what Python's is_dir() reports for one.
+    .map((dirent): FileEntry | null => {
       let isDirectory: boolean;
       try {
         isDirectory = statSync(join(directory, dirent.name)).isDirectory();
       } catch {
         isDirectory = dirent.isDirectory();
       }
+
+      const absolutePath = join(directory, dirent.name);
+      if (!isListedPathAllowed(absolutePath, isDirectory)) return null;
+
       return { name: dirent.name, type: isDirectory ? "directory" : "file" };
     })
+    .filter((entry): entry is FileEntry => entry !== null)
     .sort((a, b) => localeAwareCompare(a.name, b.name));
 
   return { path: relativeToProjectRoot(directory), entries };
@@ -95,11 +115,6 @@ export function listFiles(inputPath = "."): ListFilesResult {
 
 const READ_FILE_MAX_BYTES = 200_000;
 
-/**
- * Read a UTF-8 text file inside the application project.
- *
- * @param inputPath Relative path to the text file.
- */
 export function readFile(inputPath: string): ReadFileResult {
   let filePath: string;
   try {
@@ -117,6 +132,12 @@ export function readFile(inputPath: string): ReadFileResult {
     };
   }
 
+  try {
+    requireReadAllowed(inputPath);
+  } catch (err) {
+    return { error: errorMessage(err) };
+  }
+
   if (!existsSync(filePath)) {
     return { error: `File does not exist: ${inputPath}` };
   }
@@ -132,10 +153,6 @@ export function readFile(inputPath: string): ReadFileResult {
   let contents: string;
   try {
     const buffer = readFileSync(filePath);
-    // { fatal: true } makes TextDecoder throw on invalid byte sequences,
-    // matching Python's str.decode()/read_text() strict-by-default
-    // behavior (Node's Buffer#toString("utf8") would silently substitute
-    // U+FFFD instead, which is not the behavior being preserved here).
     contents = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   } catch {
     return { error: "The file is not a UTF-8 text file." };
@@ -148,8 +165,6 @@ export function readFile(inputPath: string): ReadFileResult {
 // search_files
 // ---------------------------------------------------------------------------
 
-// Directories that are never worth searching (build output, deps, VCS
-// internals) — matches SEARCH_EXCLUDED_DIR_NAMES in tools.py exactly.
 const SEARCH_EXCLUDED_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -172,16 +187,6 @@ interface WalkPlan {
   files: string[];
 }
 
-/**
- * Classify one directory's entries the way Python's `os.walk` does under
- * its default `followlinks=False`: a symlink pointing at a directory is
- * recognized as a directory (by following it once to check) but is never
- * descended into; a symlink pointing at a file is treated as a file and
- * read through normally. Verified empirically against server-python:
- * `search_files` finds zero matches for content that exists only behind a
- * symlinked directory inside the project. Plain (non-symlink) entries use
- * the cheap non-dereferencing dirent check.
- */
 function planWalk(dir: string, dirents: Dirent[]): WalkPlan {
   const subdirs: string[] = [];
   const files: string[] = [];
@@ -192,11 +197,9 @@ function planWalk(dir: string, dirents: Dirent[]): WalkPlan {
       try {
         isDirectory = statSync(join(dir, dirent.name)).isDirectory();
       } catch {
-        continue; // Broken symlink — skip, matching a stat/read failure being skipped below.
+        continue;
       }
-      if (isDirectory) {
-        continue; // Classified as a directory, but never descended into.
-      }
+      if (isDirectory) continue;
       files.push(dirent.name);
       continue;
     }
@@ -206,9 +209,7 @@ function planWalk(dir: string, dirents: Dirent[]): WalkPlan {
       }
       continue;
     }
-    if (dirent.isFile()) {
-      files.push(dirent.name);
-    }
+    if (dirent.isFile()) files.push(dirent.name);
   }
 
   subdirs.sort();
@@ -216,12 +217,6 @@ function planWalk(dir: string, dirents: Dirent[]): WalkPlan {
   return { subdirs, files };
 }
 
-/**
- * Search text files inside the project for a query string.
- *
- * @param query Text to search for (case-insensitive substring match).
- * @param inputPath Relative directory to search under. "." for the whole project.
- */
 export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
   if (!query || !query.trim()) {
     return { error: "A non-empty search query is required." };
@@ -253,7 +248,7 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
     try {
       dirents = readdirSync(dir, { withFileTypes: true });
     } catch {
-      return; // Unreadable directory — skip, matching os.walk's default of ignoring errors.
+      return;
     }
 
     const { subdirs, files } = planWalk(dir, dirents);
@@ -263,6 +258,8 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
       if (isSensitiveFilename(filename)) continue;
 
       const filePath = join(dir, filename);
+      if (!isListedPathAllowed(filePath, false)) continue;
+
       let size: number;
       try {
         size = statSync(filePath).size;
@@ -276,7 +273,7 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
         const buffer = readFileSync(filePath);
         text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
       } catch {
-        continue; // Binary or unreadable — skip, matching Python's (UnicodeDecodeError, OSError) catch.
+        continue;
       }
 
       const lines = text.split(/\r\n|\r|\n/);
@@ -300,7 +297,9 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
     if (truncated) return;
 
     for (const name of subdirs) {
-      walk(join(dir, name));
+      const childPath = join(dir, name);
+      if (!isListedPathAllowed(childPath, true)) continue;
+      walk(childPath);
       if (truncated) return;
     }
   };
