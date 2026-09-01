@@ -9,6 +9,7 @@ FakeProvider/FailingProvider pattern already used in test_agent.py,
 substituted in for the module-level `app.provider`.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -241,15 +242,18 @@ def test_stream_happy_path_yields_final_text(client, monkeypatch):
     response = client.post("/stream", json={"chat": "hi", "history": []})
 
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "streamed hello" in body
+    events = _parse_stream_events(response.get_data(as_text=True))
+    finals = [e for e in events if e.get("type") == "final"]
+    assert finals and finals[0].get("text") == "streamed hello"
 
 
 def test_stream_rejects_empty_message(client):
     response = client.post("/stream", json={"chat": "", "history": []})
 
     assert response.status_code == 200
-    assert "Please enter a message." in response.get_data(as_text=True)
+    events = _parse_stream_events(response.get_data(as_text=True))
+    texts = [e.get("text", "") for e in events if e.get("type") == "text"]
+    assert any("Please enter a message." in t for t in texts)
 
 
 def test_stream_reports_build_contents_failure_inline(client, monkeypatch):
@@ -260,8 +264,9 @@ def test_stream_reports_build_contents_failure_inline(client, monkeypatch):
     )
 
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "Error building request" in body
+    events = _parse_stream_events(response.get_data(as_text=True))
+    errors = [e for e in events if e.get("type") == "error"]
+    assert errors and "Error building request" in errors[0].get("message", "")
 
 
 def test_stream_reports_provider_failure_inline(client, monkeypatch):
@@ -270,9 +275,10 @@ def test_stream_reports_provider_failure_inline(client, monkeypatch):
     response = client.post("/stream", json={"chat": "hi", "history": []})
 
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "[Error:" in body
-    assert "provider offline" in body
+    events = _parse_stream_events(response.get_data(as_text=True))
+    errors = [e for e in events if e.get("type") == "error"]
+    assert errors
+    assert "provider offline" in errors[0].get("message", "").lower()
 
 
 def test_stream_reports_cancellation_inline(client, monkeypatch):
@@ -291,7 +297,21 @@ def test_stream_reports_cancellation_inline(client, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert "[cancelled]" in response.get_data(as_text=True)
+    events = _parse_stream_events(response.get_data(as_text=True))
+    assert any(e.get("type") == "cancelled" for e in events)
+
+
+def _parse_stream_events(body: str):
+    events = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            events.append({"type": "text", "text": line})
+    return events
 
 
 def test_stream_tool_result_errors_are_surfaced_inline(client, monkeypatch):
@@ -311,19 +331,15 @@ def test_stream_tool_result_errors_are_surfaced_inline(client, monkeypatch):
     response = client.post("/stream", json={"chat": "read missing.txt", "history": []})
 
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "read_file" in body
-    assert "handled the missing file" in body
+    events = _parse_stream_events(response.get_data(as_text=True))
+    tool_calls = [e for e in events if e.get("type") == "tool_call"]
+    tool_results = [e for e in events if e.get("type") == "tool_result"]
+    finals = [e for e in events if e.get("type") == "final"]
+    assert tool_calls and tool_calls[0].get("name") == "read_file"
+    assert "handled the missing file" in " ".join(e.get("text", "") for e in finals)
 
 
 def test_stream_tool_call_and_error_markers_are_correctly_encoded(client, monkeypatch):
-    """The plain-text /stream format prefixes tool calls and tool errors
-    with emoji markers (gear for tool_call, warning for a failed
-    tool_result). These must round-trip as the real ⚙️/⚠️ codepoints —
-    not as mojibake produced by a stray non-UTF-8 encode/decode
-    somewhere in the file's history, which previous substring-only
-    assertions (checking for "read_file" alone) failed to catch.
-    """
     _set_provider(
         monkeypatch,
         FakeProvider(
@@ -342,13 +358,14 @@ def test_stream_tool_call_and_error_markers_are_correctly_encoded(client, monkey
     assert response.status_code == 200
     body = response.get_data(as_text=True)
 
-    assert "⚙️ read_file(" in body
-    assert "⚠️ read_file:" in body
+    tool_calls = [e for e in _parse_stream_events(body) if e.get("type") == "tool_call"]
+    tool_results = [e for e in _parse_stream_events(body) if e.get("type") == "tool_result"]
 
-    # Guard against regressing back into the specific mojibake this
-    # replaced (UTF-8 emoji bytes misread as CP437 and re-saved as UTF-8).
-    assert "\u0393\u00dc\u00d6" not in body  # mangled gear emoji ("ΓÜÖ")
-    assert "\u0393\u00dc\u00e1" not in body  # mangled warning emoji ("ΓÜá")
+    assert tool_calls and tool_calls[0].get("name") == "read_file"
+    assert tool_results and "error" in (tool_results[0].get("result") or {})
+
+    assert "\u0393\u00dc\u00d6" not in body
+    assert "\u0393\u00dc\u00e1" not in body
 
 
 def test_stream_git_status_no_arg_call_renders_without_extra_bracket(client, monkeypatch):
@@ -368,9 +385,10 @@ def test_stream_git_status_no_arg_call_renders_without_extra_bracket(client, mon
     response = client.post("/stream", json={"chat": "git status", "history": []})
 
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "⚙️ git_status()" in body
-    assert "git_status()]" not in body
+    events = _parse_stream_events(response.get_data(as_text=True))
+    tool_calls = [e for e in events if e.get("type") == "tool_call"]
+    assert tool_calls and tool_calls[0].get("name") == "git_status"
+    assert tool_calls[0].get("args") == {}
 
 
 def test_stream_git_push_origin_branch_routes_to_git_push_tool(client, monkeypatch):
@@ -390,9 +408,10 @@ def test_stream_git_push_origin_branch_routes_to_git_push_tool(client, monkeypat
     response = client.post("/stream", json={"chat": "git push origin fix-git-command-routing", "history": []})
 
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "git_push" in body
-    assert "fix-git-command-routing" in body
+    events = _parse_stream_events(response.get_data(as_text=True))
+    tool_calls = [e for e in events if e.get("type") == "tool_call"]
+    assert tool_calls and tool_calls[0].get("name") == "git_push"
+    assert tool_calls[0].get("args", {}).get("branch") == "fix-git-command-routing"
 
 
 def test_stream_git_commit_with_message_routes_to_git_commit_tool(client, monkeypatch):
@@ -412,9 +431,10 @@ def test_stream_git_commit_with_message_routes_to_git_commit_tool(client, monkey
     response = client.post("/stream", json={"chat": 'git commit -m "add feature"', "history": []})
 
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "git_commit" in body
-    assert "add feature" in body
+    events = _parse_stream_events(response.get_data(as_text=True))
+    tool_calls = [e for e in events if e.get("type") == "tool_call"]
+    assert tool_calls and tool_calls[0].get("name") == "git_commit"
+    assert tool_calls[0].get("args", {}).get("message") == "add feature"
 
 
 # ---------------------------------------------------------

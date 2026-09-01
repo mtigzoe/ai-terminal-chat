@@ -7,6 +7,7 @@
 
 """Flask HTTP layer for the provider-agnostic terminal agent."""
 
+import json
 import os
 import uuid
 
@@ -359,48 +360,63 @@ def chat():
 
 @app.route("/stream", methods=["POST"])
 def stream():
-    def format_args(args):
-        return ", ".join(f"{k}={v!r}" for k, v in args.items())
     def generate():
         data = request.get_json(silent=True) or {}
         msg = data.get("chat", "")
         history = data.get("history", [])
         request_id = str(data.get("request_id") or uuid.uuid4().hex)
         if not msg or not str(msg).strip():
-            yield "Please enter a message."
+            yield json.dumps({"type": "text", "text": "Please enter a message."}) + "\n"
             return
         try:
             contents = provider.build_contents(msg, history)
         except Exception as exc:
-            yield f"[Error building request: {exc}]"
+            yield json.dumps({"type": "error", "message": f"Error building request: {exc}"}) + "\n"
             return
         cancel_event = cancellation.register(request_id)
         allowed_paths = _extract_allowed_paths(data)
         set_allowed_read_paths(allowed_paths)
         try:
             for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
-                if event["type"] == "progress":
-                    yield f"\n[{event.get('phase', 'progress')}] {event.get('message', '')}\n"
-                elif event["type"] == "tool_call":
-                    yield f"\n⚙️ {event['name']}({format_args(event['args'])})\n"
-                elif event["type"] == "tool_result":
-                    result = event["result"]
-                    if isinstance(result, dict) and result.get("error"):
-                        yield f"⚠️ {event['name']}: {result['error']}\n"
-                elif event["type"] == "pending_confirmation":
-                    yield f"\n[Confirmation required: {event['name']} action_id={event['action_id']}] Waiting for explicit user confirmation.\n"
-                elif event["type"] == "final":
-                    yield event["text"]
-                elif event["type"] == "error":
-                    yield f"\n[Error: {event['message']}]"
-                elif event["type"] == "cancelled":
-                    yield "\n[cancelled] Cancelled by user request.\n"
+                yield json.dumps(_stream_event_to_plain(event)) + "\n"
         except Exception as exc:
-            yield f"\n[Error: {exc}]"
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
         finally:
             clear_allowed_read_paths()
             cancellation.release(request_id)
-    return Response(stream_with_context(generate()), mimetype="text/plain")
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+
+def _stream_event_to_plain(event):
+    etype = event.get("type")
+    if etype == "progress":
+        return {"type": "progress", "phase": event.get("phase", "progress"), "message": event.get("message", "")}
+    if etype == "tool_call":
+        return {
+            "type": "tool_call",
+            "name": event["name"],
+            "args": event.get("args", {}),
+        }
+    if etype == "tool_result":
+        result = event.get("result")
+        if isinstance(result, dict) and result.get("error"):
+            return {"type": "tool_result", "name": event["name"], "result": {"error": result["error"]}}
+        return {"type": "tool_result", "name": event["name"], "result": result}
+    if etype == "pending_confirmation":
+        return {
+            "type": "pending_confirmation",
+            "action_id": event["action_id"],
+            "name": event["name"],
+            "args": event.get("args", {}),
+            "preview": event.get("preview"),
+        }
+    if etype == "final":
+        return {"type": "final", "text": event.get("text", "")}
+    if etype == "error":
+        return {"type": "error", "message": event.get("message", "")}
+    if etype == "cancelled":
+        return {"type": "cancelled"}
+    return {"type": "progress", "phase": "progress", "message": ""}
 
 
 @app.route("/project/list", methods=["GET"])
