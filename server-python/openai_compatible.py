@@ -354,9 +354,16 @@ class OpenAICompatibleProvider(Provider):
     def append_model_turn(self, contents, response):
         message = dict(response.raw) if isinstance(response.raw, dict) else {
             "role": "assistant",
-            "content": response.text,
+            "content": response.text or "",
         }
         message.setdefault("role", "assistant")
+        # Ollama (and some other OpenAI-compatible servers) reject
+        # "content": null on assistant messages. The OpenAI spec allows
+        # null content when tool_calls are present, but Ollama returns
+        # HTTP 400 "invalid message content type: <nil>". Normalize to an
+        # empty string so the conversation history round-trips cleanly.
+        if message.get("content") is None:
+            message["content"] = ""
         return contents + [message]
 
     def append_tool_results(self, contents, results):

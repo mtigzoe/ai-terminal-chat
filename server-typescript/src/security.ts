@@ -7,20 +7,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 //
 // Every path-facing tool (filesystem.ts, and later terminal.ts/git.ts/tools.ts)
 // goes through safePath()/isSensitivePath() here. Nothing in this module talks
-// to any AI provider, so it does not change when providers change — same
+// to any AI provider, so it does not change when providers change - same
 // design intent as the Python original.
 //
 // SECURITY NOTE ON SYMLINKS (verified empirically against server-python,
 // not just inferred from source): Python's `Path.resolve()` follows
 // symlinks for path segments that exist on disk, so `safe_path()` already
-// rejects a symlink inside the project that points outside PROJECT_ROOT —
+// rejects a symlink inside the project that points outside PROJECT_ROOT -
 // confirmed by constructing such a symlink and calling `security.safe_path()`
 // against it directly. `path.resolve()` in Node is purely lexical and does
 // NOT touch the filesystem or follow symlinks, so a naive port would silently
 // drop this protection. `resolveFollowingSymlinks()` below replicates
 // Python's behavior: resolve real paths for whatever prefix of the path
 // already exists (following symlinks along the way), then lexically append
-// any remaining, not-yet-existing path segments — matching
+// any remaining, not-yet-existing path segments - matching
 // `Path.resolve(strict=False)` exactly, including the case where the full
 // path doesn't exist yet (e.g. a new file about to be created).
 
@@ -42,7 +42,7 @@ import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "n
 // ---------------------------------------------------------------------------
 
 /**
- * A rejected/invalid request — the caller did something not allowed (bad
+ * A rejected/invalid request - the caller did something not allowed (bad
  * path, missing input). Mirrors Python's `ValueError` here, which app.py
  * maps to HTTP 400. Distinguished from plain `Error` (persistence/filesystem
  * failures, mirroring Python's `OSError`, which app.py maps to HTTP 500) so
@@ -61,7 +61,7 @@ export class SecurityValidationError extends Error {
 // ---------------------------------------------------------------------------
 
 /** True if `inputPath` is absolute under POSIX *or* Windows rules, regardless
- * of the host OS — matches security.py's use of both PurePosixPath and
+ * of the host OS - matches security.py's use of both PurePosixPath and
  * PureWindowsPath so a Windows-style absolute path (`C:\\...`, `\\\\server\\share\\...`)
  * is rejected even when the backend happens to be running on Linux, and vice versa. */
 export function isAbsoluteOnAnyPlatform(inputPath: string): boolean {
@@ -83,7 +83,7 @@ function expandHome(inputPath: string): string {
 
 /**
  * Resolve `inputPath` to an absolute path, following symlinks for whatever
- * prefix already exists on disk and lexically joining the rest — see the
+ * prefix already exists on disk and lexically joining the rest - see the
  * module-level SECURITY NOTE above. Errors other than "this segment doesn't
  * exist" (ENOENT/ENOTDIR) propagate, matching a fail-closed posture.
  */
@@ -98,7 +98,7 @@ export function resolveFollowingSymlinks(inputPath: string): string {
     }
     const parent = dirname(absolute);
     if (parent === absolute) {
-      // Reached the filesystem root and even that doesn't resolve —
+      // Reached the filesystem root and even that doesn't resolve -
       // nothing further can be done; return the lexical form.
       return absolute;
     }
@@ -137,7 +137,7 @@ export function isPathWithinRoot(
  * Sentinel `path` value requesting the native OS folder picker.
  *
  * server-python's security.py implements this via a Tkinter dialog invoked
- * server-side. client-react never actually sends this sentinel — it uses
+ * server-side. client-react never actually sends this sentinel - it uses
  * its own folder picker (Electron's native dialog, or the browser File
  * System Access API in SettingsPage.jsx) and POSTs the resolved path
  * string to /project-root directly. The sentinel is preserved here for
@@ -187,7 +187,7 @@ function loadConfig(): Record<string, unknown> {
       return data as Record<string, unknown>;
     }
   } catch {
-    // Missing file, unreadable, or invalid JSON — start from an empty
+    // Missing file, unreadable, or invalid JSON - start from an empty
     // config, matching Python's `except (OSError, ValueError, TypeError): pass`.
   }
   return {};
@@ -196,13 +196,19 @@ function loadConfig(): Record<string, unknown> {
 /**
  * Persist the full configuration object atomically outside the project.
  * Mirrors security.py's `_persist_config()`.
+ *
+ * On Windows, atomic rename can fail with EPERM when another process (antivirus,
+ * indexer, or a lingering handle from a concurrent write) briefly locks the
+ * target file. In that case we fall back to a direct write so config saves
+ * still succeed for this local development tool - atomicity is a durability
+ * optimization, not a correctness requirement here.
  */
 function persistConfig(payload: Record<string, unknown>): void {
   const targetFile = configFilePath();
   // Write the temp file into the *same* directory as the actual target
   // (which, under setConfigFileForTests(), may differ from configDir()).
   // Renaming across directories/volumes is not guaranteed atomic and can
-  // fail outright on Windows (EPERM/EXDEV), and — worse — if the temp file
+  // fail outright on Windows (EPERM/EXDEV), and - worse - if the temp file
   // were written under the real configDir() while the target was
   // overridden to a temp test file elsewhere, a mismatched tempPath/target
   // pairing could end up touching the user's real config.json. Deriving
@@ -227,7 +233,13 @@ function persistConfig(payload: Record<string, unknown>): void {
     } catch {
       // Best-effort cleanup; the original error is what matters.
     }
-    throw err;
+
+    try {
+      writeFileSync(targetFile, serialized, "utf8");
+      return;
+    } catch (writeErr) {
+      throw err;
+    }
   }
 }
 
@@ -251,11 +263,11 @@ function loadProjectRootFromDisk(): string {
       }
     }
   } catch {
-    // Missing file, unreadable, or invalid JSON — fall through to cwd,
+    // Missing file, unreadable, or invalid JSON - fall through to cwd,
     // matching Python's `except (OSError, ValueError, TypeError): pass`.
     // (Deliberately not using loadConfig() here: Python's own
     // _load_project_root() still has this same separate inline read
-    // rather than being consolidated onto _load_config() — the Allowed
+    // rather than being consolidated onto _load_config() - the Allowed
     // Commands change only refactored _persist_project_root(). Keeping
     // this function standalone mirrors that scope exactly.)
   }
@@ -275,8 +287,8 @@ export function getProjectRoot(): string {
  * Persist the selected project root atomically outside the project.
  *
  * Merges into any existing configuration file (load, update the one key,
- * write back the whole object) so other keys — e.g. the terminal
- * allowlist persisted by tools.ts (Phase 3) — are preserved. Mirrors
+ * write back the whole object) so other keys - e.g. the terminal
+ * allowlist persisted by tools.ts (Phase 3) - are preserved. Mirrors
  * security.py's `_persist_project_root()`, which was changed to this
  * load/merge/persist approach by the Allowed Commands feature; this
  * function previously overwrote the file with only `{ project_root }`,
@@ -298,7 +310,7 @@ function persistProjectRoot(root: string): void {
  * Throws `SecurityValidationError` for invalid input (empty path, path
  * does not exist, path is not a directory, or the unsupported
  * CHOOSE_PROJECT_ROOT sentinel) and a plain `Error` (from the underlying
- * `node:fs` call) for persistence failures — callers can use
+ * `node:fs` call) for persistence failures - callers can use
  * `instanceof SecurityValidationError` to tell the two apart, matching
  * Python's ValueError vs. OSError distinction in app.py.
  */
@@ -334,7 +346,7 @@ export function setProjectRoot(inputPath: string): string {
  * Test-only: directly override the in-memory project root, bypassing
  * validation and persistence. Mirrors
  * `monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)` in
- * server-python's pytest fixtures. Not for use outside tests — application
+ * server-python's pytest fixtures. Not for use outside tests - application
  * code should call setProjectRoot() so the change is validated and
  * persisted.
  */
@@ -383,7 +395,7 @@ export function setConfigFileForTests(file: string | null): void {
  * Resolve a path while keeping it inside the configured project.
  *
  * Rejects absolute paths (POSIX or Windows-style) and any traversal
- * (including via symlinks — see the module-level SECURITY NOTE) that would
+ * (including via symlinks - see the module-level SECURITY NOTE) that would
  * escape the project root. Throws `SecurityValidationError` on rejection.
  */
 export function safePath(inputPath: string): string {
@@ -446,7 +458,7 @@ export function isSensitivePath(filePath: string): boolean {
   const root = getProjectRoot();
 
   // Mirrors Python's `except ValueError: return True` when
-  // `file_path.relative_to(root)` fails — treat anything outside the
+  // `file_path.relative_to(root)` fails - treat anything outside the
   // project root as sensitive, as defense in depth.
   if (!isPathWithinRoot(root, filePath)) {
     return true;
