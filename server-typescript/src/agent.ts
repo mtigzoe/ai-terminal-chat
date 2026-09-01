@@ -108,6 +108,90 @@ export type AgentEvent =
   | ErrorEvent
   | CancelledEvent;
 
+function extractLastUserText(contents: unknown[]): string | null {
+  for (let index = contents.length - 1; index >= 0; index--) {
+    const item = contents[index];
+    if (!item || typeof item !== "object") continue;
+
+    const record = item as Record<string, unknown>;
+    if (record.role !== "user") continue;
+
+    const content = record.content;
+    if (typeof content === "string") return content;
+
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part) => {
+          if (typeof part === "string") return part;
+          if (part && typeof part === "object") {
+            const partRecord = part as Record<string, unknown>;
+            return typeof partRecord.text === "string" ? partRecord.text : "";
+          }
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+      if (text) return text;
+    }
+  }
+
+  return null;
+}
+
+function directGitCommand(contents: unknown[]): ProviderResponse | null {
+  const userText = extractLastUserText(contents);
+  if (!userText) return null;
+
+  const command = userText.trim();
+  const addMatch = command.match(/^git\s+add\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i);
+
+  if (addMatch) {
+    const path = addMatch[1] ?? addMatch[2] ?? addMatch[3];
+    if (!path || path.startsWith("-")) return null;
+    return {
+      text: null,
+      tool_calls: [{ name: "git_add", args: { path } }],
+      raw: null,
+    };
+  }
+
+  if (/^git\s+status\s*$/i.test(command)) {
+    return {
+      text: null,
+      tool_calls: [{ name: "git_status", args: {} }],
+      raw: null,
+    };
+  }
+
+  if (/^git\s+branch\s+--show-current\s*$/i.test(command)) {
+    return {
+      text: null,
+      tool_calls: [{ name: "run_command", args: { command } }],
+      raw: null,
+    };
+  }
+
+  if (/^git\s+commit(?:\s|$)/i.test(command)) {
+    return {
+      text:
+        "Git commit is intentionally not available to the agent. Make the commit in your own Git client or terminal.",
+      tool_calls: [],
+      raw: null,
+    };
+  }
+
+  if (/^git\s+push(?:\s|$)/i.test(command)) {
+    return {
+      text:
+        "Git push is intentionally not available to the agent. Push the committed changes from your own Git client or terminal.",
+      tool_calls: [],
+      raw: null,
+    };
+  }
+
+  return null;
+}
+
 export async function* runAgentLoop(
   options: AgentLoopOptions
 ): AsyncGenerator<AgentEvent, void, unknown> {
@@ -150,7 +234,8 @@ export async function* runAgentLoop(
 
     let response: ProviderResponse;
     try {
-      response = await provider.generate(currentContents);
+      const directResponse = roundIndex === 0 ? directGitCommand(currentContents) : null;
+      response = directResponse ?? (await provider.generate(currentContents));
     } catch (exc) {
       yield {
         type: "progress",
@@ -315,8 +400,6 @@ export async function* runAgentLoop(
           result &&
           typeof result === "object" &&
           !("error" in result) &&
-          result &&
-          typeof result === "object" &&
           "requires_confirmation" in result
         ) {
           const preview = result as Record<string, unknown>;
