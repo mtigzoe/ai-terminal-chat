@@ -6,15 +6,10 @@ import './GitStatusPanel.css';
 const POLL_MS_ACTIVE = 2500;
 const POLL_MS_HIDDEN = 30000;
 
-function parseGitStatus(stdout = '') {
+export function parseGitStatus(stdout = '') {
   const lines = String(stdout).split(/\r?\n/).filter(Boolean);
   const header = lines.find((line) => line.startsWith('## '));
-  let branch = '';
-
-  if (header) {
-    const value = header.slice(3);
-    branch = value.split('...')[0].trim();
-  }
+  const branch = header ? header.slice(3).split('...')[0].trim() : '';
 
   let staged = 0;
   let modified = 0;
@@ -30,7 +25,6 @@ function parseGitStatus(stdout = '') {
 
     const x = line[0] || ' ';
     const y = line[1] || ' ';
-    if (['U', 'A'].includes(x) && y === 'U') conflicts += 1;
     if (x === 'U' || y === 'U') conflicts += 1;
     if (x !== ' ') staged += 1;
     if (y !== ' ') modified += 1;
@@ -79,6 +73,7 @@ export default function GitStatusPanel({ host }) {
   const [mountNode, setMountNode] = useState(null);
   const lastLine = useRef('');
   const inFlight = useRef(false);
+  const timerRef = useRef(null);
 
   const findMount = useCallback(() => {
     const inputRegion = document.getElementById('message-input-region');
@@ -104,7 +99,11 @@ export default function GitStatusPanel({ host }) {
     if (!host || inFlight.current) return;
     inFlight.current = true;
     try {
-      const response = await axios.post(`${host}/terminal/run`, { command: 'git status --porcelain=v1 -b' }, { timeout: 8000 });
+      const response = await axios.post(
+        `${host}/terminal/run`,
+        { command: 'git status --porcelain=v1 -b' },
+        { timeout: 8000 },
+      );
       const nextStatus = parseGitStatus(response.data?.stdout || '');
       setStatus(nextStatus);
       setError('');
@@ -128,16 +127,19 @@ export default function GitStatusPanel({ host }) {
   }, [host]);
 
   useEffect(() => {
-    fetchStatus();
-    const refresh = () => {
+    const schedule = () => {
       const delay = document.visibilityState === 'hidden' ? POLL_MS_HIDDEN : POLL_MS_ACTIVE;
-      return window.setTimeout(() => {
-        fetchStatus();
-        timer = refresh();
+      timerRef.current = window.setTimeout(async () => {
+        await fetchStatus();
+        schedule();
       }, delay);
     };
-    let timer = refresh();
-    return () => window.clearTimeout(timer);
+
+    fetchStatus();
+    schedule();
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
   }, [fetchStatus]);
 
   if (!mountNode) return null;
