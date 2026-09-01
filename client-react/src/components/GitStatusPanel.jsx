@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import axios from 'axios';
 import './GitStatusPanel.css';
 
@@ -66,37 +65,17 @@ export function formatGitStatusLine(status) {
   return `Git status — ${parts.join(' — ')}`;
 }
 
-export default function GitStatusPanel({ host }) {
+export default function GitStatusPanel() {
+  const host = (import.meta.env.VITE_API_URL || 'http://localhost:9000').replace(/\/+$/, '');
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [liveText, setLiveText] = useState('');
-  const [mountNode, setMountNode] = useState(null);
   const lastLine = useRef('');
   const inFlight = useRef(false);
   const timerRef = useRef(null);
 
-  const findMount = useCallback(() => {
-    const inputRegion = document.getElementById('message-input-region');
-    if (!inputRegion) return;
-    let node = document.getElementById('git-status-mount');
-    if (!node) {
-      node = document.createElement('div');
-      node.id = 'git-status-mount';
-      node.className = 'git-status-mount';
-      inputRegion.insertAdjacentElement('afterend', node);
-    }
-    setMountNode(node);
-  }, []);
-
-  useEffect(() => {
-    findMount();
-    const observer = new MutationObserver(findMount);
-    observer.observe(document.getElementById('root') || document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [findMount]);
-
   const fetchStatus = useCallback(async () => {
-    if (!host || inFlight.current) return;
+    if (inFlight.current) return;
     inFlight.current = true;
     try {
       const response = await axios.post(
@@ -142,19 +121,16 @@ export default function GitStatusPanel({ host }) {
     };
   }, [fetchStatus]);
 
-  if (!mountNode) return null;
-
   const line = error
     ? `Git status — ${error}`
     : status
       ? formatGitStatusLine(status)
       : 'Git status — loading';
 
-  return createPortal(
+  return (
     <div className={`git-status-panel ${status?.clean ? 'clean' : 'dirty'}`} id="git-status-region">
       <p className="git-status-summary" aria-label="Repository Git status">{line}</p>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveText}</div>
-    </div>,
-    mountNode,
+    </div>
   );
 }
