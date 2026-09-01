@@ -63,7 +63,7 @@ describe('formatGitStatusLine', () => {
 describe('GitStatusPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    document.body.innerHTML = '<div id="root"><div id="message-input-region"></div></div>';
+    document.body.innerHTML = '';
     axios.post.mockResolvedValue({
       data: { stdout: '## main...origin/main\n M app.txt\n?? new.txt\n' },
     });
@@ -73,18 +73,17 @@ describe('GitStatusPanel', () => {
     vi.restoreAllMocks();
   });
 
-  test('places the status directly below the message input', async () => {
-    render(<GitStatusPanel host="http://localhost:9000" />);
+  test('renders exactly one status region', async () => {
+    render(<GitStatusPanel />);
 
     await screen.findByText('Git status — main — 1 modified, 1 untracked');
 
-    const inputRegion = document.getElementById('message-input-region');
-    const statusRegion = document.getElementById('git-status-region');
-    expect(statusRegion.parentElement).toBe(inputRegion.nextElementSibling);
+    expect(document.querySelectorAll('#git-status-region')).toHaveLength(1);
+    expect(document.querySelector('#git-status-mount')).toBeNull();
   });
 
-  test('queries the existing terminal endpoint with git status', async () => {
-    render(<GitStatusPanel host="http://localhost:9000" />);
+  test('queries the terminal endpoint with git status', async () => {
+    render(<GitStatusPanel />);
 
     await waitFor(() => {
       expect(axios.post).toHaveBeenCalledWith(
