@@ -5,8 +5,9 @@ from contextvars import copy_context
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Optional
+import shlex
 
-from providers.base import Provider
+from providers.base import Provider, ProviderResponse, ToolCall
 from pending import create_pending
 from tools import (
     DEFAULT_TOOL_TIMEOUT,
@@ -68,6 +69,129 @@ def _normalize_call_args(args: dict) -> tuple:
         else:
             items.append((key, repr(value)))
     return tuple(items)
+
+
+def _extract_last_user_text(contents: list) -> str | None:
+    """Extract the most recent user text from provider-neutral contents.
+
+    Providers use slightly different content shapes. This helper only
+    inspects entries explicitly marked as user turns and supports the
+    common OpenAI-style ``content`` string and Gemini-style ``parts``
+    objects. It is deliberately conservative: if no user text can be
+    identified, normal model tool selection is used.
+    """
+
+    def text_from_value(value) -> str | None:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            pieces = []
+            for item in value:
+                text = text_from_value(item)
+                if text:
+                    pieces.append(text)
+            return "\n".join(pieces) if pieces else None
+        if isinstance(value, dict):
+            if isinstance(value.get("text"), str):
+                return value["text"]
+            if "parts" in value:
+                return text_from_value(value["parts"])
+            if "content" in value:
+                return text_from_value(value["content"])
+            return None
+        text = getattr(value, "text", None)
+        if isinstance(text, str):
+            return text
+        parts = getattr(value, "parts", None)
+        if parts is not None:
+            return text_from_value(parts)
+        content = getattr(value, "content", None)
+        if content is not None:
+            return text_from_value(content)
+        return None
+
+    for item in reversed(contents or []):
+        if isinstance(item, dict):
+            role = item.get("role")
+            if role == "user":
+                text = text_from_value(item.get("content", item))
+                if text:
+                    return text
+        else:
+            role = getattr(item, "role", None)
+            if role == "user":
+                text = text_from_value(item)
+                if text:
+                    return text
+    return None
+
+
+def _direct_git_command(contents: list):
+    """Return a deterministic tool/final response for an explicit Git command.
+
+    The agent should not ask the model to infer an obvious command from a
+    user message such as ``git add file.txt``. Small/local models can instead
+    mistake that command for a file-editing request. Exact command syntax is
+    handled here while ordinary natural-language requests continue through
+    the model.
+
+    State-changing Git commands still use the normal confirmation mechanism.
+    Commit and push remain intentionally unavailable in the tool set.
+    """
+
+    user_text = _extract_last_user_text(contents)
+    if not user_text:
+        return None
+
+    command = user_text.strip()
+    try:
+        parts = shlex.split(command, posix=False)
+    except ValueError:
+        return None
+
+    if not parts or parts[0].lower() != "git":
+        return None
+
+    subcommand = parts[1].lower() if len(parts) > 1 else ""
+
+    if subcommand == "add":
+        if len(parts) == 3:
+            path = parts[2]
+        elif len(parts) == 4 and parts[2] == "--":
+            path = parts[3]
+        else:
+            return None
+        if not path or path.startswith("-"):
+            return None
+        if len(path) >= 2 and path[0] == path[-1] and path[0] in "\"'":
+            path = path[1:-1]
+        return ToolCall("git_add", {"path": path})
+
+    if subcommand == "status" and len(parts) == 2:
+        return ToolCall("git_status", {})
+
+    if subcommand == "branch" and len(parts) == 3 and parts[2] == "--show-current":
+        return ToolCall("run_command", {"command": command})
+
+    if subcommand == "commit":
+        return ProviderResponse(
+            text=(
+                "Git commit is intentionally not available to the agent. "
+                "The agent can create or modify files and stage a file with "
+                "git add after confirmation, but commits must be made by the "
+                "user in their own Git client or terminal."
+            )
+        )
+
+    if subcommand == "push":
+        return ProviderResponse(
+            text=(
+                "Git push is intentionally not available to the agent. "
+                "Push the committed changes from your own Git client or terminal."
+            )
+        )
+
+    return None
 
 
 def _describe_tool_progress(function_name: str, function_args: dict) -> tuple:
@@ -241,7 +365,8 @@ def run_agent_loop(
             return
 
         try:
-            response = provider.generate(contents)
+            direct_response = _direct_git_command(contents) if round_index == 0 else None
+            response = direct_response if direct_response is not None else provider.generate(contents)
         except Exception as exc:
             yield _progress(
                 "error",
