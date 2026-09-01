@@ -80,64 +80,41 @@ function formatActivityItem(item) {
 }
 
 /**
- * Tool activity list with progressive disclosure.
- * New items during streaming are also mirrored into a polite live region so
- * screen-reader users hear progress without having to leave the input focus.
+ * Legacy activity formatter retained for compatibility with existing imports/tests.
+ * The chat UI no longer renders the detailed activity list.
  */
 function ToolActivity({ activity = [], announceNew = false }) {
-  const liveRef = useRef(null);
-  const prevCountRef = useRef(0);
+  void activity;
+  void announceNew;
+  return null;
+}
 
-  const items = activity.map((item, index) => {
-    const formatted = formatActivityItem(item);
-    return formatted ? { ...formatted, key: `${formatted.kind}-${index}`, details: item } : null;
-  }).filter(Boolean);
+function WorkingStatus({ waiting }) {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const startedAtRef = useRef(null);
 
   useEffect(() => {
-    if (!announceNew || !liveRef.current || items.length <= prevCountRef.current) {
-      prevCountRef.current = items.length;
-      return;
+    if (!waiting) {
+      startedAtRef.current = null;
+      setElapsedSeconds(0);
+      return undefined;
     }
-    const newest = items[items.length - 1];
-    if (!newest) return;
-    const el = liveRef.current;
-    el.textContent = '';
-    const id = window.setTimeout(() => {
-      el.textContent = newest.text;
-    }, 40);
-    prevCountRef.current = items.length;
-    return () => window.clearTimeout(id);
-  }, [items, announceNew]);
 
-  if (!items.length) return null;
+    startedAtRef.current = Date.now();
+    setElapsedSeconds(0);
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [waiting]);
 
+  if (!waiting) return null;
+
+  const minutes = Math.floor(elapsedSeconds / 60);
   return (
-    <section className="tool-activity" aria-labelledby="agent-activity-heading">
-      <h3 id="agent-activity-heading">Agent activity</h3>
-      {/* Polite live region for newly added activity while streaming */}
-      <div
-        ref={liveRef}
-        className="sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        aria-relevant="additions text"
-      />
-      <ol aria-label="Agent activity items">
-        {items.map((item) => (
-          <li key={item.key} className={`activity-item activity-item--${item.kind}`}>
-            <details>
-              <summary>{item.text}</summary>
-              {(item.details.args || item.details.result) && (
-                <pre aria-label={`${item.details.name || 'Tool'} details`}>
-                  {JSON.stringify({ args: item.details.args, result: item.details.result }, null, 2)}
-                </pre>
-              )}
-            </details>
-          </li>
-        ))}
-      </ol>
-    </section>
+    <div className="agent-status" role="status" aria-live="polite" aria-atomic="true">
+      Working for {minutes} {minutes === 1 ? 'minute' : 'minutes'}
+    </div>
   );
 }
 
@@ -185,6 +162,7 @@ function CopyResponseButton({ text }) {
 const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatus = null, waiting = false }) => (
   <main className="chat-area" id="main-conversation" aria-label="Conversation" aria-busy={waiting} tabIndex={-1}>
     <AgentStatusRegion status={agentStatus} />
+    <WorkingStatus waiting={waiting} />
     {data?.length <= 0 ? (
       <div className="welcome-area">
         <p className="welcome-1">Hi,</p>
@@ -220,4 +198,4 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
 );
 
 export default ChatArea;
-export { AgentStatusRegion, ToolActivity, CopyResponseButton };
+export { AgentStatusRegion, ToolActivity, CopyResponseButton, WorkingStatus };
