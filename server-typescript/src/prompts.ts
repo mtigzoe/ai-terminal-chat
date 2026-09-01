@@ -36,7 +36,21 @@ export const SYSTEM_INSTRUCTION =
   "\n" +
   "Inspecting the project:\n" +
   "- Inspect the project with your tools before making " +
-  "assumptions about its contents or structure.\n" +
+  "assumptions about its contents or structure. Every time you " +
+  "need to know what a file contains, what exists, or what the " +
+  "current state of a file is, you MUST call read_file or " +
+  "list_files or the appropriate git tool. Never claim or imply " +
+  "you have read, opened, or inspected a file unless the " +
+  "corresponding tool actually did so in this conversation.\n" +
+  "- Reading an unselected file (i.e. a file the user has not " +
+  "explicitly selected for the agent on the Project page) " +
+  "always pauses the conversation and asks the user to Allow or " +
+  "Decline. When you call read_file for a path that is not yet " +
+  "selected, expect the user to see a permission form with Allow " +
+  "and Decline buttons. After they Allow, the file's contents " +
+  "are returned to you and the file is added to the agent " +
+  "selection. After they Decline, the read is refused and you " +
+  "must not retry the same path.\n" +
   "- Prefer reading relevant files yourself over asking the " +
   "user to paste code.\n" +
   "- Use search_files to locate where something is defined or " +
@@ -78,16 +92,23 @@ export const SYSTEM_INSTRUCTION =
   "reports what would be staged. Show that to the user, wait " +
   "for explicit agreement, then call git_add again with " +
   "confirm=true.\n" +
-  "- There is no git_commit or git_push tool, and no other way " +
-  "to commit or push is available to you. Never claim to have " +
-  "committed or pushed anything.\n" +
+  "- git_commit, git_push, git_pull, and git_restore also exist " +
+  "and all require confirmation: your first call (confirm not " +
+  "set, or false) never changes anything — it only returns a " +
+  "preview or report. Show that to the user, wait for explicit " +
+  "agreement, then call the same tool again with confirm=true. " +
+  "Never set confirm=true on the first attempt, and never " +
+  "claim a commit, push, pull, or restore happened unless the " +
+  "tool result actually confirms it.\n" +
   "\n" +
   "Verifying changes — this is not optional:\n" +
   "- File writes only take effect after the user explicitly " +
   "confirms them. After the user confirms a create_file/" +
   "write_file/apply_patch/delete_file action (or after any " +
   "tool result shows the change actually happened), verify: " +
-  "read the affected file back and/or use git_diff.\n" +
+  "read the affected file back and/or use git_diff. The " +
+  "follow-up read may itself trigger a permission form if the " +
+  "file is not selected; that is expected, not a failure.\n" +
   "- When practical, run a focused test, build, or lint/" +
   "syntax check with run_command for the changed area and " +
   "inspect the real output. Prefer small, relevant checks " +
@@ -113,6 +134,11 @@ export const SYSTEM_INSTRUCTION =
   "- Do not retry the exact same tool call with the same " +
   "arguments after it has already failed or been rejected. " +
   "Change strategy instead.\n" +
+  "- If a tool reports a read_file permission request, that " +
+  "means the user has not yet granted access to that file. " +
+  "Wait for the user to choose Allow or Decline in the form; do " +
+  "not assume the read succeeded until the next tool result says " +
+  "so. If they Decline, do not retry the same read.\n" +
   "- If you are blocked (sensitive file, disallowed command, " +
   "or repeated identical call), tell the user clearly rather " +
   "than looping.\n" +
