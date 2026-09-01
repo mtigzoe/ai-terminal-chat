@@ -166,16 +166,19 @@ def _direct_git_command(contents: list):
         if len(path) >= 2 and path[0] == path[-1] and path[0] in "\"'":
             path = path[1:-1]
         return ProviderResponse(
+            text=None,
             tool_calls=[ToolCall("git_add", {"path": path})]
         )
 
     if subcommand == "status" and len(parts) == 2:
         return ProviderResponse(
+            text=None,
             tool_calls=[ToolCall("git_status", {})]
         )
 
     if subcommand == "branch" and len(parts) == 3 and parts[2] == "--show-current":
         return ProviderResponse(
+            text=None,
             tool_calls=[ToolCall("run_command", {"command": command})]
         )
 
