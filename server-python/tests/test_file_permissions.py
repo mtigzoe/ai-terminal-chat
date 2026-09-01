@@ -240,6 +240,25 @@ def test_git_diff_denies_unselected_path(project_root):
     assert "denied" in result["error"].lower() or "not in the set" in result["error"].lower()
 
 
+def test_read_file_nonexistent_returns_file_missing_not_permission_error(project_root):
+    """A file that doesn't exist must report 'File does not exist', not an access-denied error."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.read_file("no-such-file.txt")
+    assert "error" in result
+    assert "file does not exist" in result["error"].lower()
+    assert "denied" not in result["error"].lower()
+    assert "not in the set" not in result["error"].lower()
+
+
+def test_read_file_existing_but_unselected_triggers_access_denied(project_root):
+    """An existing but unselected file must return 'Access denied:' so the
+    agent layer can pause and trigger the read_file_permission confirmation."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.read_file("other.md")
+    assert "error" in result
+    assert "access denied" in result["error"].lower() or "not in the set" in result["error"].lower()
+
+
 def test_git_show_shell_blocked_when_restricted(project_root):
     security.set_allowed_read_paths(["README.md"])
     # git show is already on the default allowlist

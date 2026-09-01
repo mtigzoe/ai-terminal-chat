@@ -109,16 +109,16 @@ def read_file(path: str) -> dict:
             )
         }
 
-    try:
-        require_read_allowed(file_path)
-    except ValueError as exc:
-        return {"error": str(exc)}
-
     if not file_path.exists():
         return {"error": f"File does not exist: {path}"}
 
     if not file_path.is_file():
         return {"error": f"Not a file: {path}"}
+
+    try:
+        require_read_allowed(file_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Prevent accidentally sending extremely large files to the model.
     max_size = 200_000

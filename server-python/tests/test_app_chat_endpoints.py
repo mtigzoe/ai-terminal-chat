@@ -351,6 +351,72 @@ def test_stream_tool_call_and_error_markers_are_correctly_encoded(client, monkey
     assert "\u0393\u00dc\u00e1" not in body  # mangled warning emoji ("ΓÜá")
 
 
+def test_stream_git_status_no_arg_call_renders_without_extra_bracket(client, monkeypatch):
+    _set_provider(
+        monkeypatch,
+        FakeProvider(
+            [
+                ProviderResponse(
+                    text=None,
+                    tool_calls=[ToolCall("git_status", {})],
+                ),
+                ProviderResponse(text="working tree clean"),
+            ]
+        ),
+    )
+
+    response = client.post("/stream", json={"chat": "git status", "history": []})
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "⚙️ git_status()" in body
+    assert "git_status()]" not in body
+
+
+def test_stream_git_push_origin_branch_routes_to_git_push_tool(client, monkeypatch):
+    _set_provider(
+        monkeypatch,
+        FakeProvider(
+            [
+                ProviderResponse(
+                    text=None,
+                    tool_calls=[ToolCall("git_push", {"remote": "origin", "branch": "fix-git-command-routing"})],
+                ),
+                ProviderResponse(text="pushed"),
+            ]
+        ),
+    )
+
+    response = client.post("/stream", json={"chat": "git push origin fix-git-command-routing", "history": []})
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "git_push" in body
+    assert "fix-git-command-routing" in body
+
+
+def test_stream_git_commit_with_message_routes_to_git_commit_tool(client, monkeypatch):
+    _set_provider(
+        monkeypatch,
+        FakeProvider(
+            [
+                ProviderResponse(
+                    text=None,
+                    tool_calls=[ToolCall("git_commit", {"message": "add feature"})],
+                ),
+                ProviderResponse(text="committed"),
+            ]
+        ),
+    )
+
+    response = client.post("/stream", json={"chat": 'git commit -m "add feature"', "history": []})
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "git_commit" in body
+    assert "add feature" in body
+
+
 # ---------------------------------------------------------
 # Global error handler (app.handle_unexpected_error)
 # ---------------------------------------------------------

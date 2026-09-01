@@ -4,7 +4,7 @@ import sys
 SERVER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_DIR))
 
-from agent import _direct_git_command  # noqa: E402
+from agent import _direct_git_command, _direct_read_command  # noqa: E402
 from base import ToolCall, ProviderResponse  # noqa: E402
 
 
@@ -197,3 +197,57 @@ def test_direct_git_push_without_args_routes_correctly():
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].name == "git_push"
     assert result.tool_calls[0].args == {"remote": "", "branch": ""}
+
+
+# ---------------------------------------------------------
+# Explicit read / read_file routing
+# ---------------------------------------------------------
+
+
+def test_direct_read_routes_to_read_file_tool():
+    contents = [{"role": "user", "content": "read hellov7.txt"}]
+
+    result = _direct_read_command(contents)
+
+    assert isinstance(result, ProviderResponse)
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "read_file"
+    assert result.tool_calls[0].args == {"path": "hellov7.txt"}
+
+
+def test_direct_read_file_routes_to_read_file_tool():
+    contents = [{"role": "user", "content": "read_file hellov7.txt"}]
+
+    result = _direct_read_command(contents)
+
+    assert isinstance(result, ProviderResponse)
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "read_file"
+    assert result.tool_calls[0].args == {"path": "hellov7.txt"}
+
+
+def test_direct_read_without_path_returns_text():
+    contents = [{"role": "user", "content": "read"}]
+
+    result = _direct_read_command(contents)
+
+    assert isinstance(result, ProviderResponse)
+    assert result.tool_calls == []
+    assert "specify" in result.text.lower() or "usage" in result.text.lower()
+
+
+def test_direct_read_natural_language_returns_none():
+    contents = [{"role": "user", "content": "please read the file for me"}]
+
+    result = _direct_read_command(contents)
+
+    assert result is None
+
+
+def test_direct_read_strips_quotes_from_path():
+    contents = [{"role": "user", "content": 'read "hellov7.txt"'}]
+
+    result = _direct_read_command(contents)
+
+    assert isinstance(result, ProviderResponse)
+    assert result.tool_calls[0].args == {"path": "hellov7.txt"}

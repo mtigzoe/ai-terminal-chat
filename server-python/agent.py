@@ -107,6 +107,40 @@ def _extract_last_user_text(contents: list) -> str | None:
     return None
 
 
+def _direct_read_command(contents: list):
+    """Return a deterministic tool response for an explicit read/read_file command."""
+    user_text = _extract_last_user_text(contents)
+    if not user_text:
+        return None
+
+    command = user_text.strip()
+    try:
+        parts = shlex.split(command, posix=False)
+    except ValueError:
+        return None
+
+    if not parts:
+        return None
+
+    subcommand = parts[0].lower()
+
+    if subcommand in ("read", "read_file"):
+        if len(parts) < 2:
+            return ProviderResponse(
+                text="Please specify a file to read. Usage: read <path>",
+                tool_calls=[],
+                raw=None,
+            )
+        path = parts[1]
+        if not path or path.startswith("-"):
+            return None
+        if len(path) >= 2 and path[0] == path[-1] and path[0] in "\"'":
+            path = path[1:-1]
+        return ProviderResponse(text=None, tool_calls=[ToolCall("read_file", {"path": path})])
+
+    return None
+
+
 def _direct_git_command(contents: list):
     """Return a deterministic tool/final response for an explicit Git command."""
     user_text = _extract_last_user_text(contents)
@@ -325,7 +359,11 @@ def run_agent_loop(provider: Provider, contents: list, cancel_event: Optional[Ev
             return
 
         try:
-            direct_response = _direct_git_command(contents) if round_index == 0 else None
+            direct_response = None
+            if round_index == 0:
+                direct_response = _direct_read_command(contents)
+                if direct_response is None:
+                    direct_response = _direct_git_command(contents)
             response = direct_response if direct_response is not None else provider.generate(contents)
         except Exception as exc:
             yield _progress("error", f"Provider failed: {exc}", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
