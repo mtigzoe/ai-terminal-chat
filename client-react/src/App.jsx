@@ -29,7 +29,7 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
 
   useEffect(() => {
     if (!pending) return undefined;
-    denyRef.current?.focus();
+    allowRef.current?.focus();
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape' && !resolving) {
