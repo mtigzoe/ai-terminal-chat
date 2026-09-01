@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { Provider } from "./providers/base.ts";
+import { Provider, ProviderResponse } from "./providers/base.ts";
 import { runAgentLoop } from "./agent.ts";
 
 class FakeProvider extends Provider {
@@ -7,11 +7,11 @@ class FakeProvider extends Provider {
     return [{ role: "user", content: msg }];
   }
 
-  async generate(_contents: unknown[]) {
+  async generate(_contents: unknown[]): Promise<ProviderResponse> {
     throw new Error("provider.generate() should not be called for explicit Git commands");
   }
 
-  appendModelTurn(contents: unknown[], response: never): unknown[] {
+  appendModelTurn(contents: unknown[], response: ProviderResponse): unknown[] {
     return [...contents, { role: "assistant", response }];
   }
 
