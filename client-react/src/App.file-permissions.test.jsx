@@ -43,9 +43,17 @@ test('non-streaming chat sends selected Project paths as allowed_paths', async (
   fireEvent.change(getTextarea(), { target: { value: 'Read the selected files.' } });
   fireEvent.click(getSendButton());
 
-  await waitFor(() => expect(axios.post).toHaveBeenCalled());
+  await waitFor(() => {
+    const chatCall = axios.post.mock.calls.find(
+      (call) => call[0]?.toString().includes('/chat')
+    );
+    expect(chatCall).toBeDefined();
+  });
 
-  const [, payload] = axios.post.mock.calls[0];
+  const chatCall = axios.post.mock.calls.find(
+    (call) => call[0]?.toString().includes('/chat')
+  );
+  const payload = chatCall[1];
   expect(payload.allowed_paths).toEqual(['README.md', 'src/App.jsx']);
 });
 
@@ -54,9 +62,17 @@ test('non-streaming chat sends an empty selection when no Project files are sele
   fireEvent.change(getTextarea(), { target: { value: 'Read the project.' } });
   fireEvent.click(getSendButton());
 
-  await waitFor(() => expect(axios.post).toHaveBeenCalled());
+  await waitFor(() => {
+    const chatCall = axios.post.mock.calls.find(
+      (call) => call[0]?.toString().includes('/chat')
+    );
+    expect(chatCall).toBeDefined();
+  });
 
-  const [, payload] = axios.post.mock.calls[0];
+  const chatCall = axios.post.mock.calls.find(
+    (call) => call[0]?.toString().includes('/chat')
+  );
+  const payload = chatCall[1];
   expect(payload.allowed_paths).toEqual([]);
 });
 

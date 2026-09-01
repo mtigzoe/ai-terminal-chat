@@ -80,13 +80,29 @@ function formatActivityItem(item) {
 }
 
 /**
- * Legacy activity formatter retained for compatibility with existing imports/tests.
- * The chat UI no longer renders the detailed activity list.
+ * Agent activity section: renders a labelled region for each assistant message
+ * that has tool activity. The actual activity list is summarized; the full
+ * detail text is not rendered to keep the chat view uncluttered.
  */
 function ToolActivity({ activity = [], announceNew = false }) {
-  void activity;
   void announceNew;
-  return null;
+  if (!activity || activity.length === 0) return null;
+  const latest = activity[activity.length - 1];
+  const summary =
+    latest && typeof latest === 'object' && latest.name
+      ? `${latest.name} — running`
+      : 'running';
+  return (
+    <div
+      className="agent-activity"
+      role="group"
+      aria-label="Agent activity"
+      data-testid="agent-activity"
+    >
+      <span className="agent-activity-label">Agent activity:</span>
+      <span className="agent-activity-summary">{summary}</span>
+    </div>
+  );
 }
 
 function WorkingStatus({ waiting }) {

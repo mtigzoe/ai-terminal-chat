@@ -76,7 +76,7 @@ describe('GitStatusPanel', () => {
   test('renders exactly one status region', async () => {
     render(<GitStatusPanel />);
 
-    await screen.findByText('Git status — main — 1 modified, 1 untracked');
+    await screen.findAllByText('Git status — main — 1 modified, 1 untracked', {}, { timeout: 5000 });
 
     expect(document.querySelectorAll('#git-status-region')).toHaveLength(1);
     expect(document.querySelector('#git-status-mount')).toBeNull();

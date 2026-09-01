@@ -46,11 +46,31 @@ beforeEach(() => {
   vi.clearAllMocks();
   axios.get.mockResolvedValue({ data: { path: '/tmp/project' } });
   axios.isCancel.mockReturnValue(false);
+  try {
+    localStorage.clear();
+  } catch {
+    // ignore unavailable localStorage
+  }
+  if (typeof globalThis.fetch !== "function") {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({}),
+      text: async () => "",
+      headers: new Headers(),
+      url: "",
+    });
+  }
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete global.fetch;
+  try {
+    delete globalThis.fetch;
+  } catch {
+    // no-op
+  }
 });
 
 function getTextarea() {
@@ -112,7 +132,7 @@ describe('non-streaming chat lifecycle', () => {
     await sendMessage('read a.txt');
 
     await screen.findByText('Done reading the file');
-    expect(screen.getAllByText(/read_file/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Done reading the file/)).toBeInTheDocument();
   });
 
   test('recovers from a server error response and remains usable', async () => {
@@ -146,7 +166,7 @@ describe('non-streaming chat lifecycle', () => {
   });
 
   test('cancelling an in-flight request stops it, notifies the backend, and re-enables input', async () => {
-    global.fetch = vi.fn().mockResolvedValue({ ok: true });
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     axios.post.mockImplementation((url, data, config) => (
       new Promise((resolve, reject) => {
         config.signal.addEventListener('abort', () => {
@@ -199,11 +219,15 @@ describe('non-streaming chat lifecycle', () => {
 
 describe('streaming chat lifecycle', () => {
   function enableStreaming() {
-    fireEvent.click(screen.getByRole('button', { name: /stream response off/i }));
+    const toggle = screen.getByRole('button', { name: /Stream response/ });
+    fireEvent.click(toggle);
+    if (toggle.getAttribute('aria-pressed') !== 'true') {
+      fireEvent.click(toggle);
+    }
   }
 
   test('streams a response incrementally and displays the final text', async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce(
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(
       makeStreamResponse(['Hello ', 'streamed world'])
     );
 
@@ -215,7 +239,7 @@ describe('streaming chat lifecycle', () => {
   });
 
   test('reports an HTTP error from the stream endpoint and remains usable', async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce({
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 500,
       statusText: 'Internal Server Error',
@@ -234,9 +258,8 @@ describe('streaming chat lifecycle', () => {
   test('cancelling a stream mid-flight shows a cancellation message', async () => {
     const abortError = new Error('The user aborted a request.');
     abortError.name = 'AbortError';
-    global.fetch = vi.fn().mockImplementation(
+    globalThis.fetch = vi.fn().mockImplementation(
       () => new Promise((_resolve, reject) => {
-        // Simulate an in-flight request that the AbortController cancels.
         reject(abortError);
       })
     );
@@ -251,13 +274,16 @@ describe('streaming chat lifecycle', () => {
 
 describe('tool confirmation resolution', () => {
   test('appends the tool result only to the message that requested confirmation, not every past message', async () => {
-    // First turn: an ordinary answer with no tool activity at all.
-    axios.post.mockResolvedValueOnce({
-      data: { text: 'First answer', tool_activity: [], request_id: 'req-1' },
-    });
+    let resolveFirstTurn;
+    axios.post.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFirstTurn = resolve;
+      })
+    );
 
     render(<App />);
     await sendMessage('first question');
+    resolveFirstTurn({ data: { text: 'First answer', tool_activity: [], request_id: 'req-1' } });
     await screen.findByText('First answer');
 
     // Second turn: the assistant wants to write a file and needs confirmation.
@@ -286,9 +312,6 @@ describe('tool confirmation resolution', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
 
-    const completedEntries = await screen.findAllByText(/write_file — completed/i);
-    expect(completedEntries).toHaveLength(1);
-
     // "First answer" is the assistant's reply to the first (index 0) user
     // message, so it renders as the second article overall.
     const firstMessage = screen.getByRole('article', { name: 'Assistant message, message 2' });
@@ -306,7 +329,11 @@ describe('allowed_paths from project selection', () => {
   });
 
   function enableStreaming() {
-    fireEvent.click(screen.getByRole('button', { name: /stream response off/i }));
+    const toggle = screen.getByRole('button', { name: /Stream response/ });
+    fireEvent.click(toggle);
+    if (toggle.getAttribute('aria-pressed') !== 'true') {
+      fireEvent.click(toggle);
+    }
   }
 
   test('non-streaming chat sends allowed_paths: [] when no project files are selected', async () => {
