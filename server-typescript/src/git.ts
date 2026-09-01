@@ -17,6 +17,18 @@ const GIT_LOG_TIMEOUT_MS = 10_000;
 const GIT_BRANCH_TIMEOUT_MS = 10_000;
 const GIT_ADD_TIMEOUT_MS = 15_000;
 
+const GIT_FETCH_TIMEOUT_MS = 15_000;
+const GIT_PULL_TIMEOUT_MS = 30_000;
+const GIT_RESTORE_TIMEOUT_MS = 15_000;
+const GIT_COMMIT_TIMEOUT_MS = 15_000;
+const GIT_PUSH_TIMEOUT_MS = 30_000;
+
+const GIT_FETCH_MAX_CHARS = 10_000;
+const GIT_PULL_MAX_CHARS = 10_000;
+const GIT_RESTORE_MAX_CHARS = 10_000;
+const GIT_COMMIT_MAX_CHARS = 10_000;
+const GIT_PUSH_MAX_CHARS = 10_000;
+
 const GIT_STATUS_MAX_CHARS = 20_000;
 const GIT_LOG_MAX_CHARS = 20_000;
 const GIT_BRANCH_MAX_CHARS = 20_000;
@@ -250,5 +262,174 @@ export async function gitAdd(path: string, confirm = false): Promise<Record<stri
     return { path: relativePath, staged: true };
   } catch (error) {
     return { error: `Could not stage file: ${errorText(error)}` };
+  }
+}
+
+const PREVIEW_CHAR_LIMIT = 2000;
+
+export async function gitFetch(remote = ""): Promise<Record<string, unknown>> {
+  const args = ["fetch"];
+  if (remote) args.push(remote);
+
+  try {
+    const result = await runGit(args, GIT_FETCH_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git fetch failed." };
+
+    let output = result.stdout.trim();
+    if (!output && !result.stderr.trim()) output = "Fetch completed successfully.";
+
+    return {
+      output: output.slice(0, GIT_FETCH_MAX_CHARS),
+      remote: remote || "all remotes",
+    };
+  } catch (exc) {
+    return { error: errorText(exc) };
+  }
+}
+
+export async function gitPull(remote = "", branch = "", confirm = false): Promise<Record<string, unknown>> {
+  if (!confirm) {
+    return {
+      requires_confirmation: true,
+      remote: remote || "default",
+      branch: branch || "current",
+      message: `This will pull from '${remote || "default remote"}' and merge into the current branch. This changes local files and may create merge conflicts. Confirm to proceed.`,
+    };
+  }
+
+  const args = ["pull"];
+  if (remote) args.push(remote);
+  if (branch) args.push(branch);
+
+  try {
+    const result = await runGit(args, GIT_PULL_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git pull failed." };
+
+    return {
+      output: (result.stdout || "").slice(0, GIT_PULL_MAX_CHARS),
+      remote: remote || "default",
+      branch: branch || "current",
+    };
+  } catch (exc) {
+    return { error: errorText(exc) };
+  }
+}
+
+export async function gitRestore(path: string, staged = false, confirm = false): Promise<Record<string, unknown>> {
+  let filePath: string;
+  try {
+    filePath = safePath(path);
+  } catch (exc) {
+    return { error: String(exc) };
+  }
+
+  if (isSensitivePath(filePath)) return { error: `Refusing to restore sensitive file: ${path}` };
+
+  const { statSync } = await import("node:fs");
+  try {
+    if (!statSync(filePath).isFile()) return { error: `File does not exist: ${path}` };
+  } catch {
+    return { error: `File does not exist: ${path}` };
+  }
+
+  const root = getProjectRoot();
+  const relativePath = filePath.slice(root.length).replace(/^[/\\]+/, "");
+
+  if (!confirm) {
+    const action = staged ? "unstage" : "restore";
+    return {
+      requires_confirmation: true,
+      path: relativePath,
+      action,
+      message: `'${relativePath}' will be ${action}d. This discards uncommitted changes. Confirm to proceed.`,
+    };
+  }
+
+  const args = ["restore"];
+  if (staged) args.push("--staged");
+  args.push("--", relativePath);
+
+  try {
+    const result = await runGit(args, GIT_RESTORE_TIMEOUT_MS);
+    if (result.code !== 0) {
+      return { error: `git restore failed: ${result.stderr.trim() || result.stdout.trim()}` };
+    }
+
+    return { path: relativePath, restored: !staged, unstaged: staged };
+  } catch (exc) {
+    return { error: errorText(exc) };
+  }
+}
+
+export async function gitCommit(message: string, confirm = false): Promise<Record<string, unknown>> {
+  if (!message || !message.trim()) {
+    return { error: "A commit message is required." };
+  }
+
+  const trimmedMessage = message.trim();
+
+  if (!confirm) {
+    const diffResult = await gitDiff("", true);
+    let diffText = "";
+    if (diffResult && typeof diffResult === "object" && "diff" in diffResult) {
+      diffText = String(diffResult.diff ?? "");
+    }
+
+    if (!diffText) {
+      return { error: "No staged changes to commit." };
+    }
+
+    const preview = diffText.slice(0, PREVIEW_CHAR_LIMIT);
+    const previewTruncated = diffText.length > PREVIEW_CHAR_LIMIT;
+
+    return {
+      requires_confirmation: true,
+      commit_message: trimmedMessage,
+      preview,
+      preview_truncated: previewTruncated,
+      message: `About to commit with message: '${trimmedMessage}'. This creates a new commit in the repository. Confirm to proceed.`,
+    };
+  }
+
+  try {
+    const result = await runGit(["commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." };
+
+    return {
+      output: (result.stdout || "").slice(0, GIT_COMMIT_MAX_CHARS),
+      commit_message: trimmedMessage,
+      committed: true,
+    };
+  } catch (exc) {
+    return { error: errorText(exc) };
+  }
+}
+
+export async function gitPush(remote = "", branch = "", confirm = false): Promise<Record<string, unknown>> {
+  if (!confirm) {
+    return {
+      requires_confirmation: true,
+      remote: remote || "default",
+      branch: branch || "current",
+      message: `This will push commits to '${remote || "default remote"}' on branch '${branch || "current branch"}'. This updates the remote repository. Confirm to proceed.`,
+    };
+  }
+
+  const args = ["push"];
+  if (remote) args.push(remote);
+  if (branch) args.push(branch);
+
+  try {
+    const result = await runGit(args, GIT_PUSH_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." };
+
+    return {
+      output: (result.stdout || "").slice(0, GIT_PUSH_MAX_CHARS),
+      remote: remote || "default",
+      branch: branch || "current",
+      pushed: true,
+    };
+  } catch (exc) {
+    return { error: errorText(exc) };
   }
 }

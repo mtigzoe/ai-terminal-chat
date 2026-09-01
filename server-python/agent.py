@@ -33,6 +33,7 @@ _INSPECT_TOOLS = {
     "git_diff",
     "git_log",
     "git_branch",
+    "git_fetch",
 }
 _EXECUTE_TOOLS = {
     "run_command",
@@ -170,6 +171,104 @@ def _direct_git_command(contents: list):
             tool_calls=[ToolCall("git_add", {"path": path})]
         )
 
+    if subcommand == "fetch":
+        remote = ""
+        i = 2
+        while i < len(parts):
+            part = parts[i]
+            if not part.startswith("-"):
+                remote = part
+                break
+            i += 1
+        return ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("git_fetch", {"remote": remote})]
+        )
+
+    if subcommand == "pull":
+        remote = ""
+        branch = ""
+        i = 2
+        while i < len(parts):
+            part = parts[i]
+            if not part.startswith("-"):
+                if not remote:
+                    remote = part
+                elif not branch:
+                    branch = part
+            i += 1
+        return ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("git_pull", {"remote": remote, "branch": branch})]
+        )
+
+    if subcommand == "restore":
+        path = ""
+        staged = False
+        i = 2
+        while i < len(parts):
+            part = parts[i]
+            if part == "--staged":
+                staged = True
+            elif not part.startswith("-"):
+                path = part
+            i += 1
+        if not path:
+            return None
+        if len(path) >= 2 and path[0] == path[-1] and path[0] in "\"'":
+            path = path[1:-1]
+        return ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("git_restore", {"path": path, "staged": staged})]
+        )
+
+    if subcommand == "commit":
+        message = None
+        i = 2
+        while i < len(parts):
+            part = parts[i]
+            if part == "-m":
+                if i + 1 < len(parts):
+                    message = parts[i + 1]
+                    i += 2
+                    continue
+                i += 1
+            elif part.startswith("-m") and len(part) > 2:
+                message = part[2:]
+                i += 1
+            else:
+                i += 1
+        if message:
+            if len(message) >= 2 and message[0] == message[-1] and message[0] in "\"'":
+                message = message[1:-1]
+            return ProviderResponse(
+                text=None,
+                tool_calls=[ToolCall("git_commit", {"message": message})]
+            )
+        return ProviderResponse(
+            text=(
+                "Git commit requires a message. Use: "
+                "git commit -m \"your message\""
+            )
+        )
+
+    if subcommand == "push":
+        remote = ""
+        branch = ""
+        i = 2
+        while i < len(parts):
+            part = parts[i]
+            if not part.startswith("-"):
+                if not remote:
+                    remote = part
+                elif not branch:
+                    branch = part
+            i += 1
+        return ProviderResponse(
+            text=None,
+            tool_calls=[ToolCall("git_push", {"remote": remote, "branch": branch})]
+        )
+
     if subcommand == "status" and len(parts) == 2:
         return ProviderResponse(
             text=None,
@@ -180,24 +279,6 @@ def _direct_git_command(contents: list):
         return ProviderResponse(
             text=None,
             tool_calls=[ToolCall("run_command", {"command": command})]
-        )
-
-    if subcommand == "commit":
-        return ProviderResponse(
-            text=(
-                "Git commit is intentionally not available to the agent. "
-                "The agent can create or modify files and stage a file with "
-                "git add after confirmation, but commits must be made by the "
-                "user in their own Git client or terminal."
-            )
-        )
-
-    if subcommand == "push":
-        return ProviderResponse(
-            text=(
-                "Git push is intentionally not available to the agent. "
-                "Push the committed changes from your own Git client or terminal."
-            )
         )
 
     return None
@@ -242,6 +323,8 @@ def _describe_tool_progress(function_name: str, function_args: dict) -> tuple:
             return "inspect", "Inspecting recent commits"
         if function_name == "git_branch":
             return "inspect", "Listing git branches"
+        if function_name == "git_fetch":
+            return "inspect", "Fetching from remote"
         return "inspect", f"Inspecting via {function_name}"
 
     if function_name in _EXECUTE_TOOLS:
@@ -265,6 +348,11 @@ def _is_successful_write_result(result: dict) -> bool:
         or result.get("applied")
         or result.get("deleted")
         or result.get("staged")
+        or result.get("committed")
+        or result.get("pushed")
+        or result.get("pulled")
+        or result.get("restored")
+        or result.get("unstaged")
         or result.get("bytes_written") is not None
     )
 
@@ -525,6 +613,19 @@ def run_agent_loop(
                             if isinstance(path, str) and path.strip()
                             else "Waiting for confirmation to stage file(s)"
                         )
+                    elif function_name == "git_restore":
+                        action_type = result.get("action", "restore")
+                        confirm_message = (
+                            f"Waiting for confirmation to {action_type} {path}"
+                            if isinstance(path, str) and path.strip()
+                            else f"Waiting for confirmation to {action_type} file"
+                        )
+                    elif function_name == "git_commit":
+                        confirm_message = "Waiting for confirmation to commit"
+                    elif function_name == "git_push":
+                        confirm_message = "Waiting for confirmation to push"
+                    elif function_name == "git_pull":
+                        confirm_message = "Waiting for confirmation to pull"
                     elif isinstance(path, str) and path.strip():
                         confirm_message = (
                             f"Waiting for confirmation to modify {path}"

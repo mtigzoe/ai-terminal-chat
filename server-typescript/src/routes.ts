@@ -12,7 +12,7 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
-import { gitCommittedFileCount, gitDiff, gitLog, gitBranch } from "./git.ts";
+import { gitCommittedFileCount, gitDiff, gitLog, gitBranch, gitFetch, gitPull, gitRestore, gitCommit, gitPush } from "./git.ts";
 import { gitStatusSummary } from "./git-status-summary.ts";
 import {
   getAllowedCommands,
@@ -614,6 +614,10 @@ app.post("/confirm", async (c) => {
     "apply_patch",
     "delete_file",
     "git_add",
+    "git_pull",
+    "git_restore",
+    "git_commit",
+    "git_push",
   ]);
   if (!WRITE_TOOLS.has(action.tool_name)) {
     return c.json({ error: "Only pending write actions can be confirmed." }, 400 as any);
@@ -671,6 +675,15 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>) => u
       gitDiff(String(args.path || ""), Boolean(args.staged)),
     git_log: (args) => gitLog(Number(args.max_count || 10)),
     git_branch: () => gitBranch(),
+    git_fetch: (args) => gitFetch(String(args.remote || "")),
+    git_pull: (args) =>
+      gitPull(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm)),
+    git_restore: (args) =>
+      gitRestore(String(args.path || ""), Boolean(args.staged), Boolean(args.confirm)),
+    git_commit: (args) =>
+      gitCommit(String(args.message || ""), Boolean(args.confirm)),
+    git_push: (args) =>
+      gitPush(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm)),
     create_file: (args) => create_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     write_file: (args) => write_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     apply_patch: (args) => apply_patch(String(args.patch || ""), Boolean(args.confirm)),

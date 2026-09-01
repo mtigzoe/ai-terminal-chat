@@ -14,6 +14,7 @@ const _INSPECT_TOOLS = new Set([
   "git_diff",
   "git_log",
   "git_branch",
+  "git_fetch",
 ]);
 const _EXECUTE_TOOLS = new Set(["run_command"]);
 
@@ -23,7 +24,13 @@ const WRITE_TOOL_NAMES = new Set([
   "apply_patch",
   "delete_file",
 ]);
-const GIT_CONFIRM_TOOL_NAMES = new Set(["git_add"]);
+const GIT_CONFIRM_TOOL_NAMES = new Set([
+  "git_add",
+  "git_pull",
+  "git_restore",
+  "git_commit",
+  "git_push",
+]);
 
 const TOOL_TIMEOUTS: Record<string, number> = {
   list_files: 5,
@@ -35,6 +42,11 @@ const TOOL_TIMEOUTS: Record<string, number> = {
   git_diff: 10,
   git_log: 10,
   git_branch: 10,
+  git_fetch: 15,
+  git_pull: 30,
+  git_restore: 15,
+  git_commit: 15,
+  git_push: 30,
   create_file: 5,
   write_file: 5,
   apply_patch: 35,
@@ -155,6 +167,63 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
     };
   }
 
+  const fetchMatch = command.match(/^git\s+fetch\s+(?:(\S+))?\s*$/i);
+  if (fetchMatch) {
+    return {
+      text: null,
+      tool_calls: [{ name: "git_fetch", args: { remote: fetchMatch[1] ?? "" } }],
+      raw: null,
+    };
+  }
+
+  const pullMatch = command.match(/^git\s+pull\s+(?:(\S+)\s+(?:(\S+))?)?\s*$/i);
+  if (pullMatch) {
+    return {
+      text: null,
+      tool_calls: [{ name: "git_pull", args: { remote: pullMatch[1] ?? "", branch: pullMatch[2] ?? "" } }],
+      raw: null,
+    };
+  }
+
+  const restoreMatch = command.match(/^git\s+restore\s+(?:--staged\s+)?(?:(\S+))\s*$/i);
+  if (restoreMatch) {
+    const staged = command.includes("--staged");
+    const pathMatch = command.match(/(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/);
+    const path = pathMatch ? (pathMatch[1] ?? pathMatch[2] ?? pathMatch[3]) : "";
+    if (!path) return null;
+    return {
+      text: null,
+      tool_calls: [{ name: "git_restore", args: { path, staged } }],
+      raw: null,
+    };
+  }
+
+  const commitMatch = command.match(/^git\s+commit\s+(?:-m\s+(?:"([^"]+)"|'([^']+)'|(\S+)))?\s*$/i);
+  if (commitMatch) {
+    const message = commitMatch[1] ?? commitMatch[2] ?? commitMatch[3];
+    if (message) {
+      return {
+        text: null,
+        tool_calls: [{ name: "git_commit", args: { message } }],
+        raw: null,
+      };
+    }
+    return {
+      text: "Git commit requires a message. Use: git commit -m \"your message\"",
+      tool_calls: [],
+      raw: null,
+    };
+  }
+
+  const pushMatch = command.match(/^git\s+push\s+(?:(\S+)\s+(?:(\S+))?)?\s*$/i);
+  if (pushMatch) {
+    return {
+      text: null,
+      tool_calls: [{ name: "git_push", args: { remote: pushMatch[1] ?? "", branch: pushMatch[2] ?? "" } }],
+      raw: null,
+    };
+  }
+
   if (/^git\s+status\s*$/i.test(command)) {
     return {
       text: null,
@@ -167,24 +236,6 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
     return {
       text: null,
       tool_calls: [{ name: "run_command", args: { command } }],
-      raw: null,
-    };
-  }
-
-  if (/^git\s+commit(?:\s|$)/i.test(command)) {
-    return {
-      text:
-        "Git commit is intentionally not available to the agent. Make the commit in your own Git client or terminal.",
-      tool_calls: [],
-      raw: null,
-    };
-  }
-
-  if (/^git\s+push(?:\s|$)/i.test(command)) {
-    return {
-      text:
-        "Git push is intentionally not available to the agent. Push the committed changes from your own Git client or terminal.",
-      tool_calls: [],
       raw: null,
     };
   }
@@ -412,6 +463,17 @@ export async function* runAgentLoop(
             confirmMessage = path?.trim()
               ? `Waiting for confirmation to stage ${path}`
               : "Waiting for confirmation to stage file(s)";
+          } else if (functionName === "git_restore") {
+            const action = (preview as Record<string, unknown>).action as string || "restore";
+            confirmMessage = path?.trim()
+              ? `Waiting for confirmation to ${action} ${path}`
+              : `Waiting for confirmation to ${action} file`;
+          } else if (functionName === "git_commit") {
+            confirmMessage = "Waiting for confirmation to commit";
+          } else if (functionName === "git_push") {
+            confirmMessage = "Waiting for confirmation to push";
+          } else if (functionName === "git_pull") {
+            confirmMessage = "Waiting for confirmation to pull";
           } else if (path?.trim()) {
             confirmMessage = `Waiting for confirmation to modify ${path}`;
           } else {
@@ -600,11 +662,39 @@ function describeToolProgress(
   }
 
   if (GIT_CONFIRM_TOOL_NAMES.has(functionName)) {
+    const path = functionArgs.path as string | undefined;
+    const pathLabel = path?.trim() ? ` ${path}` : "";
+
+    if (functionName === "git_add") {
+      return {
+        phase: "confirm",
+        message: `Preparing to stage${pathLabel || " file(s)"}`,
+      };
+    }
+
+    if (functionName === "git_restore") {
+      const action = (functionArgs.action as string | undefined) || "restore";
+      return {
+        phase: "confirm",
+        message: `Preparing to ${action}${pathLabel || " file"}`,
+      };
+    }
+
+    if (functionName === "git_commit") {
+      return { phase: "confirm", message: "Preparing to commit" };
+    }
+
+    if (functionName === "git_push") {
+      return { phase: "confirm", message: "Preparing to push" };
+    }
+
+    if (functionName === "git_pull") {
+      return { phase: "confirm", message: "Preparing to pull" };
+    }
+
     return {
       phase: "confirm",
-      message: path?.trim()
-        ? `Preparing to stage${pathLabel}`
-        : "Preparing to stage file(s)",
+      message: `Preparing to stage${pathLabel || " file(s)"}`,
     };
   }
 
@@ -618,6 +708,7 @@ function describeToolProgress(
       git_diff: `Inspecting git diff${pathLabel}`,
       git_log: "Inspecting recent commits",
       git_branch: "Listing git branches",
+      git_fetch: "Fetching from remote",
     };
     return { phase: "inspect", message: inspectMap[functionName] || `Inspecting via ${functionName}` };
   }
@@ -662,6 +753,11 @@ function isSuccessfulWriteResult(result: unknown): boolean {
     record.applied ||
     record.deleted ||
     record.staged ||
+    record.committed ||
+    record.pushed ||
+    record.pulled ||
+    record.restored ||
+    record.unstaged ||
     record.bytes_written !== undefined
   );
 }

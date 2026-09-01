@@ -98,6 +98,7 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git clean",
   "git push",
   "git commit",
+  "git pull",
   "git add",
 ] as const;
 

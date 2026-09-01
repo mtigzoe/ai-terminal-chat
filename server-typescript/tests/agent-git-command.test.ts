@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import { Provider, ProviderResponse } from "./providers/base.ts";
-import { runAgentLoop } from "./agent.ts";
+import { Provider, ProviderResponse } from "../src/providers/base.ts";
+import { runAgentLoop } from "../src/agent.ts";
 
 class FakeProvider extends Provider {
   buildContents(msg: string, _history: unknown[]): unknown[] {
@@ -269,7 +269,7 @@ describe("explicit Git command routing", () => {
     const errorEvents = events.filter((e) => e.type === "error");
     const finalEvents = events.filter((e) => e.type === "final");
     const pendingEvents = events.filter((e) => e.type === "pending_confirmation");
-
+    
     if (finalEvents.length > 0) {
       expect((finalEvents[0] as { text: string }).text).toContain("message");
     } else if (pendingEvents.length > 0) {
