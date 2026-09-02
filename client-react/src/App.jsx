@@ -156,11 +156,56 @@ function App() {
           window.dispatchEvent(new CustomEvent('ai-terminal-chat:allowed-paths-changed', { detail: { paths } }));
         }
       }
-      const resultEvent = { type: 'tool_result', name: action.name, result: confirmed ? response.data.result : { cancelled: true, message: 'Action declined by user.' } };
-      setStreamToolActivity((current) => [...current, resultEvent]);
-      setData((current) => { const lastModelIndex = current.map((message) => message.role).lastIndexOf('model'); if (lastModelIndex === -1) return current; return current.map((message, index) => index !== lastModelIndex ? message : { ...message, toolActivity: [...(message.toolActivity || []), resultEvent] }); });
-      setAgentStatus({ phase: confirmed ? 'complete' : 'cancelled', message: permissionGranted ? `Read access granted for ${action.args?.path || 'the file'}. It is now selected on the Project page.` : (confirmed ? 'Action approved and completed.' : 'Action declined by user.'), assertive: false });
-      setPendingConfirmation(null);
+
+      // The server resumes the agent loop from where it paused, so a
+      // compound request (e.g. "add, commit, and push") can keep going on
+      // its own across each Allow click instead of stopping after one
+      // step. response.data.tool_activity carries every event from that
+      // continuation — starting with this action's own result — and may
+      // include a further pending_confirmation (another step still needs
+      // an answer) and/or final text (the model is done). Older pending
+      // actions with no saved loop state fall back to a single flat result.
+      const resumed = Array.isArray(response.data?.tool_activity);
+      const newActivityItems = resumed
+        ? response.data.tool_activity
+        : [{ type: 'tool_result', name: action.name, result: confirmed ? response.data.result : { cancelled: true, message: 'Action declined by user.' } }];
+      const nextPending = resumed ? response.data.pending_confirmation || null : null;
+      const finalText = resumed ? (response.data.text || '') : '';
+
+      setStreamToolActivity((current) => [...current, ...newActivityItems]);
+      setData((current) => {
+        const lastModelIndex = current.map((message) => message.role).lastIndexOf('model');
+        if (lastModelIndex === -1) return current;
+        return current.map((message, index) => {
+          if (index !== lastModelIndex) return message;
+          const updated = { ...message, toolActivity: [...(message.toolActivity || []), ...newActivityItems] };
+          if (finalText) {
+            const priorText = message.parts?.[0]?.text || '';
+            updated.parts = [{ text: priorText ? `${priorText}\n\n${finalText}` : finalText }];
+          }
+          return updated;
+        });
+      });
+
+      if (nextPending) {
+        setPendingConfirmation(nextPending);
+        setAgentStatus(statusFromPendingConfirmation(nextPending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false });
+      } else {
+        setPendingConfirmation(null);
+        if (resumed && response.data?.cancelled && !confirmed) {
+          setAgentStatus({ phase: 'cancelled', message: 'Action declined by user.', assertive: false });
+        } else if (resumed && response.data?.error && !finalText) {
+          setAgentStatus({ phase: 'error', message: response.data.error, assertive: true });
+        } else {
+          setAgentStatus({
+            phase: confirmed ? 'complete' : 'cancelled',
+            message: permissionGranted
+              ? `Read access granted for ${action.args?.path || 'the file'}. It is now selected on the Project page.`
+              : (confirmed ? 'Action approved and completed.' : 'Action declined by user.'),
+            assertive: false,
+          });
+        }
+      }
     } catch (error) {
       setAgentStatus({ phase: 'error', message: getErrorMessage(error, 'Could not resolve confirmation.'), assertive: true });
     } finally {
@@ -175,7 +220,7 @@ function App() {
 
   useEffect(() => { let pendingFiles = null; let pendingPath = null; let restoreChatId = null; try { const rawFiles = localStorage.getItem('ai-terminal-chat:pending-files'); if (rawFiles) { pendingFiles = JSON.parse(rawFiles); localStorage.removeItem('ai-terminal-chat:pending-files'); } const rawPath = localStorage.getItem('ai-terminal-chat:pending-terminal-path'); if (rawPath) { pendingPath = rawPath; localStorage.removeItem('ai-terminal-chat:pending-terminal-path'); } const rawRestore = localStorage.getItem('ai-terminal-chat:restore-chat-id'); if (rawRestore) { restoreChatId = rawRestore; localStorage.removeItem('ai-terminal-chat:restore-chat-id'); } } catch {} if (restoreChatId) { try { const rawChats = localStorage.getItem(CHAT_STORAGE_KEY); const chats = rawChats ? JSON.parse(rawChats) : []; const chat = Array.isArray(chats) ? chats.find((c) => c.id === restoreChatId) : null; if (chat && Array.isArray(chat.messages)) { setChatId(chat.id); try { localStorage.setItem('ai-terminal-chat:current-chat-id', chat.id); } catch {} setData(chat.messages); setNewChatAvailable(true); } } catch {} } if (Array.isArray(pendingFiles)) { const paths = pendingFiles.map(({ path }) => path).filter(Boolean); setAllowedPaths(paths); try { localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths)); } catch {} if (pendingFiles.length > 0) { const fileContext = pendingFiles.map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`).join('\n'); const message = `I explicitly selected these project files for you to inspect. Use the supplied contents as context for your next response.\n${fileContext}`; window.setTimeout(() => handleClick(message), 0); } } if (pendingPath) setPathForTerminal(pendingPath); }, []);
 
-  return (<div style={{ textAlign: 'center' }}><nav className="skip-links" aria-label="Skip links"><a className="skip-link" href="#main-conversation">Skip to conversation</a><a className="skip-link" href="#message-input-region">Skip to message input</a><a className="skip-link" href="#terminal-region">Skip to terminal</a></nav><div className="app-shell"><div className="chat-app" data-focus-region="chat"><Header toggled={toggled} setToggled={setToggled} waiting={waiting} /><ProviderSelector host={host} waiting={waiting} />{newChatAvailable && <div className="new-chat-link-wrapper"><a href="./index.html" className="new-chat-link" onClick={(event) => { event.preventDefault(); handleNewChat(); }}>New chat</a></div>}<ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />{waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}<div id="message-input-region"><MessageInput inputRef={inputRef} waiting={waiting} handleClick={handleClick} /></div><ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} /></div><aside id="workspace-panels" className="workspace-panels" aria-label="Terminal"><div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-panel-heading"><TerminalPanel host={host} onSendToChat={handleClick} pathToInsert={pathForTerminal} onPathInserted={() => setPathForTerminal(null)} /></div></aside></div></div>);
+  return (<div style={{ textAlign: 'center' }}><nav className="skip-links" aria-label="Skip links"><a className="skip-link" href="#main-conversation">Skip to conversation</a><a className="skip-link" href="#message-input-region">Skip to message input</a><a className="skip-link" href="#terminal-region">Skip to terminal</a></nav><div className="app-shell"><div className="chat-app" data-focus-region="chat"><Header toggled={toggled} setToggled={setToggled} waiting={waiting} /><ProviderSelector host={host} waiting={waiting} />{newChatAvailable && <div className="new-chat-link-wrapper"><a href="./index.html" className="new-chat-link" onClick={(event) => { event.preventDefault(); handleNewChat(); }}>New chat</a></div>}<ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />{waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}<div id="message-input-region"><MessageInput inputRef={inputRef} waiting={waiting} pendingConfirmation={Boolean(pendingConfirmation)} handleClick={handleClick} /></div><ConfirmationDialog pending={pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} /></div><aside id="workspace-panels" className="workspace-panels" aria-label="Terminal"><div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-panel-heading"><TerminalPanel host={host} onSendToChat={handleClick} pathToInsert={pathForTerminal} onPathInserted={() => setPathForTerminal(null)} /></div></aside></div></div>);
 }
 
 export default App;

@@ -958,7 +958,15 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
             return {"error": str(exc)}
 
         args.append(str(file_path.relative_to(PROJECT_ROOT)))
-    elif get_allowed_read_paths() is not None:
+    elif not staged and get_allowed_read_paths() is not None:
+        # Project-page file selection restricts which files the model can
+        # read (read_file, and an unscoped diff would let it see arbitrary
+        # working-tree changes across the whole repo instead). Staged
+        # changes are different: a file only ends up here after git_add
+        # already asked for — and got — its own explicit user
+        # confirmation, so showing that specific staged diff back
+        # (including from git_commit's own preview step, just below)
+        # isn't a way around the file-selection boundary.
         return {
             "error": (
                 "A path is required while agent file-selection is active. "

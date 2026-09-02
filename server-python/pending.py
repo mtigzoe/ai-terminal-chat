@@ -6,8 +6,9 @@ A pending action is created from the model's original tool call and can only
 be executed later through the explicit confirmation API.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
+from typing import Optional
 from uuid import uuid4
 
 
@@ -20,13 +21,20 @@ class PendingAction:
     tool_name: str
     args: dict
     preview: dict
+    # Present when this action was created mid-agent-loop (as opposed to a
+    # standalone/legacy pending action). Carries everything needed to
+    # continue the loop once the user Allows or Declines, so a multi-step
+    # request (e.g. "add, commit, and push") can proceed automatically
+    # instead of stopping after a single confirmed action. See
+    # agent.resume_agent_loop() for the shape of this dict.
+    resume: Optional[dict] = None
 
 
 _PENDING = {}
 _LOCK = Lock()
 
 
-def create_pending(tool_name: str, args: dict, preview: dict) -> PendingAction:
+def create_pending(tool_name: str, args: dict, preview: dict, resume: Optional[dict] = None) -> PendingAction:
     """Store one model-requested write and return its opaque action id."""
 
     action = PendingAction(
@@ -34,6 +42,7 @@ def create_pending(tool_name: str, args: dict, preview: dict) -> PendingAction:
         tool_name=tool_name,
         args=dict(args),
         preview=preview,
+        resume=resume,
     )
 
     with _LOCK:

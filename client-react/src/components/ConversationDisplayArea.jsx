@@ -65,42 +65,55 @@ function AgentStatusRegion({ status }) {
 }
 
 function formatActivityItem(item) {
+  if (!item || typeof item !== 'object') return null;
   if (item.type === 'progress') return { kind: 'progress', text: `${phaseLabel(item.phase)}: ${item.message || ''}` };
   if (item.type === 'pending_confirmation') {
     const path = item.args?.path || item.preview?.path || (Array.isArray(item.preview?.files) ? item.preview.files.join(', ') : null);
-    return { kind: 'confirm', text: `Confirmation required: ${item.name || 'write'}${path ? ` (${path})` : ''}` };
+    return { kind: 'confirm', text: `Waiting for you to Allow or Decline: ${item.name || 'write'}${path ? ` (${path})` : ''}` };
   }
   if (item.type === 'tool_call') return { kind: 'call', text: `${item.name || 'tool'} — running` };
   if (item.type === 'tool_result') {
-    const resultError = item.result?.error;
-    if (resultError) return { kind: 'result', text: `${item.name || 'tool'} — failed: ${resultError}` };
-    return { kind: 'result', text: `${item.name || 'tool'} — completed${item.result?.truncated === true ? ' (output truncated)' : ''}` };
+    const result = item.result || {};
+    if (result.cancelled) {
+      return { kind: 'declined', text: `${item.name || 'tool'} — declined: ${result.message || 'Action declined by user.'}` };
+    }
+    if (result.error) {
+      return { kind: 'error', text: `${item.name || 'tool'} — failed: ${result.error}` };
+    }
+    return { kind: 'result', text: `${item.name || 'tool'} — completed${result.truncated === true ? ' (output truncated)' : ''}` };
   }
   return null;
 }
 
 /**
  * Agent activity section: renders a labelled region for each assistant message
- * that has tool activity. The actual activity list is summarized; the full
- * detail text is not rendered to keep the chat view uncluttered.
+ * that has tool activity. The most recent item is summarized using its actual
+ * type (in progress, waiting on confirmation, completed, declined, or failed)
+ * so the status shown always matches what really happened — it does not get
+ * stuck announcing "running" after an action has already been resolved.
  */
 function ToolActivity({ activity = [], announceNew = false }) {
-  void announceNew;
   if (!activity || activity.length === 0) return null;
   const latest = activity[activity.length - 1];
-  const summary =
-    latest && typeof latest === 'object' && latest.name
-      ? `${latest.name} — running`
-      : 'running';
+  const formatted = formatActivityItem(latest);
+  const summary = formatted ? formatted.text : 'Working…';
+  const kind = formatted?.kind || 'progress';
   return (
     <div
-      className="agent-activity"
+      className={`agent-activity agent-activity--${kind}`}
       role="group"
       aria-label="Agent activity"
       data-testid="agent-activity"
     >
       <span className="agent-activity-label">Agent activity:</span>
-      <span className="agent-activity-summary">{summary}</span>
+      <span
+        className="agent-activity-summary"
+        role="status"
+        aria-live={announceNew ? 'polite' : 'off'}
+        aria-atomic="true"
+      >
+        {summary}
+      </span>
     </div>
   );
 }

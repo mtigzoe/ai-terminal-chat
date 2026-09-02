@@ -4,22 +4,27 @@ import { faPaperPlane } from '@fortawesome/free-solid-svg-icons';
 import GitStatusPanel from './GitStatusPanel.jsx';
 
 /** Submission using Enter or the Send button. Shift+Enter inserts a new line. */
-const MessageInput = ({ inputRef, waiting, handleClick }) => {
+const MessageInput = ({ inputRef, waiting, pendingConfirmation, handleClick }) => {
   const [message, setMessage] = useState('');
+  const blocked = waiting || pendingConfirmation;
 
   useEffect(() => {
-    if (!waiting) {
+    if (!blocked) {
       inputRef.current?.focus();
     }
-  }, [waiting, inputRef]);
+  }, [blocked, inputRef]);
 
   const submitMessage = () => {
-    if (waiting || !message.trim()) return;
+    if (blocked || !message.trim()) return;
 
     const submittedMessage = message;
     setMessage('');
     handleClick(submittedMessage);
   };
+
+  let placeholder = 'Enter a message.';
+  if (pendingConfirmation) placeholder = 'Respond to the pending confirmation above before sending another message.';
+  else if (waiting) placeholder = "Waiting for model's response";
 
   return (
     <>
@@ -32,7 +37,7 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
           className="chat_msg_input"
           name="chat"
           rows={3}
-          placeholder={waiting ? "Waiting for model's response" : "Enter a message."}
+          placeholder={placeholder}
           ref={inputRef}
           value={message}
           aria-describedby="message-input-help"
@@ -48,13 +53,14 @@ const MessageInput = ({ inputRef, waiting, handleClick }) => {
           Press Enter to send. Press Shift plus Enter to add a new line.
           While a response is in progress, you can prepare your next message;
           cancel the current response before sending it.
+          {pendingConfirmation ? ' A confirmation is waiting for your Allow or Decline choice; sending is disabled until you respond to it.' : ''}
         </p>
         <button
           type="button"
           className="chat_msg_btn"
           onClick={submitMessage}
           aria-label="Send message"
-          disabled={waiting || !message.trim()}
+          disabled={blocked || !message.trim()}
         >
           <span className="fa-span-send" aria-hidden="true">
             <FontAwesomeIcon icon={faPaperPlane} />

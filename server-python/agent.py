@@ -342,15 +342,106 @@ def _run_tool_with_timeout(function, function_name: str, function_args: dict, ti
         return {"error": f"Tool {function_name} completed without returning a result."}
 
 
+def provider_fingerprint(provider: Provider) -> str:
+    """Identify a provider+model pair so a resumed loop can refuse to run
+    against a different backend than the one that produced its saved
+    ``contents`` (those are provider-specific objects and are not
+    interchangeable across providers)."""
+    return f"{getattr(provider, 'name', type(provider).__name__)}:{getattr(provider, 'model', '')}"
+
+
 def run_agent_loop(provider: Provider, contents: list, cancel_event: Optional[Event] = None):
     """Run the provider and explicitly execute requested tools."""
-    last_call_signature = None
-    consecutive_repeat_count = 0
-    consecutive_error_count = 0
+    yield from _agent_loop(provider, contents, cancel_event=cancel_event)
 
-    yield _progress("plan", "Planning next step", round=1, max_rounds=MAX_TOOL_ROUNDS)
 
-    for round_index in range(MAX_TOOL_ROUNDS):
+def resume_agent_loop(provider: Provider, action, confirmed: bool, cancel_event: Optional[Event] = None):
+    """Resume an agent loop that paused on ``action`` for confirmation.
+
+    Executes (or, if declined, records the cancellation of) the tool call
+    the user just resolved, then continues the loop exactly as if it had
+    never paused: any further tool calls the model already queued up in the
+    same turn are run next, and once the round is complete the model gets
+    to see the result and keep going. This is what lets a compound request
+    like "add, commit, and push" actually finish across several Allow
+    clicks instead of stopping after the first one.
+
+    ``action.resume`` (see the ``resume=`` argument of ``create_pending``)
+    must be present — callers should fall back to a one-off tool execution
+    for legacy pending actions that don't carry loop state.
+    """
+    resume = action.resume
+    if resume is None:
+        raise ValueError(f"Pending action {action.action_id} has no saved loop state to resume.")
+
+    remaining_calls = list(resume["remaining_calls"])
+    call = remaining_calls.pop(0)
+    function_name = call.name
+    function_args = dict(call.args or {})
+
+    if action.tool_name == "read_file_permission":
+        # The caller (app.py) is responsible for granting read access for
+        # this path via set_allowed_read_paths() before consuming this
+        # generator, so the retried read below actually succeeds.
+        if confirmed:
+            timeout_seconds = TOOL_TIMEOUTS.get("read_file", DEFAULT_TOOL_TIMEOUT)
+            result = _run_tool_with_timeout(TOOL_FUNCTIONS["read_file"], "read_file", function_args, timeout_seconds)
+        else:
+            result = {"cancelled": True, "message": "Action declined by user."}
+    elif confirmed:
+        function = TOOL_FUNCTIONS.get(function_name)
+        confirm_args = dict(function_args)
+        confirm_args["confirm"] = True
+        timeout_seconds = TOOL_TIMEOUTS.get(function_name, DEFAULT_TOOL_TIMEOUT)
+        result = _run_tool_with_timeout(function, function_name, confirm_args, timeout_seconds)
+    else:
+        result = {"cancelled": True, "message": "Action declined by user."}
+
+    print(f"[tool result] {function_name}: {result}")
+    yield {"type": "tool_result", "name": function_name, "result": result}
+
+    tool_results = list(resume["tool_results"]) + [{"name": function_name, "result": result}]
+
+    yield from _agent_loop(
+        provider,
+        resume["contents"],
+        cancel_event=cancel_event,
+        start_round_index=resume["round_index"],
+        seed_tool_calls=remaining_calls,
+        seed_tool_results=tool_results,
+        seed_last_call_signature=resume.get("last_call_signature"),
+        seed_consecutive_repeat_count=resume.get("consecutive_repeat_count", 0),
+        seed_consecutive_error_count=resume.get("consecutive_error_count", 0),
+    )
+
+
+def _agent_loop(
+    provider: Provider,
+    contents: list,
+    cancel_event: Optional[Event] = None,
+    start_round_index: int = 0,
+    seed_tool_calls: Optional[list] = None,
+    seed_tool_results: Optional[list] = None,
+    seed_last_call_signature=None,
+    seed_consecutive_repeat_count: int = 0,
+    seed_consecutive_error_count: int = 0,
+):
+    """Core round loop, shared by a fresh run_agent_loop() call and by a
+    resume_agent_loop() continuation. When ``seed_tool_calls`` is given
+    (even as an empty list), the first iteration skips calling the model
+    and instead finishes out the in-progress round using the seeded calls
+    and results — this is how a resumed confirmation picks up mid-round."""
+    last_call_signature = seed_last_call_signature
+    consecutive_repeat_count = seed_consecutive_repeat_count
+    consecutive_error_count = seed_consecutive_error_count
+
+    if seed_tool_calls is None:
+        yield _progress("plan", "Planning next step", round=1, max_rounds=MAX_TOOL_ROUNDS)
+
+    pending_calls = seed_tool_calls
+    pending_results = seed_tool_results
+
+    for round_index in range(start_round_index, MAX_TOOL_ROUNDS):
         round_number = round_index + 1
 
         if cancel_event is not None and cancel_event.is_set():
@@ -358,31 +449,38 @@ def run_agent_loop(provider: Provider, contents: list, cancel_event: Optional[Ev
             yield _cancelled_event()
             return
 
-        try:
-            direct_response = None
-            if round_index == 0:
-                direct_response = _direct_read_command(contents)
-                if direct_response is None:
-                    direct_response = _direct_git_command(contents)
-            response = direct_response if direct_response is not None else provider.generate(contents)
-        except Exception as exc:
-            yield _progress("error", f"Provider failed: {exc}", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
-            yield {"type": "error", "message": f"{type(provider).__name__} error: {exc}"}
-            return
-
-        if not response.tool_calls:
-            if not response.text:
-                yield _progress("error", "Model returned no text and requested no further tools.", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
-                yield {"type": "error", "message": "Model returned no text and requested no further tools."}
+        if pending_calls is not None:
+            tool_calls = pending_calls
+            tool_results = pending_results if pending_results is not None else []
+            pending_calls = None
+            pending_results = None
+        else:
+            try:
+                direct_response = None
+                if round_index == 0:
+                    direct_response = _direct_read_command(contents)
+                    if direct_response is None:
+                        direct_response = _direct_git_command(contents)
+                response = direct_response if direct_response is not None else provider.generate(contents)
+            except Exception as exc:
+                yield _progress("error", f"Provider failed: {exc}", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
+                yield {"type": "error", "message": f"{type(provider).__name__} error: {exc}"}
                 return
-            yield _progress("complete", "Task completed", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
-            yield {"type": "final", "text": response.text}
-            return
 
-        contents = provider.append_model_turn(contents, response)
-        tool_results = []
+            if not response.tool_calls:
+                if not response.text:
+                    yield _progress("error", "Model returned no text and requested no further tools.", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
+                    yield {"type": "error", "message": "Model returned no text and requested no further tools."}
+                    return
+                yield _progress("complete", "Task completed", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
+                yield {"type": "final", "text": response.text}
+                return
 
-        for call in response.tool_calls:
+            contents = provider.append_model_turn(contents, response)
+            tool_calls = response.tool_calls
+            tool_results = []
+
+        for call_index, call in enumerate(tool_calls):
             if cancel_event is not None and cancel_event.is_set():
                 yield _progress("cancelled", "Stopped: cancelled by user", round=round_number, max_rounds=MAX_TOOL_ROUNDS)
                 yield _cancelled_event()
@@ -419,7 +517,21 @@ def run_agent_loop(provider: Provider, contents: list, cancel_event: Optional[Ev
                 result = _run_tool_with_timeout(function, function_name, preview_args, timeout_seconds)
 
                 if not result.get("error") and result.get("requires_confirmation"):
-                    action = create_pending(function_name, function_args, result)
+                    action = create_pending(
+                        function_name,
+                        function_args,
+                        result,
+                        resume={
+                            "provider_fingerprint": provider_fingerprint(provider),
+                            "contents": contents,
+                            "round_index": round_index,
+                            "tool_results": list(tool_results),
+                            "remaining_calls": list(tool_calls[call_index:]),
+                            "last_call_signature": last_call_signature,
+                            "consecutive_repeat_count": consecutive_repeat_count,
+                            "consecutive_error_count": consecutive_error_count,
+                        },
+                    )
                     path = function_args.get("path")
                     if function_name == "apply_patch":
                         confirm_message = "Waiting for confirmation to apply patch"
@@ -468,6 +580,16 @@ def run_agent_loop(provider: Provider, contents: list, cancel_event: Optional[Ev
                                 "Project-page agent selection."
                             ),
                             "permission_request": True,
+                        },
+                        resume={
+                            "provider_fingerprint": provider_fingerprint(provider),
+                            "contents": contents,
+                            "round_index": round_index,
+                            "tool_results": list(tool_results),
+                            "remaining_calls": list(tool_calls[call_index:]),
+                            "last_call_signature": last_call_signature,
+                            "consecutive_repeat_count": consecutive_repeat_count,
+                            "consecutive_error_count": consecutive_error_count,
                         },
                     )
                     yield _progress(

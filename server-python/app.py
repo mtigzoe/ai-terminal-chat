@@ -19,7 +19,7 @@ from flask import Flask, Response, request, stream_with_context
 from flask_cors import CORS
 
 import cancellation
-from agent import run_agent_loop
+from agent import provider_fingerprint, resume_agent_loop, run_agent_loop
 from pending import get_pending, pop_pending
 from providers import SUPPORTED_PROVIDERS, get_provider
 from security import (
@@ -243,44 +243,34 @@ def cancel_request(request_id):
     return {"request_id": request_id, "cancelled": cancelled}
 
 
-@app.route("/confirm", methods=["POST"])
-def confirm_action():
-    """Approve/reject a pending write or file-read permission request."""
-    data = request.get_json(silent=True) or {}
-    action_id = str(data.get("action_id", "")).strip()
-    confirmed = data.get("confirmed")
-    if not action_id:
-        return {"error": "action_id is required."}, 400
+def _extract_allowed_paths(data: dict):
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("allowed_paths")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, str) and item.strip()]
 
-    action = pop_pending(action_id) if confirmed is True else pop_pending(action_id)
-    if action is None:
-        return {"error": "Pending action not found or already resolved."}, 404
 
+def _confirm_legacy(action, action_id: str, confirmed: bool):
+    """Execute a single confirmed/declined action in isolation, with no
+    saved loop state to resume. This is the original /confirm behavior,
+    kept as a fallback for pending actions that predate resumable loop
+    state (e.g. actions still pending across a server restart, though the
+    in-memory store does not currently survive one) or that were created
+    against a provider that has since been switched out from under them."""
     if action.tool_name == "read_file_permission":
-        if confirmed is True:
-            path = action.args.get("path")
+        path = action.args.get("path")
+        if confirmed:
             return {
-                "confirmed": True,
-                "action_id": action_id,
-                "tool": action.tool_name,
-                "permission_granted": True,
-                "path": path,
-                "result": {
-                    "permission_granted": True,
-                    "path": path,
-                    "message": f"Read access granted for '{path}'.",
-                },
+                "confirmed": True, "action_id": action_id, "tool": action.tool_name,
+                "permission_granted": True, "path": path,
+                "result": {"permission_granted": True, "path": path, "message": f"Read access granted for '{path}'."},
             }
-        return {
-            "confirmed": False,
-            "action_id": action_id,
-            "tool": action.tool_name,
-            "permission_granted": False,
-            "cancelled": True,
-        }
+        return {"confirmed": False, "action_id": action_id, "tool": action.tool_name, "permission_granted": False, "cancelled": True}
 
-    if confirmed is not True:
-        return {"confirmed": False, "action_id": action_id, "cancelled": True}
+    if not confirmed:
+        return {"confirmed": False, "action_id": action_id, "tool": action.tool_name, "cancelled": True}
 
     if action.tool_name not in WRITE_TOOL_NAMES and action.tool_name not in GIT_CONFIRM_TOOL_NAMES:
         return {"error": "Only pending write actions can be confirmed."}, 400
@@ -302,13 +292,90 @@ def confirm_action():
     return {"confirmed": True, "action_id": action_id, "tool": action.tool_name, "result": result}
 
 
-def _extract_allowed_paths(data: dict):
-    if not isinstance(data, dict):
-        return []
-    raw = data.get("allowed_paths")
-    if not isinstance(raw, list):
-        return []
-    return [item for item in raw if isinstance(item, str) and item.strip()]
+@app.route("/confirm", methods=["POST"])
+def confirm_action():
+    """Approve/reject a pending write or file-read permission request, then
+    resume the agent loop from the point it paused so the model can keep
+    going on its own — e.g. a request to "add, commit, and push" continues
+    through all three steps as each is confirmed, instead of the
+    conversation stalling after the first one."""
+    data = request.get_json(silent=True) or {}
+    action_id = str(data.get("action_id", "")).strip()
+    confirmed = data.get("confirmed") is True
+    request_id = str(data.get("request_id") or uuid.uuid4().hex)
+    if not action_id:
+        return {"error": "action_id is required."}, 400
+
+    action = pop_pending(action_id)
+    if action is None:
+        return {"error": "Pending action not found or already resolved."}, 404
+
+    if action.tool_name != "read_file_permission" and action.tool_name not in WRITE_TOOL_NAMES and action.tool_name not in GIT_CONFIRM_TOOL_NAMES:
+        return {"error": "Only pending write actions can be confirmed."}, 400
+
+    resume = action.resume
+    if resume is None or resume.get("provider_fingerprint") != provider_fingerprint(provider):
+        # No saved loop state (or the active provider changed since this
+        # action was created, and its saved `contents` are that provider's
+        # native objects) — fall back to a single, isolated execution.
+        return _confirm_legacy(action, action_id, confirmed)
+
+    base_response = {"confirmed": confirmed, "action_id": action_id, "tool": action.tool_name}
+    if action.tool_name == "read_file_permission":
+        path = action.args.get("path")
+        base_response["permission_granted"] = confirmed
+        base_response["path"] = path
+
+    tool_activity = []
+    final_text = ""
+    error_message = None
+    cancelled = False
+    next_pending = None
+    result_captured = False
+    cancel_event = cancellation.register(request_id)
+    allowed_paths = _extract_allowed_paths(data)
+    if action.tool_name == "read_file_permission" and confirmed and isinstance(action.args.get("path"), str):
+        allowed_paths = list(allowed_paths) + [action.args["path"]]
+    set_allowed_read_paths(allowed_paths)
+    try:
+        for event in resume_agent_loop(provider, action, confirmed, cancel_event=cancel_event):
+            if event["type"] == "progress":
+                tool_activity.append({"type": "progress", "phase": event.get("phase"), "message": event.get("message"), "round": event.get("round"), "tool": event.get("tool")})
+            elif event["type"] == "tool_call":
+                tool_activity.append({"type": "tool_call", "name": event["name"], "args": event["args"]})
+            elif event["type"] == "tool_result":
+                tool_activity.append({"type": "tool_result", "name": event["name"], "result": event["result"]})
+                if not result_captured:
+                    base_response["result"] = event["result"]
+                    result_captured = True
+            elif event["type"] == "pending_confirmation":
+                tool_activity.append(event)
+                next_pending = event
+            elif event["type"] == "final":
+                final_text = event["text"]
+            elif event["type"] == "error":
+                error_message = event["message"]
+            elif event["type"] == "cancelled":
+                cancelled = True
+    except Exception as exc:
+        error_message = f"Unexpected server error: {exc}"
+    finally:
+        clear_allowed_read_paths()
+        cancellation.release(request_id)
+
+    base_response["tool_activity"] = tool_activity
+    base_response["text"] = final_text
+    base_response["request_id"] = request_id
+    if next_pending is not None:
+        base_response["pending_confirmation"] = next_pending
+    if cancelled:
+        base_response["cancelled"] = True
+    if not confirmed and not next_pending:
+        base_response["cancelled"] = True
+    if error_message and not final_text:
+        base_response["error"] = error_message
+        return base_response, 502
+    return base_response
 
 
 @app.route("/chat", methods=["POST"])

@@ -317,6 +317,89 @@ describe('tool confirmation resolution', () => {
     const firstMessage = screen.getByRole('article', { name: 'Assistant message, message 2' });
     expect(within(firstMessage).queryByText(/write_file/i)).not.toBeInTheDocument();
   });
+
+  test('confirming a step that is part of a multi-step git request opens the next confirmation instead of closing', async () => {
+    // GitStatusPanel polls POST /terminal/run on mount/interval; route by
+    // URL so that unrelated polling can never race with (and steal) the
+    // queued /chat and /confirm responses below.
+    let chatCall = 0;
+    let confirmCall = 0;
+    axios.post.mockImplementation((url) => {
+      if (url.includes('/terminal/run')) {
+        return Promise.resolve({ data: { stdout: '' } });
+      }
+      if (url.includes('/confirm')) {
+        confirmCall += 1;
+        if (confirmCall === 1) {
+          return Promise.resolve({
+            data: {
+              confirmed: true,
+              action_id: 'add-1',
+              tool: 'git_add',
+              result: { path: 'file.txt', staged: true },
+              tool_activity: [
+                { type: 'tool_result', name: 'git_add', result: { path: 'file.txt', staged: true } },
+                { type: 'pending_confirmation', action_id: 'commit-1', name: 'git_commit', args: { message: 'update file' } },
+              ],
+              pending_confirmation: { type: 'pending_confirmation', action_id: 'commit-1', name: 'git_commit', args: { message: 'update file' } },
+              text: '',
+              request_id: 'req-1',
+            },
+          });
+        }
+        return Promise.resolve({
+          data: {
+            confirmed: true,
+            action_id: 'commit-1',
+            tool: 'git_commit',
+            result: { committed: true },
+            tool_activity: [{ type: 'tool_result', name: 'git_commit', result: { committed: true } }],
+            text: 'Added and committed file.txt.',
+            request_id: 'req-1',
+          },
+        });
+      }
+      chatCall += 1;
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            { type: 'pending_confirmation', action_id: 'add-1', name: 'git_add', args: { path: 'file.txt' } },
+          ],
+          request_id: 'req-1',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('add, commit, and push file.txt');
+    await screen.findByRole('dialog', { name: /confirmation required/i });
+
+    // Allowing git_add resumes the loop server-side, which immediately
+    // queues up git_commit (from the same original request) rather than
+    // finishing — the response carries both the git_add result and the
+    // next pending_confirmation.
+    fireEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    // A second confirmation dialog for git_commit should appear — the
+    // conversation must not just stop after the first Allow.
+    await waitFor(() => {
+      expect(screen.getAllByRole('dialog', { name: /confirmation required/i })).toHaveLength(1);
+    });
+    const secondDialog = screen.getByRole('dialog', { name: /confirmation required/i });
+    expect(within(secondDialog).getByText(/git_commit/i)).toBeInTheDocument();
+
+    // Allowing git_commit finishes the whole request: no more pending
+    // steps, and the model's final text lands in the conversation.
+    fireEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    await screen.findByText('Added and committed file.txt.');
+    expect(chatCall).toBe(1);
+    expect(confirmCall).toBe(2);
+  });
 });
 
 describe('allowed_paths from project selection', () => {

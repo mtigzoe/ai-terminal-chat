@@ -624,6 +624,34 @@ def test_git_commit_confirm_true_commits(git_repo):
     assert result.get("commit_message") == "update file"
 
 
+def test_git_commit_preview_works_with_no_files_selected(git_repo):
+    """Regression test: git_commit's confirmation preview (git_diff of
+    staged changes) must not be blocked by the Project-page file-selection
+    restriction. A file only reaches the staging area after git_add has
+    already gone through its own separate confirmation, so showing that
+    staged diff isn't a way to bypass file selection — and since the real
+    client sends allowed_paths: [] on every request unless the user has
+    actively selected files, an unqualified block here would break
+    git_commit's preview (and therefore every "commit my changes" request)
+    for anyone not using that feature."""
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    (git_repo / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+
+    security.set_allowed_read_paths([])
+    try:
+        preview = tools.git_commit("update file")
+        assert preview.get("requires_confirmation") is True
+        assert "v2" in preview.get("preview", "")
+
+        result = tools.git_commit("update file", confirm=True)
+        assert result.get("committed") is True
+    finally:
+        security.clear_allowed_read_paths()
+
+
 def test_git_commit_no_staged_changes_returns_error(git_repo):
     (git_repo / "file.txt").write_text("hello\n")
     subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
