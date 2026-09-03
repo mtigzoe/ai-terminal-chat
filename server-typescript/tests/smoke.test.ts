@@ -65,7 +65,7 @@ describe("server-typescript smoke tests", () => {
   describe("application initialization", () => {
     it("exports a Hono app that responds to requests", async () => {
       const res = await app.request("http://localhost/providers");
-      expect([200, 404, 500]).toContain(res.status);
+      expect(res.status).toBe(200);
     });
   });
 

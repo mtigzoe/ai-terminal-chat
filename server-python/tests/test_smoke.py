@@ -154,6 +154,13 @@ class TestProviderSelection:
     """The Settings/Provider path must allow switching providers."""
 
     def test_select_provider_switches_and_reports_status(self, client, monkeypatch):
+        # This follows the same pattern as the existing
+        # test_select_provider_switches_active_provider in test_app.py:
+        # the real /providers/select endpoint is exercised, but the
+        # provider factory is not mocked away. In practice this does
+        # not make a real external API call because GeminiProvider.probe()
+        # handles auth/network failures gracefully and returns a status
+        # dict rather than raising.
         original = app.provider
         try:
             response = client.post(
