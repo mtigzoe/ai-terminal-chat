@@ -109,7 +109,7 @@ class Provider(ABC):
         return self.capabilities
 
     @abstractmethod
-    def build_contents(self, msg: str, history: list) -> list:
+    def build_contents(self, msg: str, history: list, user_instructions: Optional[str] = None) -> list:
         """Turn the frontend's (msg, history) into this provider's
         native conversation representation."""
 

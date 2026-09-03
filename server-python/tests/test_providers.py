@@ -1518,3 +1518,97 @@ def test_anthropic_public_config_never_includes_api_key(monkeypatch):
     assert "api_key" not in public
     assert "secret" not in str(public).lower()
     assert public["provider"] == "anthropic"
+
+
+# --- User Instructions ---
+
+
+def test_openai_compatible_build_contents_appends_user_instructions_to_system():
+    provider = OpenAICompatibleProvider(
+        base_url="http://localhost:11434/v1",
+        model="test-model",
+    )
+
+    contents = provider.build_contents(
+        "hi",
+        [],
+        user_instructions="Prefer TypeScript.",
+    )
+
+    assert contents[0]["role"] == "system"
+    assert "Prefer TypeScript." in contents[0]["content"]
+    assert "You are a local coding/project agent" in contents[0]["content"]
+
+
+def test_openai_compatible_build_contents_omits_user_instructions_when_none():
+    provider = OpenAICompatibleProvider(
+        base_url="http://localhost:11434/v1",
+        model="test-model",
+    )
+
+    contents = provider.build_contents("hi", [])
+
+    assert contents[0]["role"] == "system"
+    assert "You are a local coding/project agent" in contents[0]["content"]
+    assert "Prefer TypeScript." not in contents[0]["content"]
+
+
+def test_openai_compatible_build_contents_treats_empty_instructions_as_none():
+    provider = OpenAICompatibleProvider(
+        base_url="http://localhost:11434/v1",
+        model="test-model",
+    )
+
+    contents = provider.build_contents("hi", [], user_instructions="   ")
+
+    assert contents[0]["role"] == "system"
+    assert "You are a local coding/project agent" in contents[0]["content"]
+    assert "You are a local coding/project agent\n\n" not in contents[0]["content"]
+
+
+def test_anthropic_build_contents_stores_user_instructions_for_payload():
+    provider = AnthropicProvider(api_key="test-key")
+    provider.build_contents("hi", [], user_instructions="Use tabs.")
+    payload = provider._payload([], use_tools=True)
+    assert "Use tabs." in payload["system"]
+    assert "You are a local coding/project agent" in payload["system"]
+
+
+def test_anthropic_payload_omits_user_instructions_when_none():
+    provider = AnthropicProvider(api_key="test-key")
+    provider.build_contents("hi", [])
+    payload = provider._payload([], use_tools=True)
+    assert "You are a local coding/project agent" in payload["system"]
+    assert "Use tabs." not in payload["system"]
+
+
+def test_gemini_build_contents_stores_user_instructions():
+    from unittest.mock import Mock, patch
+    from google.genai import types
+
+    fake_client = Mock()
+    with patch("gemini.genai.Client", return_value=fake_client):
+        from gemini import GeminiProvider
+
+        provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash")
+
+    provider.build_contents("hi", [], user_instructions="Be concise.")
+    fake_client.models.generate_content.assert_not_called()
+
+    fake_client.reset_mock()
+    fake_response = Mock()
+    fake_model_content = Mock()
+    fake_part = Mock(text="ok")
+    fake_part.function_call = None
+    fake_model_content.parts = [fake_part]
+    fake_model_content.text = "ok"
+    fake_response.candidates = [Mock(content=fake_model_content)]
+    fake_client.models.generate_content.return_value = fake_response
+
+    provider.generate([types.Content(role="user", parts=[types.Part.from_text(text="hi")])])
+
+    call_kwargs = fake_client.models.generate_content.call_args.kwargs
+    config = call_kwargs.get("config")
+    assert config is not None
+    assert "Be concise." in config.system_instruction
+    assert "You are a local coding/project agent" in config.system_instruction

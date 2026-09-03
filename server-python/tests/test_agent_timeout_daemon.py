@@ -15,7 +15,7 @@ class FakeProvider(Provider):
     def __init__(self, responses):
         self.responses = iter(responses)
 
-    def build_contents(self, msg, history):
+    def build_contents(self, msg, history, user_instructions=None):
         return [{"role": "user", "content": msg}]
 
     def generate(self, contents):

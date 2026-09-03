@@ -520,3 +520,108 @@ describe('allowed_paths from project selection', () => {
   });
 });
 
+describe('user instructions', () => {
+  afterEach(() => {
+    try {
+      localStorage.removeItem('ai-terminal-chat:user-instructions');
+    } catch {
+      // ignore unavailable localStorage
+    }
+  });
+
+  function enableStreaming() {
+    const toggle = screen.getByRole('button', { name: /Stream response/ });
+    fireEvent.click(toggle);
+    if (toggle.getAttribute('aria-pressed') !== 'true') {
+      fireEvent.click(toggle);
+    }
+  }
+
+  test('non-streaming chat sends saved user_instructions', async () => {
+    localStorage.setItem('ai-terminal-chat:user-instructions', 'Prefer TypeScript.');
+
+    axios.post.mockResolvedValue({
+      data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
+    });
+
+    render(<App />);
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.objectContaining({ user_instructions: 'Prefer TypeScript.' }),
+        expect.any(Object)
+      );
+    });
+  });
+
+  test('non-streaming chat omits user_instructions when none saved', async () => {
+    axios.post.mockResolvedValue({
+      data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
+    });
+
+    render(<App />);
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.objectContaining({ user_instructions: undefined }),
+        expect.any(Object)
+      );
+    });
+  });
+
+  test('non-streaming chat treats whitespace-only instructions as none', async () => {
+    localStorage.setItem('ai-terminal-chat:user-instructions', '   ');
+
+    axios.post.mockResolvedValue({
+      data: { text: 'ack', tool_activity: [], request_id: 'req-1' },
+    });
+
+    render(<App />);
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.objectContaining({ user_instructions: undefined }),
+        expect.any(Object)
+      );
+    });
+  });
+
+  test('streaming chat sends saved user_instructions', async () => {
+    localStorage.setItem('ai-terminal-chat:user-instructions', 'Use tabs.');
+
+    global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(['streamed ']));
+
+    render(<App />);
+    enableStreaming();
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      const fetchCall = global.fetch.mock.calls[0];
+      expect(fetchCall[0]).toContain('/stream');
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body).toHaveProperty('user_instructions', 'Use tabs.');
+    });
+  });
+
+  test('streaming chat omits user_instructions when none saved', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(['streamed ']));
+
+    render(<App />);
+    enableStreaming();
+    await sendMessage('hi');
+
+    await waitFor(() => {
+      const fetchCall = global.fetch.mock.calls[0];
+      expect(fetchCall[0]).toContain('/stream');
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body).not.toHaveProperty('user_instructions');
+    });
+  });
+});
+

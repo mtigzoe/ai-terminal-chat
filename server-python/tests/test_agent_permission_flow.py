@@ -25,7 +25,7 @@ def isolated_project(tmp_path, monkeypatch):
 
 
 def _install_fake_agent(monkeypatch, observed):
-    monkeypatch.setattr(app.provider, "build_contents", lambda message, history: [])
+    monkeypatch.setattr(app.provider, "build_contents", lambda message, history, user_instructions=None: [])
 
     def fake_agent_loop(provider, contents, cancel_event=None):
         observed["selected"] = tools.read_file("selected.txt")
@@ -61,7 +61,7 @@ def test_chat_passes_selected_paths_into_agent_context(isolated_project, monkeyp
 def test_chat_with_no_selection_denies_file_reads(isolated_project, monkeypatch):
     (isolated_project / "selected.txt").write_text("selected contents")
     observed = {}
-    monkeypatch.setattr(app.provider, "build_contents", lambda message, history: [])
+    monkeypatch.setattr(app.provider, "build_contents", lambda message, history, user_instructions=None: [])
 
     def fake_agent_loop(provider, contents, cancel_event=None):
         observed["result"] = tools.read_file("selected.txt")

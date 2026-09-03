@@ -45,7 +45,7 @@ class ScriptedProvider(Provider):
         self.responses = iter(responses)
         self.generate_calls = []
 
-    def build_contents(self, msg, history):
+    def build_contents(self, msg, history, user_instructions=None):
         return [{"role": "user", "content": msg}]
 
     def generate(self, contents):

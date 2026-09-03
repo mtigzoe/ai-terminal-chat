@@ -36,7 +36,7 @@ class FakeProvider(Provider):
         self.name = "fake"
         self.model = "fake-model"
 
-    def build_contents(self, msg, history):
+    def build_contents(self, msg, history, user_instructions=None):
         return [{"role": "user", "content": msg}]
 
     def generate(self, contents):
@@ -55,7 +55,7 @@ class FailingProvider(Provider):
     name = "failing"
     model = "failing-model"
 
-    def build_contents(self, msg, history):
+    def build_contents(self, msg, history, user_instructions=None):
         return []
 
     def generate(self, contents):
@@ -71,7 +71,7 @@ class FailingProvider(Provider):
 class BadHistoryProvider(FakeProvider):
     """build_contents() raises, simulating an unparseable history payload."""
 
-    def build_contents(self, msg, history):
+    def build_contents(self, msg, history, user_instructions=None):
         raise ValueError("history entry missing 'role'")
 
 
@@ -106,6 +106,69 @@ def test_chat_happy_path_returns_final_text(client, monkeypatch):
     # tool_call or tool_result entry.
     assert all(event["type"] == "progress" for event in data["tool_activity"])
     assert "request_id" in data
+
+
+def test_chat_passes_user_instructions_to_provider(client, monkeypatch):
+    captured = {}
+
+    class CapturingProvider(FakeProvider):
+        def build_contents(self, msg, history, user_instructions=None):
+            captured["user_instructions"] = user_instructions
+            return super().build_contents(msg, history, user_instructions=user_instructions)
+
+    _set_provider(monkeypatch, CapturingProvider([ProviderResponse(text="ok")]))
+
+    response = client.post(
+        "/chat",
+        json={"chat": "hi", "history": [], "user_instructions": "Be concise."},
+    )
+
+    assert response.status_code == 200
+    assert captured["user_instructions"] == "Be concise."
+
+
+def test_chat_treats_empty_user_instructions_as_none(client, monkeypatch):
+    captured = {}
+
+    class CapturingProvider(FakeProvider):
+        def build_contents(self, msg, history, user_instructions=None):
+            captured["user_instructions"] = user_instructions
+            return super().build_contents(msg, history, user_instructions=user_instructions)
+
+    _set_provider(
+        monkeypatch,
+        CapturingProvider(
+            [ProviderResponse(text="ok")] * 3
+        ),
+    )
+
+    for payload in [{}, {"user_instructions": ""}, {"user_instructions": "   "}]:
+        captured.clear()
+        response = client.post("/chat", json={"chat": "hi", "history": [], **payload})
+        assert response.status_code == 200
+        assert captured["user_instructions"] is None
+
+
+def test_stream_passes_user_instructions_to_provider(client, monkeypatch):
+    captured = {}
+
+    class CapturingProvider(FakeProvider):
+        def build_contents(self, msg, history, user_instructions=None):
+            captured["user_instructions"] = user_instructions
+            return super().build_contents(msg, history, user_instructions=user_instructions)
+
+    _set_provider(monkeypatch, CapturingProvider([ProviderResponse(text="streamed ok")]))
+
+    response = client.post(
+        "/stream",
+        json={"chat": "hi", "history": [], "user_instructions": "Be concise."},
+    )
+
+    assert response.status_code == 200
+    events = _parse_stream_events(response.get_data(as_text=True))
+    finals = [e for e in events if e.get("type") == "final"]
+    assert finals and finals[0].get("text") == "streamed ok"
+    assert captured["user_instructions"] == "Be concise."
 
 
 def test_chat_reports_tool_activity(client, monkeypatch):

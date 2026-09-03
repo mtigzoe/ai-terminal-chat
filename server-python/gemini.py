@@ -153,7 +153,7 @@ class GeminiProvider(Provider):
     def capabilities(self) -> ProviderCapabilities:
         return self._capabilities
 
-    def build_contents(self, msg, history):
+    def build_contents(self, msg, history, user_instructions=None):
         contents = []
 
         for item in history:
@@ -180,13 +180,26 @@ class GeminiProvider(Provider):
             )
         )
 
+        self._user_instructions = user_instructions
         return contents
 
     def generate(self, contents) -> ProviderResponse:
+        system_instruction = SYSTEM_INSTRUCTION
+        if getattr(self, "_user_instructions", None):
+            system_instruction = SYSTEM_INSTRUCTION + "\n\n" + self._user_instructions
+
+        config = types.GenerateContentConfig(
+            tools=_build_tools(),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
+            system_instruction=system_instruction,
+        )
+
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=contents,
-            config=self.config,
+            config=config,
         )
 
         if not response.candidates:

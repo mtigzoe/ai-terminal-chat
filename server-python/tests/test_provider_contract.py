@@ -49,7 +49,7 @@ class ContractProvider(Provider):
     def capabilities(self) -> ProviderCapabilities:
         return self._capabilities
 
-    def build_contents(self, msg, history):
+    def build_contents(self, msg, history, user_instructions=None):
         contents = [{"role": "user", "content": msg}]
         for item in history:
             role = item.get("role")

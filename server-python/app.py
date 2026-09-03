@@ -252,6 +252,16 @@ def _extract_allowed_paths(data: dict):
     return [item for item in raw if isinstance(item, str) and item.strip()]
 
 
+def _extract_user_instructions(data: dict):
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("user_instructions")
+    if not isinstance(raw, str):
+        return None
+    trimmed = raw.strip()
+    return trimmed or None
+
+
 def _confirm_legacy(action, action_id: str, confirmed: bool):
     """Execute a single confirmed/declined action in isolation, with no
     saved loop state to resume. This is the original /confirm behavior,
@@ -384,10 +394,11 @@ def chat():
     msg = data.get("chat", "")
     history = data.get("history", [])
     request_id = str(data.get("request_id") or uuid.uuid4().hex)
+    user_instructions = _extract_user_instructions(data)
     if not msg or not str(msg).strip():
         return {"text": "", "error": "Message must not be empty."}, 400
     try:
-        contents = provider.build_contents(msg, history)
+        contents = provider.build_contents(msg, history, user_instructions=user_instructions)
     except Exception as exc:
         return {"text": "", "error": f"Could not process conversation history: {exc}"}, 400
     tool_activity = []
@@ -432,11 +443,12 @@ def stream():
         msg = data.get("chat", "")
         history = data.get("history", [])
         request_id = str(data.get("request_id") or uuid.uuid4().hex)
+        user_instructions = _extract_user_instructions(data)
         if not msg or not str(msg).strip():
             yield json.dumps({"type": "text", "text": "Please enter a message."}) + "\n"
             return
         try:
-            contents = provider.build_contents(msg, history)
+            contents = provider.build_contents(msg, history, user_instructions=user_instructions)
         except Exception as exc:
             yield json.dumps({"type": "error", "message": f"Error building request: {exc}"}) + "\n"
             return

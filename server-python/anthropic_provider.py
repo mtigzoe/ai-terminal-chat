@@ -128,12 +128,13 @@ class AnthropicProvider(Provider):
         # OpenAI /models for general API keys. Return empty (not an error).
         return []
 
-    def _system_instruction(self) -> str:
-        if self._capabilities.tools:
-            return SYSTEM_INSTRUCTION
-        return CHAT_ONLY_INSTRUCTION
+    def _system_instruction(self, user_instructions=None) -> str:
+        base = SYSTEM_INSTRUCTION if self._capabilities.tools else CHAT_ONLY_INSTRUCTION
+        if user_instructions:
+            return base + "\n\n" + user_instructions
+        return base
 
-    def build_contents(self, msg: str, history: list) -> list:
+    def build_contents(self, msg: str, history: list, user_instructions=None) -> list:
         """Build Anthropic ``messages`` (no system role in the array)."""
 
         contents: list[dict] = []
@@ -164,13 +165,15 @@ class AnthropicProvider(Provider):
                 "content": [{"type": "text", "text": msg}],
             }
         )
+
+        self._user_instructions = user_instructions
         return contents
 
     def _payload(self, contents: list, use_tools: bool) -> dict:
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self.max_tokens,
-            "system": self._system_instruction(),
+            "system": self._system_instruction(getattr(self, "_user_instructions", None)),
             "messages": contents,
         }
         if use_tools:

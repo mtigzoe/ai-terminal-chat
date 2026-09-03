@@ -233,8 +233,12 @@ class OpenAICompatibleProvider(Provider):
             return SYSTEM_INSTRUCTION
         return CHAT_ONLY_INSTRUCTION
 
-    def build_contents(self, msg, history):
-        contents = [{"role": "system", "content": self._system_instruction()}]
+    def build_contents(self, msg, history, user_instructions=None):
+        system = self._system_instruction()
+        if user_instructions:
+            system = system + "\n\n" + user_instructions
+
+        contents = [{"role": "system", "content": system}]
 
         for item in history:
             role = item.get("role")
