@@ -172,43 +172,46 @@ def _direct_git_command(contents: list):
         return ProviderResponse(text=None, tool_calls=[ToolCall("git_add", {"path": path})])
 
     if subcommand == "fetch":
-        remote = ""
-        i = 2
-        while i < len(parts):
-            part = parts[i]
-            if not part.startswith("-"):
-                remote = part
-                break
-            i += 1
+        if any(part.startswith("-") for part in parts[2:]):
+            return ProviderResponse(
+                text="Unsupported git fetch option. The agent currently supports only: git fetch [remote]"
+            )
+        if len(parts) > 3:
+            return ProviderResponse(
+                text="Unsupported git fetch syntax. The agent currently supports only: git fetch [remote]"
+            )
+        remote = parts[2] if len(parts) == 3 else ""
         return ProviderResponse(text=None, tool_calls=[ToolCall("git_fetch", {"remote": remote})])
 
     if subcommand == "pull":
-        remote = ""
-        branch = ""
-        i = 2
-        while i < len(parts):
-            part = parts[i]
-            if not part.startswith("-"):
-                if not remote:
-                    remote = part
-                elif not branch:
-                    branch = part
-            i += 1
+        if any(part.startswith("-") for part in parts[2:]):
+            return ProviderResponse(
+                text="Unsupported git pull option. The agent currently supports only: git pull [remote] [branch]"
+            )
+        if len(parts) > 4:
+            return ProviderResponse(
+                text="Unsupported git pull syntax. The agent currently supports only: git pull [remote] [branch]"
+            )
+        remote = parts[2] if len(parts) >= 3 else ""
+        branch = parts[3] if len(parts) == 4 else ""
         return ProviderResponse(text=None, tool_calls=[ToolCall("git_pull", {"remote": remote, "branch": branch})])
 
     if subcommand == "restore":
-        path = ""
         staged = False
-        i = 2
-        while i < len(parts):
-            part = parts[i]
-            if part == "--staged":
-                staged = True
-            elif not part.startswith("-"):
-                path = part
-            i += 1
-        if not path:
-            return None
+        path = ""
+        remaining = parts[2:]
+        if remaining and remaining[0] == "--staged":
+            staged = True
+            remaining = remaining[1:]
+        if any(part.startswith("-") for part in remaining):
+            return ProviderResponse(
+                text="Unsupported git restore option. The agent currently supports only: git restore [--staged] <path>"
+            )
+        if len(remaining) != 1:
+            return ProviderResponse(
+                text="Git restore requires exactly one path. Use: git restore [--staged] <path>"
+            )
+        path = remaining[0]
         if len(path) >= 2 and path[0] == path[-1] and path[0] in "\"'":
             path = path[1:-1]
         return ProviderResponse(text=None, tool_calls=[ToolCall("git_restore", {"path": path, "staged": staged})])
@@ -219,16 +222,25 @@ def _direct_git_command(contents: list):
         while i < len(parts):
             part = parts[i]
             if part == "-m":
-                if i + 1 < len(parts):
-                    message = parts[i + 1]
-                    i += 2
-                    continue
-                i += 1
+                if message is not None:
+                    return ProviderResponse(text="Git commit accepts one message. Use: git commit -m \"your message\"")
+                if i + 1 >= len(parts):
+                    return ProviderResponse(text="Git commit requires a message. Use: git commit -m \"your message\"")
+                message = parts[i + 1]
+                i += 2
             elif part.startswith("-m") and len(part) > 2:
+                if message is not None:
+                    return ProviderResponse(text="Git commit accepts one message. Use: git commit -m \"your message\"")
                 message = part[2:]
                 i += 1
+            elif part.startswith("-"):
+                return ProviderResponse(
+                    text="Unsupported git commit option. The agent currently supports only: git commit -m \"message\""
+                )
             else:
-                i += 1
+                return ProviderResponse(
+                    text="Unsupported git commit syntax. The agent currently supports only: git commit -m \"message\""
+                )
         if message:
             if len(message) >= 2 and message[0] == message[-1] and message[0] in "\"'":
                 message = message[1:-1]
@@ -236,17 +248,16 @@ def _direct_git_command(contents: list):
         return ProviderResponse(text="Git commit requires a message. Use: git commit -m \"your message\"")
 
     if subcommand == "push":
-        remote = ""
-        branch = ""
-        i = 2
-        while i < len(parts):
-            part = parts[i]
-            if not part.startswith("-"):
-                if not remote:
-                    remote = part
-                elif not branch:
-                    branch = part
-            i += 1
+        if any(part.startswith("-") for part in parts[2:]):
+            return ProviderResponse(
+                text="Unsupported git push option. The agent currently supports only: git push [remote] [branch]"
+            )
+        if len(parts) > 4:
+            return ProviderResponse(
+                text="Unsupported git push syntax. The agent currently supports only: git push [remote] [branch]"
+            )
+        remote = parts[2] if len(parts) >= 3 else ""
+        branch = parts[3] if len(parts) == 4 else ""
         return ProviderResponse(text=None, tool_calls=[ToolCall("git_push", {"remote": remote, "branch": branch})])
 
     if subcommand == "status" and len(parts) == 2:
@@ -270,7 +281,14 @@ def _describe_tool_progress(function_name: str, function_args: dict) -> tuple:
         return "confirm", f"Preparing to {action}{path_label or ' file(s)'}"
 
     if function_name in GIT_CONFIRM_TOOL_NAMES:
-        return "confirm", f"Preparing to stage{path_label or ' file(s)'}"
+        git_actions = {
+            "git_add": f"Preparing to stage{path_label or ' file(s)'}",
+            "git_commit": "Preparing to commit",
+            "git_push": "Preparing to push",
+            "git_pull": "Preparing to pull",
+            "git_restore": f"Preparing to {'un' if function_args.get('staged') else ''}stage/restore{path_label or ' file(s)'}",
+        }
+        return "confirm", git_actions.get(function_name, f"Preparing to run {function_name}")
 
     if function_name in _INSPECT_TOOLS:
         if function_name == "read_file":
@@ -373,6 +391,14 @@ def resume_agent_loop(provider: Provider, action, confirmed: bool, cancel_event:
     resume = action.resume
     if resume is None:
         raise ValueError(f"Pending action {action.action_id} has no saved loop state to resume.")
+
+    saved_fingerprint = resume.get("provider_fingerprint")
+    current_fingerprint = provider_fingerprint(provider)
+    if saved_fingerprint and saved_fingerprint != current_fingerprint:
+        raise ValueError(
+            "Cannot resume this action because the selected AI provider/model "
+            "differs from the provider/model that created the pending action."
+        )
 
     remaining_calls = list(resume["remaining_calls"])
     call = remaining_calls.pop(0)

@@ -1353,15 +1353,24 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
     rel_path = str(file_path.relative_to(PROJECT_ROOT))
 
     if not confirm:
-        action = "unstage" if staged else "restore"
+        if staged:
+            action = "unstage"
+            message = (
+                f"'{rel_path}' will be unstaged. Your working-tree "
+                f"changes will be preserved. Confirm to proceed."
+            )
+        else:
+            action = "restore"
+            message = (
+                f"'{rel_path}' will be restored to its state in HEAD. "
+                f"Uncommitted working-tree changes will be discarded. "
+                f"Confirm to proceed."
+            )
         return {
             "requires_confirmation": True,
             "path": rel_path,
             "action": action,
-            "message": (
-                f"'{rel_path}' will be {action}d. This discards "
-                f"uncommitted changes. Confirm to proceed."
-            ),
+            "message": message,
         }
 
     try:
