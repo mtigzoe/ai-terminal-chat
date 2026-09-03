@@ -1118,8 +1118,9 @@ def git_add(path: str, confirm: bool = False) -> dict:
     after the user has explicitly agreed to it.
 
     Staging is not committing: git_add only updates the index. It
-    does not create a commit, change file contents, or push anything.
-    There is deliberately no git_commit or git_push tool.
+    does not create a commit or push anything by itself — use
+    git_commit and git_push (each with their own confirm step) for
+    those.
 
     Args:
         path: Relative path to the file to stage.
@@ -1993,9 +1994,7 @@ WRITE_TOOL_NAMES = {
 # future permission-level system can grant/restrict git operations
 # independently of filesystem writes. Every tool here must follow the
 # same confirm=False (preview only) / confirm=True (execute) pattern
-# as WRITE_TOOL_NAMES. Deliberately does NOT include a commit or push
-# tool — staging is the only state-changing git operation exposed so
-# far, and it only touches the index, never file contents or history.
+# as WRITE_TOOL_NAMES.
 GIT_CONFIRM_TOOL_NAMES = {
     "git_add",
     "git_pull",
@@ -2510,10 +2509,9 @@ TOOL_SCHEMAS = {
         "description": (
             "Stages a single file's current changes for the next "
             "commit (git add). This only updates the git index — it "
-            "does not commit, push, or change any file's contents. "
-            "There is no git_commit or git_push tool, and no other "
-            "tool can commit or push either — those actions are not "
-            "available. Requires confirmation: calling without "
+            "does not commit or push by itself; use git_commit and "
+            "git_push (each with their own separate confirm step) "
+            "for those. Requires confirmation: calling without "
             "confirm=true will NOT stage anything, it only reports "
             "what would be staged. Only call it again with "
             "confirm=true after the user has explicitly agreed."
