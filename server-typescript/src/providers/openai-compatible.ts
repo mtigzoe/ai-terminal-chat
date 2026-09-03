@@ -269,6 +269,14 @@ export class OpenAICompatibleProvider extends Provider {
         ? { ...(response.raw as Record<string, unknown>) }
         : { role: "assistant", content: response.text || "" };
     message.role = "assistant";
+    // Ollama (and some other OpenAI-compatible servers) reject
+    // "content": null on assistant messages. The OpenAI spec allows
+    // null content when tool_calls are present, but Ollama returns
+    // HTTP 400 "invalid message content type: <nil>". Normalize to an
+    // empty string so the conversation history round-trips cleanly.
+    if (message.content === null || message.content === undefined) {
+      message.content = "";
+    }
     return [...contents, message];
   }
 

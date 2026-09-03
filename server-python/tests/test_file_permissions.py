@@ -10,6 +10,7 @@ internal/test use only; chat requests never pass None.
 """
 
 import os
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -238,6 +239,41 @@ def test_git_diff_denies_unselected_path(project_root):
     result = tools.git_diff(path="other.md")
     assert "error" in result
     assert "denied" in result["error"].lower() or "not in the set" in result["error"].lower()
+
+
+def test_git_diff_staged_allowed_with_no_path_even_when_restricted(project_root):
+    """Unlike an unstaged diff, a staged diff is scoped to files that
+    already passed their own git_add confirmation, so it isn't gated by
+    file selection — this is what lets git_commit's preview work at all
+    when no files have been explicitly selected (the default for anyone
+    not using that feature)."""
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project_root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=project_root, check=True)
+    subprocess.run(["git", "add", "README.md"], cwd=project_root, check=True)
+    security.set_allowed_read_paths([])
+    result = tools.git_diff(staged=True)
+    assert "error" not in result
+    assert "diff" in result
+
+
+def test_read_file_nonexistent_returns_file_missing_not_permission_error(project_root):
+    """A file that doesn't exist must report 'File does not exist', not an access-denied error."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.read_file("no-such-file.txt")
+    assert "error" in result
+    assert "file does not exist" in result["error"].lower()
+    assert "denied" not in result["error"].lower()
+    assert "not in the set" not in result["error"].lower()
+
+
+def test_read_file_existing_but_unselected_triggers_access_denied(project_root):
+    """An existing but unselected file must return 'Access denied:' so the
+    agent layer can pause and trigger the read_file_permission confirmation."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.read_file("other.md")
+    assert "error" in result
+    assert "access denied" in result["error"].lower() or "not in the set" in result["error"].lower()
 
 
 def test_git_show_shell_blocked_when_restricted(project_root):

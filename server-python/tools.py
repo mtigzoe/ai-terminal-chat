@@ -109,16 +109,16 @@ def read_file(path: str) -> dict:
             )
         }
 
-    try:
-        require_read_allowed(file_path)
-    except ValueError as exc:
-        return {"error": str(exc)}
-
     if not file_path.exists():
         return {"error": f"File does not exist: {path}"}
 
     if not file_path.is_file():
         return {"error": f"Not a file: {path}"}
+
+    try:
+        require_read_allowed(file_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Prevent accidentally sending extremely large files to the model.
     max_size = 200_000
@@ -353,6 +353,7 @@ FORBIDDEN_ALLOWED_COMMAND_PREFIXES = (
     "git clean",
     "git push",
     "git commit",
+    "git pull",
     "git add",
 )
 
@@ -669,6 +670,16 @@ GIT_LOG_MAX_CHARS = 20_000
 GIT_BRANCH_MAX_CHARS = 20_000
 GIT_DIFF_MAX_CHARS = 50_000
 
+GIT_FETCH_TIMEOUT = 15
+GIT_PULL_TIMEOUT = 30
+GIT_COMMIT_TIMEOUT = 15
+GIT_PUSH_TIMEOUT = 30
+
+GIT_FETCH_MAX_CHARS = 10_000
+GIT_PULL_MAX_CHARS = 10_000
+GIT_COMMIT_MAX_CHARS = 10_000
+GIT_PUSH_MAX_CHARS = 10_000
+
 # The full set of `git status --short` XY codes that represent an
 # unresolved merge conflict (e.g. from `git merge` or `git rebase`).
 # "AA" (both added) and "DD" (both deleted) don't contain the letter
@@ -947,7 +958,15 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
             return {"error": str(exc)}
 
         args.append(str(file_path.relative_to(PROJECT_ROOT)))
-    elif get_allowed_read_paths() is not None:
+    elif not staged and get_allowed_read_paths() is not None:
+        # Project-page file selection restricts which files the model can
+        # read (read_file, and an unscoped diff would let it see arbitrary
+        # working-tree changes across the whole repo instead). Staged
+        # changes are different: a file only ends up here after git_add
+        # already asked for — and got — its own explicit user
+        # confirmation, so showing that specific staged diff back
+        # (including from git_commit's own preview step, just below)
+        # isn't a way around the file-selection boundary.
         return {
             "error": (
                 "A path is required while agent file-selection is active. "
@@ -1099,8 +1118,9 @@ def git_add(path: str, confirm: bool = False) -> dict:
     after the user has explicitly agreed to it.
 
     Staging is not committing: git_add only updates the index. It
-    does not create a commit, change file contents, or push anything.
-    There is deliberately no git_commit or git_push tool.
+    does not create a commit or push anything by itself — use
+    git_commit and git_push (each with their own confirm step) for
+    those.
 
     Args:
         path: Relative path to the file to stage.
@@ -1193,6 +1213,334 @@ def git_add(path: str, confirm: bool = False) -> dict:
         }
 
     return {"path": rel_path, "staged": True}
+
+
+def git_fetch(remote: str = "") -> dict:
+    """Fetch changes from a remote without merging.
+
+    Args:
+        remote: Remote name to fetch from. Leave empty for all remotes.
+
+    Returns:
+        A dictionary with fetch output, or an error.
+    """
+
+    try:
+        args = ["git", "fetch"]
+        if remote:
+            args.append(remote)
+        result = subprocess.run(
+            args,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=GIT_FETCH_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {
+            "error": (
+                f"git fetch timed out after {GIT_FETCH_TIMEOUT} seconds."
+            )
+        }
+    except Exception as exc:
+        return {"error": f"Could not run git fetch: {exc}"}
+
+    if result.returncode != 0:
+        return {"error": result.stderr.strip() or "git fetch failed."}
+
+    output = result.stdout or ""
+    if not output and not result.stderr:
+        output = "Fetch completed successfully."
+
+    return {
+        "output": output[:GIT_FETCH_MAX_CHARS],
+        "remote": remote or "all remotes",
+    }
+
+
+def git_pull(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
+    """Pull changes from a remote and merge into the current branch.
+
+    Requires confirmation. The first call (confirm=False, the default)
+    does NOT pull anything — it only reports what would be pulled.
+    Only pass confirm=True after the user has explicitly agreed.
+
+    Args:
+        remote: Remote name. Leave empty for the default remote.
+        branch: Branch to pull. Leave empty for the current branch.
+        confirm: Must be True to actually pull.
+
+    Returns:
+        A dictionary with pull output, or asking for confirmation.
+    """
+
+    if not confirm:
+        return {
+            "requires_confirmation": True,
+            "remote": remote or "default",
+            "branch": branch or "current",
+            "message": (
+                f"This will pull from '{remote or 'default remote'}' "
+                f"and merge into the current branch. This changes local "
+                f"files and may create merge conflicts. Confirm to proceed."
+            ),
+        }
+
+    try:
+        args = ["git", "pull"]
+        if remote:
+            args.append(remote)
+        if branch:
+            args.append(branch)
+        result = subprocess.run(
+            args,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=GIT_PULL_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {
+            "error": (
+                f"git pull timed out after {GIT_PULL_TIMEOUT} seconds."
+            )
+        }
+    except Exception as exc:
+        return {"error": f"Could not run git pull: {exc}"}
+
+    if result.returncode != 0:
+        return {"error": result.stderr.strip() or "git pull failed."}
+
+    output = result.stdout or ""
+    return {
+        "output": output[:GIT_PULL_MAX_CHARS],
+        "remote": remote or "default",
+        "branch": branch or "current",
+    }
+
+
+def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
+    """Restore a file to its state in HEAD (or index if staged).
+
+    Requires confirmation. The first call (confirm=False, the default)
+    does NOT restore anything — it only reports what would be restored.
+    Only pass confirm=True after the user has explicitly agreed.
+
+    Args:
+        path: Relative path to the file to restore.
+        staged: If true, restore the staged version (unstage).
+        confirm: Must be True to actually restore the file.
+
+    Returns:
+        A dictionary confirming the restore, or asking for confirmation.
+    """
+
+    try:
+        file_path = safe_path(path)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    if is_sensitive_path(file_path):
+        return {"error": f"Refusing to restore sensitive file: {path}"}
+
+    if not file_path.exists():
+        return {"error": f"File does not exist: {path}"}
+
+    rel_path = str(file_path.relative_to(PROJECT_ROOT))
+
+    if not confirm:
+        if staged:
+            action = "unstage"
+            message = (
+                f"'{rel_path}' will be unstaged. Your working-tree "
+                f"changes will be preserved. Confirm to proceed."
+            )
+        else:
+            action = "restore"
+            message = (
+                f"'{rel_path}' will be restored to its state in HEAD. "
+                f"Uncommitted working-tree changes will be discarded. "
+                f"Confirm to proceed."
+            )
+        return {
+            "requires_confirmation": True,
+            "path": rel_path,
+            "action": action,
+            "message": message,
+        }
+
+    try:
+        args = ["git", "restore"]
+        if staged:
+            args.append("--staged")
+        args.append("--")
+        args.append(rel_path)
+        result = subprocess.run(
+            args,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"error": "Restoring the file timed out."}
+    except Exception as exc:
+        return {"error": f"Could not restore file: {exc}"}
+
+    if result.returncode != 0:
+        return {
+            "error": (
+                f"git restore failed: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        }
+
+    return {"path": rel_path, "restored": not staged, "unstaged": staged}
+
+
+def git_commit(message: str, confirm: bool = False) -> dict:
+    """Commit staged changes with a message.
+
+    Requires confirmation. The first call (confirm=False, the default)
+    does NOT commit anything — it only previews the staged diff and
+    reports what would be committed. Only pass confirm=True after the
+    user has explicitly agreed.
+
+    Args:
+        message: Commit message.
+        confirm: Must be True to actually create the commit.
+
+    Returns:
+        A dictionary confirming the commit, or asking for confirmation.
+    """
+
+    if not message or not message.strip():
+        return {"error": "A commit message is required."}
+
+    message = message.strip()
+
+    if not confirm:
+        diff_result = git_diff(staged=True)
+        diff_text = ""
+        if isinstance(diff_result, dict):
+            diff_text = diff_result.get("diff", "") or ""
+
+        if not diff_text:
+            return {"error": "No staged changes to commit."}
+
+        preview = diff_text[:PREVIEW_CHAR_LIMIT]
+        preview_truncated = len(diff_text) > PREVIEW_CHAR_LIMIT
+
+        return {
+            "requires_confirmation": True,
+            "commit_message": message,
+            "preview": preview,
+            "preview_truncated": preview_truncated,
+            "message": (
+                f"About to commit with message: '{message}'. "
+                f"This creates a new commit in the repository. "
+                f"Confirm to proceed."
+            ),
+        }
+
+    try:
+        result = subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=GIT_COMMIT_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {
+            "error": (
+                f"git commit timed out after {GIT_COMMIT_TIMEOUT} seconds."
+            )
+        }
+    except Exception as exc:
+        return {"error": f"Could not run git commit: {exc}"}
+
+    if result.returncode != 0:
+        return {"error": result.stderr.strip() or "git commit failed."}
+
+    output = result.stdout or ""
+    return {
+        "output": output[:GIT_COMMIT_MAX_CHARS],
+        "commit_message": message,
+        "committed": True,
+    }
+
+
+def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
+    """Push commits to a remote repository.
+
+    Requires confirmation. The first call (confirm=False, the default)
+    does NOT push anything — it only reports what would be pushed.
+    Only pass confirm=True after the user has explicitly agreed.
+
+    Args:
+        remote: Remote name. Leave empty for the default remote.
+        branch: Branch to push. Leave empty for the current branch.
+        confirm: Must be True to actually push.
+
+    Returns:
+        A dictionary confirming the push, or asking for confirmation.
+    """
+
+    if not confirm:
+        return {
+            "requires_confirmation": True,
+            "remote": remote or "default",
+            "branch": branch or "current",
+            "message": (
+                f"This will push commits to '{remote or 'default remote'}' "
+                f"on branch '{branch or 'current branch'}'. This updates "
+                f"the remote repository. Confirm to proceed."
+            ),
+        }
+
+    try:
+        args = ["git", "push"]
+        if remote:
+            args.append(remote)
+        if branch:
+            args.append(branch)
+        result = subprocess.run(
+            args,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=GIT_PUSH_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {
+            "error": (
+                f"git push timed out after {GIT_PUSH_TIMEOUT} seconds."
+            )
+        }
+    except Exception as exc:
+        return {"error": f"Could not run git push: {exc}"}
+
+    if result.returncode != 0:
+        return {"error": result.stderr.strip() or "git push failed."}
+
+    output = result.stdout or ""
+    return {
+        "output": output[:GIT_PUSH_MAX_CHARS],
+        "remote": remote or "default",
+        "branch": branch or "current",
+        "pushed": True,
+    }
 
 
 # ---------------------------------------------------------
@@ -1610,6 +1958,11 @@ TOOL_FUNCTIONS = {
     "git_diff": git_diff,
     "git_log": git_log,
     "git_branch": git_branch,
+    "git_fetch": git_fetch,
+    "git_pull": git_pull,
+    "git_restore": git_restore,
+    "git_commit": git_commit,
+    "git_push": git_push,
     "create_file": create_file,
     "write_file": write_file,
     "apply_patch": apply_patch,
@@ -1650,11 +2003,13 @@ WRITE_TOOL_NAMES = {
 # future permission-level system can grant/restrict git operations
 # independently of filesystem writes. Every tool here must follow the
 # same confirm=False (preview only) / confirm=True (execute) pattern
-# as WRITE_TOOL_NAMES. Deliberately does NOT include a commit or push
-# tool — staging is the only state-changing git operation exposed so
-# far, and it only touches the index, never file contents or history.
+# as WRITE_TOOL_NAMES.
 GIT_CONFIRM_TOOL_NAMES = {
     "git_add",
+    "git_pull",
+    "git_restore",
+    "git_commit",
+    "git_push",
 }
 
 # Per-tool execution timeouts (seconds), enforced generically in
@@ -1674,6 +2029,11 @@ TOOL_TIMEOUTS = {
     "git_diff": 10,
     "git_log": 10,
     "git_branch": 10,
+    "git_fetch": 15,
+    "git_pull": 30,
+    "git_restore": 15,
+    "git_commit": 15,
+    "git_push": 30,
     "create_file": 5,
     "write_file": 5,
     "apply_patch": 35,
@@ -1877,6 +2237,157 @@ TOOL_SCHEMAS = {
             "required": [],
         },
     },
+    "git_fetch": {
+        "description": (
+            "Fetch changes from a remote repository without merging. "
+            "Use this to update remote tracking branches before "
+            "inspecting or pulling."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remote": {
+                    "type": "string",
+                    "description": (
+                        "Remote name to fetch from. Leave empty for "
+                        "all remotes."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    "git_pull": {
+        "description": (
+            "Pull changes from a remote and merge into the current "
+            "branch. Requires confirmation: calling without "
+            "confirm=true will NOT pull anything, it only reports "
+            "what would be pulled. Only call it again with "
+            "confirm=true after the user has explicitly agreed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remote": {
+                    "type": "string",
+                    "description": (
+                        "Remote name. Leave empty for the default "
+                        "remote."
+                    ),
+                },
+                "branch": {
+                    "type": "string",
+                    "description": (
+                        "Branch to pull. Leave empty for the current "
+                        "branch."
+                    ),
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Must be true to actually pull. "
+                        "Defaults to false."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    "git_restore": {
+        "description": (
+            "Restore a file to its state in HEAD (or unstage it if "
+            "staged=true). Requires confirmation: calling without "
+            "confirm=true will NOT restore anything, it only reports "
+            "what would be restored. Only call it again with "
+            "confirm=true after the user has explicitly agreed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path to the file to restore.",
+                },
+                "staged": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, unstage the file instead of "
+                        "restoring working tree changes."
+                    ),
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Must be true to actually restore the file. "
+                        "Defaults to false."
+                    ),
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    "git_commit": {
+        "description": (
+            "Commit staged changes with a message. Requires "
+            "confirmation: calling without confirm=true will NOT "
+            "commit anything, it only previews the staged diff and "
+            "reports what would be committed. Only call it again "
+            "with confirm=true after the user has explicitly agreed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Commit message.",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Must be true to actually create the commit. "
+                        "Defaults to false."
+                    ),
+                },
+            },
+            "required": ["message"],
+        },
+    },
+    "git_push": {
+        "description": (
+            "Push commits to a remote repository. Requires "
+            "confirmation: calling without confirm=true will NOT "
+            "push anything, it only reports what would be pushed. "
+            "Only call it again with confirm=true after the user "
+            "has explicitly agreed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remote": {
+                    "type": "string",
+                    "description": (
+                        "Remote name. Leave empty for the default "
+                        "remote."
+                    ),
+                },
+                "branch": {
+                    "type": "string",
+                    "description": (
+                        "Branch to push. Leave empty for the current "
+                        "branch."
+                    ),
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Must be true to actually push. "
+                        "Defaults to false."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
     "create_file": {
         "description": (
             "Creates a new file with the given contents inside the "
@@ -2007,10 +2518,9 @@ TOOL_SCHEMAS = {
         "description": (
             "Stages a single file's current changes for the next "
             "commit (git add). This only updates the git index — it "
-            "does not commit, push, or change any file's contents. "
-            "There is no git_commit or git_push tool, and no other "
-            "tool can commit or push either — those actions are not "
-            "available. Requires confirmation: calling without "
+            "does not commit or push by itself; use git_commit and "
+            "git_push (each with their own separate confirm step) "
+            "for those. Requires confirmation: calling without "
             "confirm=true will NOT stage anything, it only reports "
             "what would be staged. Only call it again with "
             "confirm=true after the user has explicitly agreed."

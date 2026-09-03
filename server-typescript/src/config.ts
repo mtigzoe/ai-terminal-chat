@@ -1,6 +1,6 @@
 // Backend configuration and environment handling.
 //
-// server-python has no single config module — `load_dotenv()` and `PORT`
+// server-python has no single config module - `load_dotenv()` and `PORT`
 // live in app.py, `PROVIDER` is read independently in providers.py and the
 // legacy __init__.py, and the project-root config file lives in security.py.
 // This module consolidates the server-level pieces (env loading, PORT,
@@ -9,7 +9,7 @@
 // literal translation" migration principle. Project-root persistence stays
 // in security.ts (Phase 2) since it is a security boundary, not plain
 // config. Per-provider environment variables (API keys, model defaults,
-// base URLs — server-python/providers.py: load_provider_config) are
+// base URLs - server-python/providers.py: load_provider_config) are
 // migrated in providers.ts (Phase 4), which will reuse the helpers here.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -75,6 +75,12 @@ export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConf
  * The destination directory is created as needed and the temporary file is
  * replaced atomically, preserving other configuration keys when callers use
  * loadAppConfig() -> mutate -> persistAppConfig().
+ *
+ * On Windows, atomic rename can fail with EPERM when another process (antivirus,
+ * indexer, or a lingering handle from a concurrent write) briefly locks the
+ * target file. In that case we fall back to a direct write so config saves
+ * still succeed for this local development tool - atomicity is a durability
+ * optimization, not a correctness requirement here.
  */
 export function persistAppConfig(
   payload: AppConfig,
@@ -96,7 +102,13 @@ export function persistAppConfig(
     } catch {
       // Preserve the original persistence error.
     }
-    throw err;
+
+    try {
+      writeFileSync(configFilePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+      return;
+    } catch (writeErr) {
+      throw err;
+    }
   }
 }
 
@@ -119,7 +131,7 @@ export interface GetEnvIntOptions {
   /**
    * Throw instead of silently falling back when the variable is set but
    * not a valid integer. Off by default to match call sites such as
-   * `int(os.getenv("PORT", "9000"))`, which would raise in Python too —
+   * `int(os.getenv("PORT", "9000"))`, which would raise in Python too -
    * callers that want that strictness should opt in explicitly.
    */
   strict?: boolean;
@@ -152,7 +164,7 @@ export function getEnvInt(
 // ---------------------------------------------------------------------------
 
 export interface ServerConfig {
-  /** TCP port the HTTP server listens on. `PORT` env var, default 9000 — matches client-react's default `VITE_API_URL` of http://localhost:9000. */
+  /** TCP port the HTTP server listens on. `PORT` env var, default 9000 - matches client-react's default `VITE_API_URL` of http://localhost:9000. */
   port: number;
   /**
    * Host/interface the server binds to. Always loopback-only,

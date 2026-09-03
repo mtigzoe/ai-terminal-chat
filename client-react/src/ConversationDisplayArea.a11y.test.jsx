@@ -109,6 +109,6 @@ describe('ConversationDisplayArea accessibility', () => {
     }];
     render(<ChatArea data={data} streamdiv={false} answer="" streamToolActivity={[]} agentStatus={null} waiting={false} />);
 
-    expect(screen.getByText('Agent activity')).toBeInTheDocument();
+    expect(screen.getByText(/Agent activity/i)).toBeInTheDocument();
   });
 });

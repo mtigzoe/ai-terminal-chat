@@ -135,6 +135,108 @@ export const TOOL_SCHEMAS: ToolSchemas = {
       required: [],
     },
   },
+  git_fetch: {
+    description:
+      "Fetch changes from a remote repository without merging. Use this to update remote tracking branches before inspecting or pulling.",
+    parameters: {
+      type: "object",
+      properties: {
+        remote: {
+          type: "string",
+          description:
+            "Remote name to fetch from. Leave empty for all remotes.",
+        },
+      },
+      required: [],
+    },
+  },
+  git_pull: {
+    description:
+      "Pull changes from a remote and merge into the current branch. Requires confirmation: calling without confirm=true will NOT pull anything, it only reports what would be pulled. Only call it again with confirm=true after the user has explicitly agreed.",
+    parameters: {
+      type: "object",
+      properties: {
+        remote: {
+          type: "string",
+          description:
+            "Remote name. Leave empty for the default remote.",
+        },
+        branch: {
+          type: "string",
+          description:
+            "Branch to pull. Leave empty for the current branch.",
+        },
+        confirm: {
+          type: "boolean",
+          description: "Must be true to actually pull. Defaults to false.",
+        },
+      },
+      required: [],
+    },
+  },
+  git_restore: {
+    description:
+      "Restore a file to its state in HEAD (or unstage it if staged=true). Requires confirmation: calling without confirm=true will NOT restore anything, it only reports what would be restored. Only call it again with confirm=true after the user has explicitly agreed.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative path to the file to restore.",
+        },
+        staged: {
+          type: "boolean",
+          description:
+            "If true, unstage the file instead of restoring working tree changes.",
+        },
+        confirm: {
+          type: "boolean",
+          description: "Must be true to actually restore the file. Defaults to false.",
+        },
+      },
+      required: ["path"],
+    },
+  },
+  git_commit: {
+    description:
+      "Commit staged changes with a message. Requires confirmation: calling without confirm=true will NOT commit anything, it only previews the staged diff and reports what would be committed. Only call it again with confirm=true after the user has explicitly agreed.",
+    parameters: {
+      type: "object",
+      properties: {
+        message: {
+          type: "string",
+          description: "Commit message.",
+        },
+        confirm: {
+          type: "boolean",
+          description: "Must be true to actually create the commit. Defaults to false.",
+        },
+      },
+      required: ["message"],
+    },
+  },
+  git_push: {
+    description:
+      "Push commits to a remote repository. Requires confirmation: calling without confirm=true will NOT push anything, it only reports what would be pushed. Only call it again with confirm=true after the user has explicitly agreed.",
+    parameters: {
+      type: "object",
+      properties: {
+        remote: {
+          type: "string",
+          description: "Remote name. Leave empty for the default remote.",
+        },
+        branch: {
+          type: "string",
+          description: "Branch to push. Leave empty for the current branch.",
+        },
+        confirm: {
+          type: "boolean",
+          description: "Must be true to actually push. Defaults to false.",
+        },
+      },
+      required: [],
+    },
+  },
   create_file: {
     description:
       "Creates a new file with the given contents inside the local project. Fails if the file already exists — use write_file to modify an existing file instead. Requires confirmation: calling without confirm=true will NOT create anything, it only returns a preview. Only call it again with confirm=true after the user has explicitly agreed.",

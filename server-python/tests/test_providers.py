@@ -384,6 +384,61 @@ def test_gemini_constructor_requires_api_key(monkeypatch):
             raise AssertionError("GeminiProvider should require an API key")
 
 
+def test_gemini_append_model_turn_skips_none_raw():
+    """Direct command responses (e.g. git_commit) have raw=None.
+
+    append_model_turn must not append None to the contents list, because
+    the next provider.generate() call would pass it to the Gemini SDK,
+    which fails pydantic validation with "Input should be a valid
+    Content, str, File, Part, or list[union[str, File, Part]]".
+    """
+    from gemini import GeminiProvider
+    from google.genai import types
+
+    fake_client = Mock()
+    with patch("gemini.genai.Client", return_value=fake_client):
+        provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash")
+
+    user_content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="git commit -m test")],
+    )
+    contents = [user_content]
+
+    # Direct command response: raw is None.
+    response = ProviderResponse(
+        text=None,
+        tool_calls=[ToolCall("git_commit", {"message": "test"})],
+    )
+    updated = provider.append_model_turn(contents, response)
+    assert updated == [user_content]
+    assert None not in updated
+
+
+def test_gemini_append_model_turn_appends_valid_raw():
+    """Real Gemini responses carry a Content object in response.raw."""
+    from gemini import GeminiProvider
+    from google.genai import types
+
+    fake_client = Mock()
+    with patch("gemini.genai.Client", return_value=fake_client):
+        provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash")
+
+    user_content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="hi")],
+    )
+    model_content = types.Content(
+        role="model",
+        parts=[types.Part.from_text(text="hello back")],
+    )
+    contents = [user_content]
+
+    response = ProviderResponse(text="hello back", tool_calls=[], raw=model_content)
+    updated = provider.append_model_turn(contents, response)
+    assert updated == [user_content, model_content]
+
+
 def test_provider_config_to_public_dict_omits_api_key():
     from providers import ProviderConfig
 

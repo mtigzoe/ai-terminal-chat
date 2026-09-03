@@ -473,3 +473,229 @@ def test_chaining_still_blocked_after_allowlist_changes(tmp_path, monkeypatch):
     ):
         result = tools.run_command(command)
         assert "error" in result
+
+
+# ---------------------------------------------------------
+# New git tools: fetch, pull, restore, commit, push
+# ---------------------------------------------------------
+
+@pytest.fixture
+def git_repo_with_remote(tmp_path, monkeypatch):
+    """A git repo with a bare remote and an initial commit on main."""
+
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+
+    (repo / "file.txt").write_text("initial\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True)
+
+    monkeypatch.setattr(security, "PROJECT_ROOT", repo)
+    monkeypatch.setattr(tools, "PROJECT_ROOT", repo)
+    return repo
+
+
+def test_git_fetch_succeeds(git_repo_with_remote):
+    result = tools.git_fetch()
+    assert "error" not in result
+    assert "remote" in result
+
+
+def test_git_fetch_with_specific_remote(git_repo_with_remote):
+    result = tools.git_fetch("origin")
+    assert "error" not in result
+    assert result.get("remote") == "origin"
+
+
+def test_git_pull_requires_confirmation(git_repo_with_remote):
+    result = tools.git_pull()
+    assert result.get("requires_confirmation") is True
+
+
+def test_git_pull_confirm_true_pulls(git_repo_with_remote):
+    (git_repo_with_remote / "file.txt").write_text("updated\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo_with_remote, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "update"], cwd=git_repo_with_remote, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=git_repo_with_remote, check=True)
+
+    clone = git_repo_with_remote.parent / "clone"
+    subprocess.run(["git", "clone", str(git_repo_with_remote), str(clone)], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=clone, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=clone, check=True)
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(security, "PROJECT_ROOT", clone)
+        monkeypatch.setattr(tools, "PROJECT_ROOT", clone)
+
+        preview = tools.git_pull()
+        assert preview.get("requires_confirmation") is True
+
+        result = tools.git_pull(remote="origin", confirm=True)
+        assert "error" not in result
+        assert result.get("remote") == "origin"
+    finally:
+        monkeypatch.undo()
+
+
+def test_git_restore_requires_confirmation(git_repo):
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    (git_repo / "file.txt").write_text("modified\n")
+
+    result = tools.git_restore("file.txt")
+    assert result.get("requires_confirmation") is True
+    assert result.get("action") == "restore"
+
+
+def test_git_restore_confirm_true_restores(git_repo):
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    (git_repo / "file.txt").write_text("modified\n")
+
+    preview = tools.git_restore("file.txt")
+    assert preview.get("requires_confirmation") is True
+
+    result = tools.git_restore("file.txt", confirm=True)
+    assert result.get("restored") is True
+    assert (git_repo / "file.txt").read_text() == "hello\n"
+
+
+def test_git_restore_staged_confirm_true_unstages(git_repo):
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    (git_repo / "file.txt").write_text("modified\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+
+    result = tools.git_restore("file.txt", staged=True, confirm=True)
+    assert result.get("unstaged") is True
+    assert result.get("restored") is False
+
+
+def test_git_restore_rejects_sensitive_files(git_repo):
+    (git_repo / ".env").write_text("SECRET=1")
+    result = tools.git_restore(".env")
+    assert "error" in result
+    assert "sensitive" in result["error"].lower()
+
+
+def test_git_commit_requires_message(git_repo):
+    result = tools.git_commit("")
+    assert "error" in result
+    assert "message" in result["error"].lower()
+
+
+def test_git_commit_requires_confirmation(git_repo):
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    (git_repo / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+
+    result = tools.git_commit("update file")
+    assert result.get("requires_confirmation") is True
+    assert result.get("commit_message") == "update file"
+
+
+def test_git_commit_confirm_true_commits(git_repo):
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    (git_repo / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+
+    preview = tools.git_commit("update file")
+    assert preview.get("requires_confirmation") is True
+
+    result = tools.git_commit("update file", confirm=True)
+    assert result.get("committed") is True
+    assert result.get("commit_message") == "update file"
+
+
+def test_git_commit_preview_works_with_no_files_selected(git_repo):
+    """Regression test: git_commit's confirmation preview (git_diff of
+    staged changes) must not be blocked by the Project-page file-selection
+    restriction. A file only reaches the staging area after git_add has
+    already gone through its own separate confirmation, so showing that
+    staged diff isn't a way to bypass file selection — and since the real
+    client sends allowed_paths: [] on every request unless the user has
+    actively selected files, an unqualified block here would break
+    git_commit's preview (and therefore every "commit my changes" request)
+    for anyone not using that feature."""
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    (git_repo / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+
+    security.set_allowed_read_paths([])
+    try:
+        preview = tools.git_commit("update file")
+        assert preview.get("requires_confirmation") is True
+        assert "v2" in preview.get("preview", "")
+
+        result = tools.git_commit("update file", confirm=True)
+        assert result.get("committed") is True
+    finally:
+        security.clear_allowed_read_paths()
+
+
+def test_git_commit_no_staged_changes_returns_error(git_repo):
+    (git_repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+
+    result = tools.git_commit("noop")
+    assert "error" in result
+    assert "No staged changes" in result["error"]
+
+
+def test_git_push_requires_confirmation(git_repo_with_remote):
+    (git_repo_with_remote / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo_with_remote, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "v2"], cwd=git_repo_with_remote, check=True)
+
+    result = tools.git_push()
+    assert result.get("requires_confirmation") is True
+
+
+def test_git_push_confirm_true_pushes(git_repo_with_remote):
+    (git_repo_with_remote / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo_with_remote, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "v2"], cwd=git_repo_with_remote, check=True)
+
+    preview = tools.git_push()
+    assert preview.get("requires_confirmation") is True
+
+    result = tools.git_push(confirm=True)
+    assert result.get("pushed") is True
+
+
+def test_new_git_tools_are_registered_consistently():
+    new_tools = ("git_fetch", "git_pull", "git_restore", "git_commit", "git_push")
+    for name in new_tools:
+        assert name in tools.TOOL_FUNCTIONS, f"{name} missing from TOOL_FUNCTIONS"
+        assert name in tools.TOOL_SCHEMAS, f"{name} missing from TOOL_SCHEMAS"
+        assert name in tools.TOOL_TIMEOUTS, f"{name} missing from TOOL_TIMEOUTS"
+
+    confirm_tools = {"git_pull", "git_restore", "git_commit", "git_push"}
+    for name in confirm_tools:
+        assert name in tools.GIT_CONFIRM_TOOL_NAMES, f"{name} missing from GIT_CONFIRM_TOOL_NAMES"
+
+    assert "git_fetch" not in tools.GIT_CONFIRM_TOOL_NAMES
+
+
+def test_git_pull_is_forbidden_in_run_command_allowlist():
+    assert "git pull" in tools.FORBIDDEN_ALLOWED_COMMAND_PREFIXES

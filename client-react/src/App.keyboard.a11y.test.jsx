@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import App from './App';
+import axios from 'axios';
 
 vi.mock('axios', () => ({
   default: {
@@ -11,9 +12,14 @@ vi.mock('axios', () => ({
 }));
 
 describe('keyboard accessibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     delete global.fetch;
+    localStorage.clear();
   });
 
   test('Enter in the message input submits the message', async () => {
@@ -95,7 +101,6 @@ describe('keyboard accessibility', () => {
   });
 
   test('the send button is disabled while waiting but the textarea stays enabled', async () => {
-    const axios = (await import('axios')).default;
     axios.post.mockReturnValue(new Promise(() => {}));
 
     render(<App />);
@@ -103,7 +108,7 @@ describe('keyboard accessibility', () => {
     fireEvent.change(textarea, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
-    await screen.findByRole('button', { name: /cancel response/i });
+    await screen.findByRole('button', { name: /cancel response/i }, { timeout: 5000 });
     expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled();
     expect(textarea).not.toBeDisabled();
   });

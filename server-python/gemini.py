@@ -68,6 +68,45 @@ def _build_tools() -> list:
     ]
 
 
+def _sanitize_part(part: dict) -> types.Part | None:
+    """Convert a history part dict into a types.Part the Gemini SDK accepts.
+
+    The frontend stores conversation history as plain JSON, so parts arrive
+    here as dicts. Passing raw dicts into types.Content causes pydantic
+    validation errors on the SDK side ("Input should be a valid dictionary or
+    object to extract fields from"). This mirrors the TypeScript
+    gemini.ts sanitizeParts() logic: keep only the part shapes Gemini
+    accepts (text, functionCall, functionResponse) and drop everything else.
+    """
+    if not isinstance(part, dict):
+        return None
+
+    if isinstance(part.get("text"), str) and part["text"]:
+        return types.Part(text=part["text"])
+
+    function_call = part.get("functionCall")
+    if isinstance(function_call, dict) and function_call.get("name"):
+        return types.Part(
+            function_call=types.FunctionCall(
+                name=function_call["name"],
+                args=function_call.get("args") or {},
+                id=function_call.get("id") or None,
+            )
+        )
+
+    function_response = part.get("functionResponse")
+    if isinstance(function_response, dict) and function_response.get("name"):
+        return types.Part(
+            function_response=types.FunctionResponse(
+                name=function_response["name"],
+                response=function_response.get("response"),
+                id=function_response.get("id") or None,
+            )
+        )
+
+    return None
+
+
 class GeminiProvider(Provider):
 
     def __init__(self, api_key: str = None, model: str = None):
@@ -125,16 +164,14 @@ class GeminiProvider(Provider):
                 converted_parts = []
 
                 for part in parts:
-                    if isinstance(part, dict) and "text" in part:
-                        converted_parts.append(
-                            types.Part.from_text(text=part["text"])
-                        )
-                    else:
-                        converted_parts.append(part)
+                    sanitized = _sanitize_part(part)
+                    if sanitized is not None:
+                        converted_parts.append(sanitized)
 
-                contents.append(
-                    types.Content(role=role, parts=converted_parts)
-                )
+                if converted_parts:
+                    contents.append(
+                        types.Content(role=role, parts=converted_parts)
+                    )
 
         contents.append(
             types.Content(
@@ -189,6 +226,11 @@ class GeminiProvider(Provider):
 
     def append_model_turn(self, contents, response):
         # Preserve Gemini's function-call (or text) message.
+        # For direct command responses, response.raw is None — skip it
+        # so the next provider.generate() call doesn't pass a None entry
+        # to the Gemini SDK (which would fail pydantic validation).
+        if response.raw is None:
+            return contents
         return contents + [response.raw]
 
     def append_tool_results(self, contents, results):

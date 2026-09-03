@@ -65,79 +65,85 @@ function AgentStatusRegion({ status }) {
 }
 
 function formatActivityItem(item) {
+  if (!item || typeof item !== 'object') return null;
   if (item.type === 'progress') return { kind: 'progress', text: `${phaseLabel(item.phase)}: ${item.message || ''}` };
   if (item.type === 'pending_confirmation') {
     const path = item.args?.path || item.preview?.path || (Array.isArray(item.preview?.files) ? item.preview.files.join(', ') : null);
-    return { kind: 'confirm', text: `Confirmation required: ${item.name || 'write'}${path ? ` (${path})` : ''}` };
+    return { kind: 'confirm', text: `Waiting for you to Allow or Decline: ${item.name || 'write'}${path ? ` (${path})` : ''}` };
   }
   if (item.type === 'tool_call') return { kind: 'call', text: `${item.name || 'tool'} — running` };
   if (item.type === 'tool_result') {
-    const resultError = item.result?.error;
-    if (resultError) return { kind: 'result', text: `${item.name || 'tool'} — failed: ${resultError}` };
-    return { kind: 'result', text: `${item.name || 'tool'} — completed${item.result?.truncated === true ? ' (output truncated)' : ''}` };
+    const result = item.result || {};
+    if (result.cancelled) {
+      return { kind: 'declined', text: `${item.name || 'tool'} — declined: ${result.message || 'Action declined by user.'}` };
+    }
+    if (result.error) {
+      return { kind: 'error', text: `${item.name || 'tool'} — failed: ${result.error}` };
+    }
+    return { kind: 'result', text: `${item.name || 'tool'} — completed${result.truncated === true ? ' (output truncated)' : ''}` };
   }
   return null;
 }
 
 /**
- * Tool activity list with progressive disclosure.
- * New items during streaming are also mirrored into a polite live region so
- * screen-reader users hear progress without having to leave the input focus.
+ * Agent activity section: renders a labelled region for each assistant message
+ * that has tool activity. The most recent item is summarized using its actual
+ * type (in progress, waiting on confirmation, completed, declined, or failed)
+ * so the status shown always matches what really happened — it does not get
+ * stuck announcing "running" after an action has already been resolved.
  */
 function ToolActivity({ activity = [], announceNew = false }) {
-  const liveRef = useRef(null);
-  const prevCountRef = useRef(0);
+  if (!activity || activity.length === 0) return null;
+  const latest = activity[activity.length - 1];
+  const formatted = formatActivityItem(latest);
+  const summary = formatted ? formatted.text : 'Working…';
+  const kind = formatted?.kind || 'progress';
+  return (
+    <div
+      className={`agent-activity agent-activity--${kind}`}
+      role="group"
+      aria-label="Agent activity"
+      data-testid="agent-activity"
+    >
+      <span className="agent-activity-label">Agent activity:</span>
+      <span
+        className="agent-activity-summary"
+        role="status"
+        aria-live={announceNew ? 'polite' : 'off'}
+        aria-atomic="true"
+      >
+        {summary}
+      </span>
+    </div>
+  );
+}
 
-  const items = activity.map((item, index) => {
-    const formatted = formatActivityItem(item);
-    return formatted ? { ...formatted, key: `${formatted.kind}-${index}`, details: item } : null;
-  }).filter(Boolean);
+function WorkingStatus({ waiting }) {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const startedAtRef = useRef(null);
 
   useEffect(() => {
-    if (!announceNew || !liveRef.current || items.length <= prevCountRef.current) {
-      prevCountRef.current = items.length;
-      return;
+    if (!waiting) {
+      startedAtRef.current = null;
+      setElapsedSeconds(0);
+      return undefined;
     }
-    const newest = items[items.length - 1];
-    if (!newest) return;
-    const el = liveRef.current;
-    el.textContent = '';
-    const id = window.setTimeout(() => {
-      el.textContent = newest.text;
-    }, 40);
-    prevCountRef.current = items.length;
-    return () => window.clearTimeout(id);
-  }, [items, announceNew]);
 
-  if (!items.length) return null;
+    startedAtRef.current = Date.now();
+    setElapsedSeconds(0);
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [waiting]);
 
+  if (!waiting) return null;
+
+  const minutes = Math.floor(elapsedSeconds / 60);
   return (
-    <section className="tool-activity" aria-labelledby="agent-activity-heading">
-      <h3 id="agent-activity-heading">Agent activity</h3>
-      {/* Polite live region for newly added activity while streaming */}
-      <div
-        ref={liveRef}
-        className="sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        aria-relevant="additions text"
-      />
-      <ol aria-label="Agent activity items">
-        {items.map((item) => (
-          <li key={item.key} className={`activity-item activity-item--${item.kind}`}>
-            <details>
-              <summary>{item.text}</summary>
-              {(item.details.args || item.details.result) && (
-                <pre aria-label={`${item.details.name || 'Tool'} details`}>
-                  {JSON.stringify({ args: item.details.args, result: item.details.result }, null, 2)}
-                </pre>
-              )}
-            </details>
-          </li>
-        ))}
-      </ol>
-    </section>
+    <div className="agent-status" role="status" aria-live="polite" aria-atomic="true">
+      Working for {minutes} {minutes === 1 ? 'minute' : 'minutes'}
+    </div>
   );
 }
 
@@ -185,6 +191,7 @@ function CopyResponseButton({ text }) {
 const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatus = null, waiting = false }) => (
   <main className="chat-area" id="main-conversation" aria-label="Conversation" aria-busy={waiting} tabIndex={-1}>
     <AgentStatusRegion status={agentStatus} />
+    <WorkingStatus waiting={waiting} />
     {data?.length <= 0 ? (
       <div className="welcome-area">
         <p className="welcome-1">Hi,</p>
@@ -220,4 +227,4 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
 );
 
 export default ChatArea;
-export { AgentStatusRegion, ToolActivity, CopyResponseButton };
+export { AgentStatusRegion, ToolActivity, CopyResponseButton, WorkingStatus };
