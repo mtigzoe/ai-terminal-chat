@@ -225,6 +225,10 @@ export async function gitAdd(path: string, confirm = false): Promise<Record<stri
     return { error: error instanceof Error ? error.message : String(error) };
   }
 
+  if (!isReadAllowed(path)) {
+    return { error: `Access denied: '${path}' is not selected for the agent.` };
+  }
+
   if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${path}` };
 
   try {

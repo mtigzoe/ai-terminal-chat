@@ -2,7 +2,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 
-import { __setProjectRootForTests, getProjectRoot } from "./security.js";
+import { __setProjectRootForTests, getProjectRoot, runWithAllowedReadPaths } from "./security.js";
 import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus } from "./git.js";
 
 let originalProjectRoot: string;
@@ -54,4 +54,15 @@ test("gitAdd previews staging and does not mutate without confirmation", async (
     assert.equal(result.requires_confirmation, true);
     assert.equal(result.path, join("src", "git.test.ts"));
   }
+});
+
+test("gitAdd rejects paths outside the allowed read selection", async () => {
+  await runWithAllowedReadPaths(["src/security.ts"], async () => {
+    const result = await gitAdd("src/git.test.ts");
+    assert.equal("error" in result, true);
+    if ("error" in result) {
+      const errorMessage = String(result.error);
+      assert.ok(errorMessage.toLowerCase().includes("not selected"), `unexpected error: ${errorMessage}`);
+    }
+  });
 });

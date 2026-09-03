@@ -86,6 +86,36 @@ describe("explicit Git command routing", () => {
     expect(events.some((event) => event.type === "error")).toBe(false);
   });
 
+  test("routes git add -- path directly to git_add", async () => {
+    const provider = new FakeProvider();
+    const gitAdd = vi.fn(() => ({
+      requires_confirmation: true,
+      path: "src/index.ts",
+    }));
+    const createPending = vi.fn(() => ({ action_id: "action-1" }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: 'git add -- "src/index.ts"' }],
+      toolFunctions: { git_add: gitAdd },
+      createPending,
+    })) {
+      events.push(event);
+    }
+
+    expect(gitAdd).toHaveBeenCalledWith({
+      path: "src/index.ts",
+      confirm: false,
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "pending_confirmation",
+        name: "git_add",
+      })
+    );
+  });
+
   test("routes git status directly to git_status", async () => {
     const provider = new FakeProvider();
     const gitStatus = vi.fn(() => ({ branch: "main", clean: true }));
@@ -122,6 +152,64 @@ describe("explicit Git command routing", () => {
     expect(events.some((event) => event.type === "tool_result")).toBe(true);
   });
 
+  test("routes git fetch with no args directly to git_fetch", async () => {
+    const provider = new FakeProvider();
+    const gitFetch = vi.fn(() => ({ output: "done", remote: "all remotes" }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git fetch" }],
+      toolFunctions: { git_fetch: gitFetch },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(gitFetch).toHaveBeenCalledWith({ remote: "" });
+    expect(events.some((event) => event.type === "tool_result")).toBe(true);
+  });
+
+  test("returns deterministic error for git fetch with unsupported option", async () => {
+    const provider = new FakeProvider();
+    const gitFetch = vi.fn(() => ({ output: "done", remote: "origin" }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git fetch -v" }],
+      toolFunctions: { git_fetch: gitFetch },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(gitFetch).not.toHaveBeenCalled();
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("Unsupported git fetch option");
+  });
+
+  test("returns deterministic error for git fetch with too many args", async () => {
+    const provider = new FakeProvider();
+    const gitFetch = vi.fn(() => ({ output: "done", remote: "origin" }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git fetch origin main extra" }],
+      toolFunctions: { git_fetch: gitFetch },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(gitFetch).not.toHaveBeenCalled();
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("Unsupported git fetch syntax");
+  });
+
   test("routes git pull directly to git_pull", async () => {
     const provider = new FakeProvider();
     const gitPull = vi.fn(() => ({
@@ -152,6 +240,30 @@ describe("explicit Git command routing", () => {
         name: "git_pull",
       })
     );
+  });
+
+  test("returns deterministic error for git pull with unsupported option", async () => {
+    const provider = new FakeProvider();
+    const gitPull = vi.fn(() => ({
+      requires_confirmation: true,
+      remote: "origin",
+      branch: "main",
+    }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git pull --rebase origin" }],
+      toolFunctions: { git_pull: gitPull },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(gitPull).not.toHaveBeenCalled();
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("Unsupported git pull option");
   });
 
   test("routes git restore directly to git_restore", async () => {
@@ -218,6 +330,30 @@ describe("explicit Git command routing", () => {
     );
   });
 
+  test("returns deterministic error for git restore with too many args", async () => {
+    const provider = new FakeProvider();
+    const gitRestore = vi.fn(() => ({
+      requires_confirmation: true,
+      path: "file.txt",
+      action: "restore",
+    }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git restore file1.txt file2.txt" }],
+      toolFunctions: { git_restore: gitRestore },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(gitRestore).not.toHaveBeenCalled();
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("requires exactly one path");
+  });
+
   test("routes git commit -m directly to git_commit", async () => {
     const provider = new FakeProvider();
     const gitCommit = vi.fn(() => ({
@@ -248,7 +384,7 @@ describe("explicit Git command routing", () => {
     );
   });
 
-  test("returns text for git commit without message", async () => {
+  test("returns deterministic text for git commit without message and does not invoke git_commit or fall through to provider", async () => {
     const provider = new FakeProvider();
     const gitCommit = vi.fn(() => ({
       requires_confirmation: true,
@@ -266,17 +402,57 @@ describe("explicit Git command routing", () => {
       events.push(event);
     }
 
-    const errorEvents = events.filter((e) => e.type === "error");
-    const finalEvents = events.filter((e) => e.type === "final");
-    const pendingEvents = events.filter((e) => e.type === "pending_confirmation");
-    
-    if (finalEvents.length > 0) {
-      expect((finalEvents[0] as { text: string }).text).toContain("message");
-    } else if (pendingEvents.length > 0) {
-      expect(pendingEvents[0]).toMatchObject({ name: "git_commit" });
-    } else {
-      expect(errorEvents.length).toBeGreaterThan(0);
+    expect(gitCommit).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === "pending_confirmation")).toBe(false);
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("Git commit requires a message");
+  });
+
+  test("returns deterministic error for git commit with unsupported option", async () => {
+    const provider = new FakeProvider();
+    const gitCommit = vi.fn(() => ({
+      requires_confirmation: true,
+      commit_message: "test",
+    }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: 'git commit -a -m "skip hooks"' }],
+      toolFunctions: { git_commit: gitCommit },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
     }
+
+    expect(gitCommit).not.toHaveBeenCalled();
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("Unsupported git commit option");
+  });
+
+  test("returns deterministic error for git commit with trailing extra args", async () => {
+    const provider = new FakeProvider();
+    const gitCommit = vi.fn(() => ({
+      requires_confirmation: true,
+      commit_message: "test",
+    }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: 'git commit -m "msg" extra' }],
+      toolFunctions: { git_commit: gitCommit },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(gitCommit).not.toHaveBeenCalled();
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("Unsupported git commit syntax");
   });
 
   test("routes git push directly to git_push", async () => {
@@ -309,6 +485,96 @@ describe("explicit Git command routing", () => {
         name: "git_push",
       })
     );
+  });
+
+  test("routes git push with no args directly to git_push", async () => {
+    const provider = new FakeProvider();
+    const gitPush = vi.fn(() => ({
+      requires_confirmation: true,
+      remote: "default",
+      branch: "current",
+    }));
+    const createPending = vi.fn(() => ({ action_id: "action-1" }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git push" }],
+      toolFunctions: { git_push: gitPush },
+      createPending,
+    })) {
+      events.push(event);
+    }
+
+    expect(gitPush).toHaveBeenCalledWith({
+      remote: "",
+      branch: "",
+      confirm: false,
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "pending_confirmation",
+        name: "git_push",
+      })
+    );
+  });
+
+  test("returns deterministic error for git push with unsupported option", async () => {
+    const provider = new FakeProvider();
+    const gitPush = vi.fn(() => ({
+      requires_confirmation: true,
+      remote: "origin",
+      branch: "main",
+    }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git push --force origin main" }],
+      toolFunctions: { git_push: gitPush },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(gitPush).not.toHaveBeenCalled();
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.text).toContain("Unsupported git push option");
+  });
+
+  test("returns null for git status with extra args, falling through to provider", async () => {
+    const provider = new NaturalLanguageProvider();
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git status --short" }],
+      toolFunctions: {},
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(events.some((e) => e.type === "final")).toBe(true);
+    const finalEvent = events.find((e) => e.type === "final") as { text: string } | undefined;
+    expect(finalEvent?.text).toContain("git add");
+  });
+
+  test("returns null for unknown git subcommand, falling through to provider", async () => {
+    const provider = new NaturalLanguageProvider();
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "git stash" }],
+      toolFunctions: {},
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(events.some((e) => e.type === "final")).toBe(true);
   });
 
   test("natural language git request still uses the model", async () => {

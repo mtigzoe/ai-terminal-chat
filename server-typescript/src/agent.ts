@@ -1,5 +1,59 @@
 import { Provider, ProviderResponse } from "./providers/base.ts";
 
+function tokenizeShellCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let i = 0;
+
+  while (i < command.length) {
+    const char = command[i];
+
+    if (char === "\\" && i + 1 < command.length) {
+      current += command[i + 1];
+      i += 2;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      const quote = char;
+      current += quote;
+      i++;
+      while (i < command.length && command[i] !== quote) {
+        if (command[i] === "\\" && i + 1 < command.length) {
+          current += command[i + 1];
+          i += 2;
+        } else {
+          current += command[i];
+          i++;
+        }
+      }
+      if (i < command.length) {
+        current += quote;
+        i++;
+      }
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      i++;
+      continue;
+    }
+
+    current += char;
+    i++;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
+}
+
 export const MAX_TOOL_ROUNDS = 10;
 export const MAX_CONSECUTIVE_IDENTICAL_CALLS = 3;
 export const HARD_ABORT_CONSECUTIVE_CALLS = 6;
@@ -155,11 +209,29 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
   if (!userText) return null;
 
   const command = userText.trim();
-  const addMatch = command.match(/^git\s+add\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i);
+  let parts: string[];
+  try {
+    parts = tokenizeShellCommand(command);
+  } catch {
+    return null;
+  }
 
-  if (addMatch) {
-    const path = addMatch[1] ?? addMatch[2] ?? addMatch[3];
+  if (parts.length === 0 || parts[0].toLowerCase() !== "git") return null;
+
+  const subcommand = parts[1]?.toLowerCase() ?? "";
+
+  if (subcommand === "add") {
+    if (parts.length === 3) {
+      var path = parts[2];
+    } else if (parts.length === 4 && parts[2] === "--") {
+      path = parts[3];
+    } else {
+      return null;
+    }
     if (!path || path.startsWith("-")) return null;
+    if (path.length >= 2 && path[0] === path[path.length - 1] && (path[0] === '"' || path[0] === "'")) {
+      path = path.slice(1, -1);
+    }
     return {
       text: null,
       tool_calls: [{ name: "git_add", args: { path } }],
@@ -167,30 +239,80 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
     };
   }
 
-  const fetchMatch = command.match(/^git\s+fetch\s+(?:(\S+))?\s*$/i);
-  if (fetchMatch) {
+  if (subcommand === "fetch") {
+    const rest = parts.slice(2);
+    if (rest.some((part) => part.startsWith("-"))) {
+      return {
+        text: "Unsupported git fetch option. The agent currently supports only: git fetch [remote]",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    if (rest.length > 1) {
+      return {
+        text: "Unsupported git fetch syntax. The agent currently supports only: git fetch [remote]",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    const remote = rest[0] ?? "";
     return {
       text: null,
-      tool_calls: [{ name: "git_fetch", args: { remote: fetchMatch[1] ?? "" } }],
+      tool_calls: [{ name: "git_fetch", args: { remote } }],
       raw: null,
     };
   }
 
-  const pullMatch = command.match(/^git\s+pull\s+(?:(\S+)\s+(?:(\S+))?)?\s*$/i);
-  if (pullMatch) {
+  if (subcommand === "pull") {
+    const rest = parts.slice(2);
+    if (rest.some((part) => part.startsWith("-"))) {
+      return {
+        text: "Unsupported git pull option. The agent currently supports only: git pull [remote] [branch]",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    if (rest.length > 2) {
+      return {
+        text: "Unsupported git pull syntax. The agent currently supports only: git pull [remote] [branch]",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    const remote = rest[0] ?? "";
+    const branch = rest[1] ?? "";
     return {
       text: null,
-      tool_calls: [{ name: "git_pull", args: { remote: pullMatch[1] ?? "", branch: pullMatch[2] ?? "" } }],
+      tool_calls: [{ name: "git_pull", args: { remote, branch } }],
       raw: null,
     };
   }
 
-  const restoreMatch = command.match(/^git\s+restore\s+(?:--staged\s+)?(?:(\S+))\s*$/i);
-  if (restoreMatch) {
-    const staged = command.includes("--staged");
-    const pathMatch = command.match(/(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/);
-    const path = pathMatch ? (pathMatch[1] ?? pathMatch[2] ?? pathMatch[3]) : "";
-    if (!path) return null;
+  if (subcommand === "restore") {
+    const remaining = parts.slice(2);
+    let staged = false;
+    if (remaining.length > 0 && remaining[0] === "--staged") {
+      staged = true;
+      remaining.shift();
+    }
+    if (remaining.some((part) => part.startsWith("-"))) {
+      return {
+        text: "Unsupported git restore option. The agent currently supports only: git restore [--staged] <path>",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    if (remaining.length !== 1) {
+      return {
+        text: "Git restore requires exactly one path. Use: git restore [--staged] <path>",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    let path = remaining[0];
+    if (path.length >= 2 && path[0] === path[path.length - 1] && (path[0] === '"' || path[0] === "'")) {
+      path = path.slice(1, -1);
+    }
     return {
       text: null,
       tool_calls: [{ name: "git_restore", args: { path, staged } }],
@@ -198,10 +320,56 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
     };
   }
 
-  const commitMatch = command.match(/^git\s+commit\s+(?:-m\s+(?:"([^"]+)"|'([^']+)'|(\S+)))?\s*$/i);
-  if (commitMatch) {
-    const message = commitMatch[1] ?? commitMatch[2] ?? commitMatch[3];
+  if (subcommand === "commit") {
+    let message: string | null = null;
+    let i = 2;
+    while (i < parts.length) {
+      const part = parts[i];
+      if (part === "-m") {
+        if (message !== null) {
+          return {
+            text: 'Git commit accepts one message. Use: git commit -m "your message"',
+            tool_calls: [],
+            raw: null,
+          };
+        }
+        if (i + 1 >= parts.length) {
+          return {
+            text: 'Git commit requires a message. Use: git commit -m "your message"',
+            tool_calls: [],
+            raw: null,
+          };
+        }
+        message = parts[i + 1];
+        i += 2;
+      } else if (part.startsWith("-m") && part.length > 2) {
+        if (message !== null) {
+          return {
+            text: 'Git commit accepts one message. Use: git commit -m "your message"',
+            tool_calls: [],
+            raw: null,
+          };
+        }
+        message = part.slice(2);
+        i += 1;
+      } else if (part.startsWith("-")) {
+        return {
+          text: 'Unsupported git commit option. The agent currently supports only: git commit -m "message"',
+          tool_calls: [],
+          raw: null,
+        };
+      } else {
+        return {
+          text: 'Unsupported git commit syntax. The agent currently supports only: git commit -m "message"',
+          tool_calls: [],
+          raw: null,
+        };
+      }
+    }
     if (message) {
+      if (message.length >= 2 && message[0] === message[message.length - 1] && (message[0] === '"' || message[0] === "'")) {
+        message = message.slice(1, -1);
+      }
       return {
         text: null,
         tool_calls: [{ name: "git_commit", args: { message } }],
@@ -209,22 +377,38 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
       };
     }
     return {
-      text: "Git commit requires a message. Use: git commit -m \"your message\"",
+      text: 'Git commit requires a message. Use: git commit -m "your message"',
       tool_calls: [],
       raw: null,
     };
   }
 
-  const pushMatch = command.match(/^git\s+push\s+(?:(\S+)\s+(?:(\S+))?)?\s*$/i);
-  if (pushMatch) {
+  if (subcommand === "push") {
+    const rest = parts.slice(2);
+    if (rest.some((part) => part.startsWith("-"))) {
+      return {
+        text: "Unsupported git push option. The agent currently supports only: git push [remote] [branch]",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    if (rest.length > 2) {
+      return {
+        text: "Unsupported git push syntax. The agent currently supports only: git push [remote] [branch]",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    const remote = rest[0] ?? "";
+    const branch = rest[1] ?? "";
     return {
       text: null,
-      tool_calls: [{ name: "git_push", args: { remote: pushMatch[1] ?? "", branch: pushMatch[2] ?? "" } }],
+      tool_calls: [{ name: "git_push", args: { remote, branch } }],
       raw: null,
     };
   }
 
-  if (/^git\s+status\s*$/i.test(command)) {
+  if (subcommand === "status" && parts.length === 2) {
     return {
       text: null,
       tool_calls: [{ name: "git_status", args: {} }],
@@ -232,7 +416,7 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
     };
   }
 
-  if (/^git\s+branch\s+--show-current\s*$/i.test(command)) {
+  if (subcommand === "branch" && parts.length === 3 && parts[2] === "--show-current") {
     return {
       text: null,
       tool_calls: [{ name: "run_command", args: { command } }],
