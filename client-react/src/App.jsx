@@ -102,6 +102,7 @@ function App() {
   const [agentStatus, setAgentStatus] = useState(null);
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
+  const confirmingRef = useRef(false);
   const [pathForTerminal, setPathForTerminal] = useState(null);
   const [chatId, setChatId] = useState(() => {
     try { const saved = localStorage.getItem('ai-terminal-chat:current-chat-id'); if (saved) return saved; } catch { /* ignore */ }
@@ -141,8 +142,9 @@ function App() {
   const stopCurrentRequest = () => { cancelBackendRequest(); abortControllerRef.current?.abort(); setAgentStatus({ phase: 'cancelled', message: 'Cancelling response.', assertive: false }); };
 
   const resolveConfirmation = async (confirmed) => {
-    if (!pendingConfirmation || confirmationResolving) return;
+    if (!pendingConfirmation || confirmingRef.current) return;
     const action = pendingConfirmation;
+    confirmingRef.current = true;
     setConfirmationResolving(true);
     try {
       const response = await axios.post(`${host}/confirm`, { action_id: action.action_id, confirmed });
@@ -157,14 +159,6 @@ function App() {
         }
       }
 
-      // The server resumes the agent loop from where it paused, so a
-      // compound request (e.g. "add, commit, and push") can keep going on
-      // its own across each Allow click instead of stopping after one
-      // step. response.data.tool_activity carries every event from that
-      // continuation — starting with this action's own result — and may
-      // include a further pending_confirmation (another step still needs
-      // an answer) and/or final text (the model is done). Older pending
-      // actions with no saved loop state fall back to a single flat result.
       const resumed = Array.isArray(response.data?.tool_activity);
       const newActivityItems = resumed
         ? response.data.tool_activity
@@ -209,6 +203,7 @@ function App() {
     } catch (error) {
       setAgentStatus({ phase: 'error', message: getErrorMessage(error, 'Could not resolve confirmation.'), assertive: true });
     } finally {
+      confirmingRef.current = false;
       setConfirmationResolving(false);
       window.setTimeout(() => inputRef.current?.focus(), 0);
     }
