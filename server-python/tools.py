@@ -528,13 +528,36 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     except ValueError:
         args = command.split()
 
-    # Special handling for git show: allow --stat/--no-patch, and
-    # properly extract paths from commit:path and -- path syntax.
+    # Special handling for git show: allow --no-patch/--stat/--name-only,
+    # and properly extract paths from commit:path and -- path syntax.
     if len(args) >= 2 and args[0].lower() == "git" and args[1].lower() == "show":
-        no_content_flags = {"--stat", "--no-patch", "--name-only", "--oneline", "--quiet"}
-        has_no_content_flag = any(arg in no_content_flags for arg in args[2:])
+        args_after_show = args[2:]
         
-        if has_no_content_flag:
+        # --name-only and --name-status suppress patch output even when
+        # combined with --patch, so they are always safe.
+        if any(arg in ("--name-only", "--name-status") for arg in args_after_show):
+            return None
+        
+        # Content-producing flags that must be denied.
+        has_content_flag = any(
+            arg in ("--patch", "-p", "--unified", "--oneline")
+            or arg.startswith("--format=")
+            or arg.startswith("--pretty=")
+            or arg.startswith("--unified=")
+            for arg in args_after_show
+        )
+        
+        if has_content_flag:
+            return {
+                "error": (
+                    "Access denied: git show can expose file contents. "
+                    "Remove content-producing flags or use --no-patch/--stat/--name-only."
+                )
+            }
+        
+        # Content-suppressing flags that are safe.
+        no_content_flags = {"--no-patch", "--quiet", "--stat"}
+        if any(arg in no_content_flags for arg in args_after_show):
             return None
         
         explicit_paths = []
@@ -554,7 +577,7 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
             return {
                 "error": (
                     "Access denied: git show can expose file contents. "
-                    "Use --stat, --no-patch, or specify an allowed file path."
+                    "Use --no-patch, --stat, --name-only, or specify an allowed file path."
                 )
             }
         

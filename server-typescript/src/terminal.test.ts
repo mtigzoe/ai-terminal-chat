@@ -116,6 +116,49 @@ test("git show HEAD -- README.md is denied when README.md is not selected", asyn
   });
 });
 
+// Bypass regression tests: content-producing flags must not slip through.
+test("git show --oneline HEAD is denied (shows full patch despite --oneline)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --oneline HEAD");
+    assert.ok(result.error, "--oneline must not bypass the permission check");
+  });
+});
+
+test("git show --stat --patch HEAD is denied (--patch overrides --stat)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --stat --patch HEAD");
+    assert.ok(result.error, "--stat --patch must not bypass the permission check");
+  });
+});
+
+test("git show --no-patch --patch HEAD is denied (--patch overrides --no-patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --no-patch --patch HEAD");
+    assert.ok(result.error, "--no-patch --patch must not bypass the permission check");
+  });
+});
+
+test("git show --format=oneline HEAD is denied (--format shows patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --format=oneline HEAD");
+    assert.ok(result.error, "--format=oneline must not bypass the permission check");
+  });
+});
+
+test("git show --name-only --patch HEAD is allowed (--name-only suppresses patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --name-only --patch HEAD");
+    assert.ok(!result.error, "--name-only --patch must be allowed: no file contents shown");
+  });
+});
+
+test("git show --name-status --patch HEAD is allowed (--name-status suppresses patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --name-status --patch HEAD");
+    assert.ok(!result.error, "--name-status --patch must be allowed: no file contents shown");
+  });
+});
+
 test("default terminal allowlist defines the expected safe Git inspection commands", () => {
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git status"));
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git diff"));

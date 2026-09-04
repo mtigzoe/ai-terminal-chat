@@ -339,3 +339,47 @@ def test_git_show_dash_path_denied_for_unselected_file(project_root):
     assert "error" in result
     err = result["error"].lower()
     assert "access denied" in err
+
+
+def test_git_show_oneline_denied(project_root):
+    """--oneline does not suppress patch output and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --oneline HEAD")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err
+
+
+def test_git_show_stat_patch_denied(project_root):
+    """--stat --patch still shows the patch and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --stat --patch HEAD")
+    assert "error" in result
+
+
+def test_git_show_no_patch_patch_denied(project_root):
+    """--no-patch --patch shows the patch (--patch wins) and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --no-patch --patch HEAD")
+    assert "error" in result
+
+
+def test_git_show_format_denied(project_root):
+    """--format=<spec> shows the patch by default and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --format=oneline HEAD")
+    assert "error" in result
+
+
+def test_git_show_name_only_patch_allowed(project_root):
+    """--name-only overrides --patch and is safe."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --name-only --patch HEAD")
+    assert "error" not in result
+
+
+def test_git_show_name_status_patch_allowed(project_root):
+    """--name-status overrides --patch and is safe."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --name-status --patch HEAD")
+    assert "error" not in result
