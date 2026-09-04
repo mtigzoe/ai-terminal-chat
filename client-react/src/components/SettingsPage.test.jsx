@@ -13,7 +13,7 @@ import axios from 'axios';
 
 const HOST = 'http://localhost:9000';
 
-function mockSuccessfulLoad({ provider = 'gemini', model = 'gemini-3.6-flash' } = {}) {
+function mockSuccessfulLoad({ provider = 'gemini', model = 'gemini-3.6-flash', ollamaInstalled = false } = {}) {
   axios.get.mockImplementation((url) => {
     if (url === `${HOST}/providers?probe=0`) {
       return Promise.resolve({
@@ -25,6 +25,9 @@ function mockSuccessfulLoad({ provider = 'gemini', model = 'gemini-3.6-flash' } 
     }
     if (url === `${HOST}/allowed-commands`) {
       return Promise.resolve({ data: { commands: [] } });
+    }
+    if (url === `${HOST}/providers/ollama/status`) {
+      return Promise.resolve({ data: { installed: ollamaInstalled } });
     }
     if (url.startsWith(`${HOST}/providers/`) && url.endsWith('/models')) {
       return Promise.resolve({ data: { models: [], supports_listing: false } });
@@ -89,6 +92,9 @@ describe('loading settings', () => {
       if (url === `${HOST}/allowed-commands`) {
         return Promise.resolve({ data: { commands: [] } });
       }
+      if (url === `${HOST}/providers/ollama/status`) {
+        return Promise.resolve({ data: { installed: false } });
+      }
       if (url === `${HOST}/providers/ollama/models`) {
         return Promise.resolve({
           data: { supports_listing: true, models: [{ id: 'llama3.1' }, { id: 'qwen3.5' }] },
@@ -118,6 +124,9 @@ describe('loading settings', () => {
       }
       if (url === `${HOST}/allowed-commands`) {
         return Promise.resolve({ data: { commands: [] } });
+      }
+      if (url === `${HOST}/providers/ollama/status`) {
+        return Promise.resolve({ data: { installed: false } });
       }
       if (url === `${HOST}/providers/ollama/models`) {
         return Promise.resolve({
@@ -205,6 +214,113 @@ describe('saving settings', () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await screen.findByText(/is not installed/i);
+  });
+});
+
+describe('Install/Run Ollama action', () => {
+  test('is not shown for a non-Ollama provider', async () => {
+    await renderLoaded({ provider: 'gemini' });
+
+    expect(screen.queryByRole('link', { name: /install ollama/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /run ollama/i })).not.toBeInTheDocument();
+  });
+
+  test('shows a checking status while the CLI check is in flight', async () => {
+    axios.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers?probe=0`) {
+        return Promise.resolve({
+          data: { providers: ['gemini', 'ollama'], name: 'ollama', model: 'llama3.1' },
+        });
+      }
+      if (url === `${HOST}/project-root`) {
+        return Promise.resolve({ data: { path: '/tmp/project' } });
+      }
+      if (url === `${HOST}/allowed-commands`) {
+        return Promise.resolve({ data: { commands: [] } });
+      }
+      if (url === `${HOST}/providers/ollama/status`) {
+        return new Promise(() => {}); // never resolves
+      }
+      if (url === `${HOST}/providers/ollama/models`) {
+        return Promise.resolve({ data: { models: [], supports_listing: false } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    expect(screen.getByText(/checking for ollama/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /install ollama/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /run ollama/i })).not.toBeInTheDocument();
+  });
+
+  test('offers an Install Ollama link to the official site when the CLI is not found', async () => {
+    await renderLoaded({ provider: 'ollama', model: 'llama3.1', ollamaInstalled: false });
+
+    expect(screen.getByText(/ollama is not installed/i)).toBeInTheDocument();
+    const installLink = screen.getByRole('link', { name: /install ollama/i });
+    expect(installLink).toHaveAttribute('href', 'https://ollama.com/download');
+    expect(installLink).toHaveAttribute('target', '_blank');
+    expect(screen.queryByRole('button', { name: /run ollama/i })).not.toBeInTheDocument();
+  });
+
+  test('offers a Run Ollama button when the CLI is recognized', async () => {
+    await renderLoaded({ provider: 'ollama', model: 'llama3.1', ollamaInstalled: true });
+
+    expect(screen.getByText(/ollama is installed/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /run ollama/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /install ollama/i })).not.toBeInTheDocument();
+  });
+
+  test('clicking Run Ollama starts the model without the user typing a command', async () => {
+    await renderLoaded({ provider: 'ollama', model: 'llama3.1', ollamaInstalled: true });
+    axios.post.mockImplementation((url) => {
+      if (url === `${HOST}/providers/ollama/run`) {
+        return Promise.resolve({ data: { started: true, model: 'llama3.1', pid: 123 } });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /run ollama/i }));
+
+    await screen.findByText(/started `ollama run llama3\.1`/i);
+    expect(axios.post).toHaveBeenCalledWith(`${HOST}/providers/ollama/run`, { model: 'llama3.1' });
+  });
+
+  test('a failed Run Ollama request surfaces the backend error', async () => {
+    await renderLoaded({ provider: 'ollama', model: 'llama3.1', ollamaInstalled: true });
+    axios.post.mockRejectedValue({
+      response: { data: { error: 'The `ollama` command was not found on PATH.' } },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /run ollama/i }));
+
+    await screen.findByText(/was not found on path/i);
+    expect(screen.getByRole('button', { name: /run ollama/i })).not.toBeDisabled();
+  });
+
+  test('the Run Ollama button is disabled until a model is chosen', async () => {
+    await renderLoaded({ provider: 'ollama', model: '', ollamaInstalled: true });
+
+    expect(screen.getByRole('button', { name: /run ollama/i })).toBeDisabled();
+  });
+
+  test('re-checks CLI status when switching the provider to Ollama', async () => {
+    await renderLoaded({ provider: 'gemini' });
+    axios.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers/ollama/status`) {
+        return Promise.resolve({ data: { installed: true } });
+      }
+      if (url === `${HOST}/providers/ollama/models`) {
+        return Promise.resolve({ data: { models: [], supports_listing: false } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+
+    fireEvent.change(screen.getByLabelText(/ai provider/i), { target: { value: 'ollama' } });
+
+    await screen.findByRole('button', { name: /run ollama/i });
   });
 });
 

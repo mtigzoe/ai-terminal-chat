@@ -199,6 +199,31 @@ def provider_models(name):
     return payload
 
 
+@app.route("/providers/ollama/status", methods=["GET"])
+def ollama_cli_status():
+    """Report whether the `ollama` CLI is recognized on this machine's PATH.
+
+    Distinct from the `/providers/ollama/models` probe, which checks the
+    background server over HTTP: this is what lets the Settings page show
+    "Install Ollama" or "Run Ollama" without trying to reach the server.
+    """
+    from ollama import is_ollama_cli_installed
+    return {"installed": is_ollama_cli_installed()}
+
+
+@app.route("/providers/ollama/run", methods=["POST"])
+def ollama_run():
+    """Start `ollama run <model>` in the background for the Settings page's
+    "Run Ollama" button, so the user does not have to type it themselves."""
+    from ollama import launch_ollama_run
+    data = request.get_json(silent=True) or {}
+    model = str(data.get("model", "")).strip()
+    result = launch_ollama_run(model)
+    if isinstance(result, dict) and result.get("error"):
+        return result, 400
+    return result
+
+
 @app.route("/providers/select", methods=["POST"])
 def select_provider():
     global provider

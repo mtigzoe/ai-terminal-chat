@@ -26,6 +26,10 @@ const SettingsPage = ({ host }) => {
   const [saving, setSaving] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [ollamaHostname, setOllamaHostname] = useState('localhost:11434');
+  const [ollamaCliInstalled, setOllamaCliInstalled] = useState(null);
+  const [ollamaRunBusy, setOllamaRunBusy] = useState(false);
+  const [ollamaRunStatus, setOllamaRunStatus] = useState('');
+  const [ollamaRunIsError, setOllamaRunIsError] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
   const [allowedCommands, setAllowedCommands] = useState([]);
@@ -107,6 +111,17 @@ const SettingsPage = ({ host }) => {
     }
   };
 
+  const checkOllamaCli = async () => {
+    try {
+      const response = await axios.get(`${host}/providers/ollama/status`);
+      setOllamaCliInstalled(Boolean(response.data?.installed));
+    } catch {
+      // If the check itself fails, don't offer to run a command that
+      // may not work either — fall back to pointing at the installer.
+      setOllamaCliInstalled(false);
+    }
+  };
+
   useEffect(() => {
     let active = true;
 
@@ -122,6 +137,7 @@ const SettingsPage = ({ host }) => {
         setModel(providerResponse.data.model || '');
         if ((providerResponse.data.name || '').toLowerCase() === 'ollama') {
           setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
+          checkOllamaCli();
         }
         setAllowedCommands(allowedCommandsResponse.data.commands || []);
         setStatusMessage('');
@@ -147,11 +163,44 @@ const SettingsPage = ({ host }) => {
     setProvider(nextProvider);
     setModel('');
     setModelsError('');
-    if (nextProvider.toLowerCase() === 'ollama' && !ollamaHostname.trim()) {
-      setOllamaHostname('localhost:11434');
+    if (nextProvider.toLowerCase() === 'ollama') {
+      if (!ollamaHostname.trim()) {
+        setOllamaHostname('localhost:11434');
+      }
+      setOllamaRunStatus('');
+      setOllamaCliInstalled(null);
+      checkOllamaCli();
+    } else {
+      setOllamaCliInstalled(null);
+      setOllamaRunStatus('');
     }
     writeStoredProvider({ provider: nextProvider });
     await loadModels(nextProvider);
+  };
+
+  const handleRunOllama = async () => {
+    const targetModel = model.trim();
+    if (!targetModel) {
+      setOllamaRunIsError(true);
+      setOllamaRunStatus('Choose or enter a model above, then try again.');
+      return;
+    }
+    setOllamaRunBusy(true);
+    setOllamaRunIsError(false);
+    setOllamaRunStatus('');
+    try {
+      await axios.post(`${host}/providers/ollama/run`, { model: targetModel });
+      setOllamaRunStatus(
+        `Started \`ollama run ${targetModel}\`. Check the new terminal window for progress.`
+      );
+    } catch (error) {
+      setOllamaRunIsError(true);
+      setOllamaRunStatus(
+        error?.response?.data?.error || error?.message || 'Could not start Ollama.'
+      );
+    } finally {
+      setOllamaRunBusy(false);
+    }
   };
 
   const handleSave = async (event) => {
@@ -335,23 +384,77 @@ const SettingsPage = ({ host }) => {
           </div>
 
           {provider.toLowerCase() === 'ollama' ? (
-            <div className="settings-field">
-              <label htmlFor="settings-ollama-hostname">Ollama hostname</label>
-              <input
-                id="settings-ollama-hostname"
-                type="text"
-                value={ollamaHostname}
-                onChange={(event) => setOllamaHostname(event.target.value)}
-                disabled={saving}
-                placeholder="localhost:11434"
-                autoComplete="url"
-                spellCheck="false"
-                aria-describedby="settings-ollama-hostname-help"
-              />
-              <p id="settings-ollama-hostname-help" className="settings-help">
-                Enter the hostname and port where Ollama is running, such as localhost:11434 or cyber.local:11434. You do not need to edit the .env file.
-              </p>
-            </div>
+            <>
+              <div className="settings-field">
+                <label htmlFor="settings-ollama-hostname">Ollama hostname</label>
+                <input
+                  id="settings-ollama-hostname"
+                  type="text"
+                  value={ollamaHostname}
+                  onChange={(event) => setOllamaHostname(event.target.value)}
+                  disabled={saving}
+                  placeholder="localhost:11434"
+                  autoComplete="url"
+                  spellCheck="false"
+                  aria-describedby="settings-ollama-hostname-help"
+                />
+                <p id="settings-ollama-hostname-help" className="settings-help">
+                  Enter the hostname and port where Ollama is running, such as localhost:11434 or cyber.local:11434. You do not need to edit the .env file.
+                </p>
+              </div>
+
+              <div className="settings-field settings-ollama-actions">
+                <span id="settings-ollama-action-label" className="settings-ollama-actions-label">
+                  {ollamaCliInstalled === null
+                    ? 'Checking for Ollama…'
+                    : ollamaCliInstalled
+                      ? 'Ollama is installed on this computer.'
+                      : 'Ollama is not installed on this computer.'}
+                </span>
+
+                {ollamaCliInstalled === true && (
+                  <button
+                    type="button"
+                    className="settings-ollama-action-button"
+                    onClick={handleRunOllama}
+                    disabled={ollamaRunBusy || !model.trim()}
+                    aria-describedby="settings-ollama-action-help"
+                  >
+                    {ollamaRunBusy ? 'Starting…' : 'Run Ollama'}
+                  </button>
+                )}
+
+                {ollamaCliInstalled === false && (
+                  <a
+                    className="settings-ollama-action-button"
+                    href="https://ollama.com/download"
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    aria-describedby="settings-ollama-action-help"
+                  >
+                    Install Ollama
+                    <span className="sr-only"> (opens ollama.com in a new tab)</span>
+                  </a>
+                )}
+
+                {ollamaCliInstalled !== null && (
+                  <p id="settings-ollama-action-help" className="settings-help">
+                    {ollamaCliInstalled
+                      ? 'Starts `ollama run <model>` in a terminal for you, so you do not have to type it yourself.'
+                      : 'Install Ollama, then reopen this page to run models with one click instead of typing `ollama run <model>` in a terminal.'}
+                  </p>
+                )}
+
+                <div
+                  className={`settings-status${ollamaRunIsError ? ' settings-status--error' : ''}`}
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  {ollamaRunStatus}
+                </div>
+              </div>
+            </>
           ) : null}
 
           <div className="settings-field">

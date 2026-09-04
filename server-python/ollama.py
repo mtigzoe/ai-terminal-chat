@@ -10,6 +10,10 @@ The constructor never contacts the network, so the app can start
 offline even when `ollama serve` is not running.
 """
 
+import platform
+import re
+import shutil
+import subprocess
 from dataclasses import replace
 from typing import Optional
 from urllib.parse import urlparse
@@ -64,6 +68,88 @@ def model_ids_match(requested: str, installed: str) -> bool:
     if ":" not in inst and req == f"{inst}:latest":
         return True
     return False
+
+
+# Ollama model names look like ``llama3.1``, ``llama3.1:8b``, or
+# ``myuser/mymodel:tag``. Cloud models can chain more than one colon
+# segment (e.g. ``gpt-oss:20b:cloud``, ``gpt-oss:20b-cloud``), so this
+# allows any number of ``:segment`` parts rather than just one. What it
+# guards against is a leading ``-`` (so a typed value can never be read
+# as a CLI flag) and characters outside the set Ollama itself uses.
+_SAFE_MODEL_NAME = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+)
+
+
+def is_ollama_cli_installed() -> bool:
+    """True if the `ollama` executable is recognized on this machine's PATH.
+
+    This checks the CLI binary itself — the same thing a user would learn
+    by typing `ollama` at a terminal prompt — which is distinct from
+    :meth:`OllamaProvider.probe`, which checks whether the background
+    server (`ollama serve`) is reachable over HTTP. The CLI can be
+    installed with the server not yet started, so the two checks answer
+    different questions.
+    """
+
+    return shutil.which("ollama") is not None
+
+
+def launch_ollama_run(model: str) -> dict:
+    """Start `ollama run <model>` in the background, without blocking.
+
+    This is what the Settings page's "Run Ollama" button calls so a user
+    never has to type `ollama run <model>` into a terminal themselves.
+    `ollama run` pulls the model if needed, starts the server if it isn't
+    already running, and then drops into an interactive chat — it does
+    not exit on its own — so this launches it as a detached process
+    rather than waiting for it to finish.
+
+    On Windows it opens in its own console window so pull/startup
+    progress stays visible, mirroring what the user would see if they
+    ran the command themselves. Elsewhere it runs fully detached in the
+    background, since there is no single cross-platform way to open a
+    new terminal window.
+    """
+
+    model = (model or "").strip()
+    if not model:
+        return {"error": "A model name is required."}
+    if not _SAFE_MODEL_NAME.match(model):
+        return {"error": f"'{model}' is not a valid Ollama model name."}
+    if not is_ollama_cli_installed():
+        return {
+            "error": (
+                "The `ollama` command was not found on PATH. Install "
+                "Ollama first, then try again."
+            )
+        }
+
+    try:
+        if platform.system() == "Windows":
+            process = subprocess.Popen(
+                ["ollama", "run", model],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        else:
+            process = subprocess.Popen(
+                ["ollama", "run", model],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except FileNotFoundError:
+        return {
+            "error": (
+                "The `ollama` command was not found on PATH. Install "
+                "Ollama first, then try again."
+            )
+        }
+    except OSError as exc:
+        return {"error": f"Could not start `ollama run {model}`: {exc}"}
+
+    return {"started": True, "model": model, "pid": process.pid}
 
 
 class OllamaProvider(OpenAICompatibleProvider):
