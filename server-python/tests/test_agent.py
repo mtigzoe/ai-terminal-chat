@@ -601,6 +601,12 @@ def test_git_add_never_self_confirms_through_agent_loop(tmp_path, monkeypatch):
 
     clear_pending()
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(tools, "PROJECT_ROOT", tmp_path)
     (tmp_path / "file.txt").write_text("hello")

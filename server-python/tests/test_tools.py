@@ -28,6 +28,12 @@ def git_repo(tmp_path, monkeypatch):
     """
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(tools, "PROJECT_ROOT", tmp_path)
     return tmp_path
