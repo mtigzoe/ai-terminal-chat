@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { safePath, getProjectRoot, setProjectRoot, isSensitiveFilename, isSensitivePath, runWithAllowedReadPaths } from "../src/security.ts";
 import { listFiles, readFile, searchFiles } from "../src/filesystem.ts";
-import { runCommand, getAllowedCommands, isCommandAllowed, addAllowedCommand, removeAllowedCommand } from "../src/terminal.ts";
+import { runCommand, getAllowedCommands, isCommandAllowed, addAllowedCommand, removeAllowedCommand, reloadAllowedCommands, persistAllowedCommands, DEFAULT_ALLOWED_COMMAND_PREFIXES } from "../src/terminal.ts";
 import { git_add as gitAdd } from "../src/write-tools.ts";
 import {
   gitFetch,
@@ -24,6 +24,10 @@ function gitInit(repoDir: string): void {
 const TEST_DIR = path.join(os.tmpdir(), `ai-terminal-chat-tests-${Date.now()}`);
 
 beforeEach(() => {
+  // Reset allowlist to defaults on disk so that mutations from other
+  // test files cannot leak into these tests, then reload into memory.
+  persistAllowedCommands([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
+  reloadAllowedCommands();
   fs.mkdirSync(TEST_DIR, { recursive: true });
   setProjectRoot(TEST_DIR);
 });
@@ -34,6 +38,9 @@ afterEach(() => {
   } catch {
     // ignore cleanup errors
   }
+  // Reset the allowlist to defaults so tests in other files that share
+  // the same process/module cache are not affected by mutations here.
+  reloadAllowedCommands();
 });
 
 describe("safePath", () => {

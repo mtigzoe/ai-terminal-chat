@@ -58,6 +58,11 @@ except Exception:
 
 if _saved.get("provider"):
     try:
+        # Re-apply the persisted Ollama base URL before constructing the
+        # provider so load_provider_config() picks it up from the env,
+        # matching the runtime path used by select_provider().
+        if _saved.get("provider") == "ollama" and _saved.get("ollama_base_url"):
+            os.environ["OLLAMA_BASE_URL"] = _saved["ollama_base_url"].strip()
         provider = get_provider(_saved["provider"], model=_saved.get("model"))
     except Exception:
         provider = get_provider()
@@ -253,6 +258,10 @@ def select_provider():
             else:
                 os.environ[env_name] = previous_api_key
         return {"error": f"Could not switch to '{name}': {exc}"}, 400
+    # Switching away from Ollama must remove any previously set
+    # OLLAMA_BASE_URL so the new provider is not contaminated.
+    if name != "ollama":
+        os.environ.pop("OLLAMA_BASE_URL", None)
     with _provider_lock:
         provider = candidate
     try:

@@ -111,18 +111,24 @@ function normalizePrefix(prefix: string): string {
   return (prefix ?? "").trim();
 }
 
-function isForbiddenPrefix(prefix: string): boolean {
+/** True if a proposed allowlist prefix must be rejected for safety reasons. */
+export function isForbiddenPrefix(prefix: string): boolean {
   const normalized = normalizePrefix(prefix).toLowerCase();
 
   if (!normalized) return true;
 
-  if (
-    FORBIDDEN_ALLOWED_COMMAND_PREFIXES.some(
-      (forbidden) =>
-        normalized === forbidden ||
-        normalized.startsWith(`${forbidden} `),
-    )
-  ) {
+  // Reject exact matches and prefixes that would expand to a forbidden
+  // command. Both directions must be checked so that a broad prefix such
+  // as "git" is rejected (it would permit "git push", "git reset", etc.)
+  // while a safe prefix such as "git status" is still accepted.
+  const hasForbiddenMatch = FORBIDDEN_ALLOWED_COMMAND_PREFIXES.some(
+    (forbidden) =>
+      normalized === forbidden ||
+      normalized.startsWith(`${forbidden} `) ||
+      forbidden.startsWith(`${normalized} `),
+  );
+
+  if (hasForbiddenMatch) {
     return true;
   }
 
@@ -143,7 +149,8 @@ function loadAllowedCommandsFromConfig(): string[] | null {
   return prefixes.length > 0 ? prefixes : null;
 }
 
-function persistAllowedCommands(prefixes: string[]): void {
+/** Write the current allowlist to the configuration file. */
+export function persistAllowedCommands(prefixes: string[]): void {
   const config = loadAppConfig();
   config.allowed_commands = [...prefixes];
   persistAppConfig(config);
@@ -206,16 +213,34 @@ export function removeAllowedCommand(prefix: string): string[] {
   return getAllowedCommands();
 }
 
-/** Replace the runtime allowlist without persisting it; intended for tests. */
+/** Replace the runtime allowlist without persisting it; intended for tests.
+ *
+ * Uses Array.splice to mutate the existing array in place so that any
+ * closure or imported binding that captured the original reference
+ * (e.g. addAllowedCommand / removeAllowedCommand) continues to observe
+ * mutations on the same object.
+ */
 export function __setAllowedCommandsForTests(prefixes: string[]): void {
-  allowedCommandPrefixes = [...prefixes];
+  allowedCommandPrefixes.splice(0, allowedCommandPrefixes.length, ...prefixes);
 }
 
-/** True when a command is exactly a prefix or starts with the prefix plus whitespace. */
+/** True when a command matches an allowed prefix (arguments permitted).
+ *
+ * The command is normalized by tokenizing it and rejoining with single
+ * spaces before matching, so leading/trailing whitespace, repeated spaces,
+ * and tabs do not affect the result.
+ */
 export function isCommandAllowed(command: string): boolean {
+  let normalized: string;
+  try {
+    normalized = tokenizeCommand(command).join(" ");
+  } catch {
+    normalized = command.trim();
+  }
+
   return allowedCommandPrefixes.some(
     (prefix) =>
-      command === prefix || command.startsWith(`${prefix} `),
+      normalized === prefix || normalized.startsWith(`${prefix} `),
   );
 }
 

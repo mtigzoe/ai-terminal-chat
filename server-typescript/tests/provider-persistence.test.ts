@@ -249,16 +249,80 @@ describe("provider/model persistence and startup restore", () => {
     });
   });
 
-  it("restoreProviderFromConfig loads provider and model but not ollama host", () => {
+  it("restoreProviderFromConfig restores provider, model, and Ollama URL", () => {
     persistProviderSelection("ollama", "mistral", "cyber.local:11434");
     delete process.env.OLLAMA_BASE_URL;
     vi.mocked(getProvider).mockClear();
 
     restoreProviderFromConfig();
 
+    // Startup must re-apply persisted ollama_base_url to env so
+    // loadProviderEnvConfig picks it up, matching the runtime path
+    // used by /providers/select.
+    expect(process.env.OLLAMA_BASE_URL).toBe("http://cyber.local:11434/v1");
     expect(getProvider).toHaveBeenCalledWith("ollama", { model: "mistral" });
-    // Startup must not re-apply ollama_base_url (Python parity).
+  });
+
+  it("restoreProviderFromConfig does not apply Ollama URL for non-Ollama providers", () => {
+    persistProviderSelection("gemini", "gemini-2.0-flash");
+    delete process.env.OLLAMA_BASE_URL;
+    vi.mocked(getProvider).mockClear();
+
+    restoreProviderFromConfig();
+
     expect(process.env.OLLAMA_BASE_URL).toBeUndefined();
+    expect(getProvider).toHaveBeenCalledWith("gemini", { model: "gemini-2.0-flash" });
+  });
+
+  it("restoreProviderFromConfig handles persisted Ollama URL that already ends with /v1", () => {
+    persistProviderSelection("ollama", "llama3.1", "http://localhost:11434/v1");
+    delete process.env.OLLAMA_BASE_URL;
+    vi.mocked(getProvider).mockClear();
+
+    restoreProviderFromConfig();
+
+    expect(process.env.OLLAMA_BASE_URL).toBe("http://localhost:11434/v1");
+    expect(getProvider).toHaveBeenCalledWith("ollama", { model: "llama3.1" });
+  });
+
+  it("switching from Ollama to another provider does not leave a stale Ollama URL in env", async () => {
+    // Set up: Ollama with custom URL is the active selection.
+    persistProviderSelection("ollama", "llama3.1", "cyber.local:11434");
+    restoreProviderFromConfig();
+    expect(process.env.OLLAMA_BASE_URL).toBe("http://cyber.local:11434/v1");
+
+    // Act: switch to Gemini via the API.
+    const res = await app.request("http://localhost/providers/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "gemini", model: "gemini-2.0-flash" }),
+    });
+    expect(res.status).toBe(200);
+
+    // Assert: OLLAMA_BASE_URL is actively cleared by the route handler
+    // when leaving Ollama, and persistProviderSelection also removes
+    // the persisted key.
+    expect(process.env.OLLAMA_BASE_URL).toBeUndefined();
+    expect(loadProviderSelection().ollama_base_url).toBeUndefined();
+  });
+
+  it("restoreProviderFromConfig re-applies Ollama URL after a simulated restart", () => {
+    // Simulate: Ollama + custom URL was previously persisted and applied.
+    persistProviderSelection("ollama", "llama3.1", "cyber.local:11434");
+    restoreProviderFromConfig();
+    expect(process.env.OLLAMA_BASE_URL).toBe("http://cyber.local:11434/v1");
+
+    // Simulate a server restart: clear the in-memory active provider
+    // and wipe the env var that was carried in process memory.
+    // (The persisted config is untouched.)
+    vi.mocked(getProvider).mockClear();
+    delete process.env.OLLAMA_BASE_URL;
+    // In a real restart the module would re-execute restoreProviderFromConfig;
+    // call it directly here to verify the same behaviour.
+    restoreProviderFromConfig();
+
+    expect(process.env.OLLAMA_BASE_URL).toBe("http://cyber.local:11434/v1");
+    expect(getProvider).toHaveBeenCalledWith("ollama", { model: "llama3.1" });
   });
 });
 
