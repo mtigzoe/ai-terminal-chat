@@ -46,12 +46,29 @@ function getActiveProvider(): Provider {
 
 /**
  * Restore provider + model from config.json at startup.
- * Matches Python: does NOT re-apply persisted ollama_base_url to env.
+ *
+ * When the persisted provider is Ollama the saved ollama_base_url is also
+ * reapplied to the process environment before constructing the provider so
+ * that the runtime configuration matches what the user selected through
+ * /providers/select. Matches Python parity for provider/model restoration;
+ * the env re-application step is what closes the Ollama-URL restoration gap.
  */
 export function restoreProviderFromConfig(): void {
   try {
     const saved = loadProviderSelection();
+
     if (saved.provider) {
+      // Re-apply the persisted Ollama base URL before constructing the
+      // provider so loadProviderEnvConfig() picks it up from the env,
+      // matching the runtime path used by /providers/select.
+      if (
+        saved.provider === "ollama" &&
+        saved.ollama_base_url &&
+        saved.ollama_base_url.trim()
+      ) {
+        applyOllamaBaseUrlToEnv(saved.ollama_base_url.trim());
+      }
+
       activeProvider = getProvider(
         saved.provider,
         saved.model ? { model: saved.model } : undefined
@@ -175,6 +192,13 @@ app.post("/providers/select", async (c) => {
         400 as any
       );
     }
+  }
+
+  // Switching away from Ollama must remove any previously persisted
+  // OLLAMA_BASE_URL from the process environment so a stale value is
+  // not inherited by subsequent requests.
+  if (name !== "ollama") {
+    delete process.env.OLLAMA_BASE_URL;
   }
 
   const envApiKeyMap: Record<string, string | undefined> = {

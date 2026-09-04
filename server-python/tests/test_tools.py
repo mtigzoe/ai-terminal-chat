@@ -76,6 +76,48 @@ def test_command_allowlist_accepts_safe_development_commands():
     assert app.is_command_allowed("npm run build")
 
 
+def test_command_allowlist_near_miss_prefixes_are_denied():
+    """A string that shares characters with an allowlist entry but is not
+    the entry itself or a space-separated extension must not match."""
+    assert not app.is_command_allowed("git status-evil")
+    assert not app.is_command_allowed("git branch-evil")
+    assert not app.is_command_allowed("npm testing")
+    assert not app.is_command_allowed("npm testx")
+
+
+def test_command_allowlist_whitespace_variants_normalized():
+    """Leading/trailing whitespace, repeated spaces, and tabs must not
+    affect the allowlist decision."""
+    assert app.is_command_allowed("  git status")
+    assert app.is_command_allowed("git status  ")
+    assert app.is_command_allowed("\tgit status\t")
+    assert app.is_command_allowed("git  status")
+    assert app.is_command_allowed("git\tstatus")
+    assert app.is_command_allowed("git  status  --short")
+
+
+def test_command_allowlist_quoted_arguments_preserved():
+    """Quoted arguments are preserved through shlex tokenization."""
+    assert app.is_command_allowed("npm test -- --grep 'project tree'")
+    assert app.is_command_allowed('npm test -- --grep "project tree"')
+
+
+def test_is_forbidden_prefix_blocks_broad_git_prefix():
+    """A broad 'git' prefix must be rejected by _is_forbidden_prefix
+    because it would permit dangerous git subcommands."""
+    from tools import _is_forbidden_prefix  # noqa: F401
+
+    assert _is_forbidden_prefix("git") is True
+    assert _is_forbidden_prefix("rm") is True
+    # Safe prefixes that happen to start with a forbidden word plus a
+    # space must still be accepted.
+    assert _is_forbidden_prefix("git status") is False
+    assert _is_forbidden_prefix("git log") is False
+    # npm is intentionally not forbidden (safe subcommands include
+    # npm test, npm run build, npm install, etc.).
+    assert _is_forbidden_prefix("npm") is False
+
+
 def test_command_allowlist_rejects_unknown_commands():
     assert not app.is_command_allowed("whoami")
     assert not app.is_command_allowed("rm -rf .")

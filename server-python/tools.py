@@ -370,9 +370,16 @@ def _is_forbidden_prefix(prefix: str) -> bool:
     normalized = _normalize_command_prefix(prefix).lower()
     if not normalized:
         return True
+    # Reject exact matches and prefixes that would expand to a forbidden
+    # command. Both directions must be checked so that a broad prefix such
+    # as "git" is rejected (it would permit "git push", "git reset", etc.)
+    # while a safe prefix such as "git status" is still accepted.
     for forbidden in FORBIDDEN_ALLOWED_COMMAND_PREFIXES:
-        if normalized == forbidden.lower() or normalized.startswith(
-            forbidden.lower() + " "
+        forbidden_lower = forbidden.lower()
+        if (
+            normalized == forbidden_lower
+            or normalized.startswith(forbidden_lower + " ")
+            or forbidden_lower.startswith(normalized + " ")
         ):
             return True
     # Also reject anything containing dangerous shell characters.
@@ -541,10 +548,21 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
 
 
 def is_command_allowed(command: str) -> bool:
-    """True if the command matches one of the allowed dev-command prefixes."""
+    """True if the command matches one of the allowed dev-command prefixes.
+
+    The command is normalized by tokenizing it before matching so that
+    leading/trailing whitespace, repeated spaces, and tabs do not affect
+    the result.
+    """
+
+    try:
+        tokens = shlex.split(command, posix=False)
+    except ValueError:
+        tokens = command.split()
+    normalized = " ".join(tokens)
 
     return any(
-        command == prefix or command.startswith(prefix + " ")
+        normalized == prefix or normalized.startswith(prefix + " ")
         for prefix in ALLOWED_COMMAND_PREFIXES
     )
 

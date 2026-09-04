@@ -45,9 +45,19 @@ import { app } from "../src/routes.js";
 import { clear as clearPending } from "../src/pending.js";
 import { clear as clearCancellation } from "../src/cancellation.js";
 import { setProjectRoot } from "../src/security.js";
+import { reloadAllowedCommands, persistAllowedCommands, DEFAULT_ALLOWED_COMMAND_PREFIXES } from "../src/terminal.js";
 function createTestApp() {
   return app;
 }
+
+beforeEach(() => {
+  // Reset allowlist to defaults on disk so that mutations from other
+  // test files cannot leak into these tests, then reload into memory.
+  persistAllowedCommands([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
+  reloadAllowedCommands();
+  // Ensure the allowlist starts from defaults so earlier test files
+  // that modified or persisted the allowlist do not affect these tests.
+});
 
 describe("GET /providers", () => {
   it("returns provider status and supported providers list", async () => {
