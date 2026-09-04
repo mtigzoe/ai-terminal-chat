@@ -28,6 +28,12 @@ def git_repo(tmp_path, monkeypatch):
     """
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(tools, "PROJECT_ROOT", tmp_path)
     return tmp_path
@@ -751,8 +757,10 @@ def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
 
     monkeypatch.setattr(tools, "PROJECT_ROOT", Path(tempfile.mkdtemp()))
     
-    # Force the Windows code path even on non-Windows test runners.
-    monkeypatch.setattr(tools.os, "name", "nt")
+    # On Windows, `pwd` is translated to `cmd /c cd` by the runtime
+    # os.name check. On non-Windows platforms this test is skipped.
+    if os.name != "nt":
+        pytest.skip("Windows-specific pwd translation test")
     
     result = tools.run_command("pwd")
     assert "error" not in result, f"pwd must work on Windows: {result.get('error')}"

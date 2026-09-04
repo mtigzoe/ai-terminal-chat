@@ -19,6 +19,7 @@ import {
   tokenizeCommand,
 } from "./terminal.ts";
 import { __setProjectRootForTests, __resetProjectRootForTests, runWithAllowedReadPaths } from "./security.ts";
+import { isToolError } from "./types.ts";
 
 void BLOCKED_COMMAND_PATTERNS;
 void DANGEROUS_COMMAND_CHARACTERS;
@@ -67,7 +68,7 @@ test.afterEach(() => {
 test("git show HEAD is denied when read restrictions are active (shows full diff)", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show HEAD");
-    assert.ok(result.error, "git show HEAD must be denied when no files are selected");
+    assert.ok(isToolError(result), "git show HEAD must be denied when no files are selected");
     assert.ok(result.error.includes("Access denied"), "error must mention Access denied");
   });
 });
@@ -75,28 +76,28 @@ test("git show HEAD is denied when read restrictions are active (shows full diff
 test("git show --stat HEAD is allowed even when read restrictions are active", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --stat HEAD");
-    assert.ok(!result.error, "git show --stat HEAD must be allowed: --stat shows no file contents");
+    assert.ok(!isToolError(result), "git show --stat HEAD must be allowed: --stat shows no file contents");
   });
 });
 
 test("git show --no-patch HEAD is allowed even when read restrictions are active", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --no-patch HEAD");
-    assert.ok(!result.error, "git show --no-patch HEAD must be allowed: no file contents shown");
+    assert.ok(!isToolError(result), "git show --no-patch HEAD must be allowed: no file contents shown");
   });
 });
 
 test("git show HEAD:README.md is allowed when README.md is selected", async () => {
   await runWithAllowedReadPaths(["README.md"], async () => {
     const result = await runCommand("git show HEAD:README.md");
-    assert.ok(!result.error, "git show HEAD:README.md must be allowed when README.md is selected");
+    assert.ok(!isToolError(result), "git show HEAD:README.md must be allowed when README.md is selected");
   });
 });
 
 test("git show HEAD:README.md is denied when README.md is not selected", async () => {
   await runWithAllowedReadPaths(["other.md"], async () => {
     const result = await runCommand("git show HEAD:README.md");
-    assert.ok(result.error, "git show HEAD:README.md must be denied when README.md is not selected");
+    assert.ok(isToolError(result), "git show HEAD:README.md must be denied when README.md is not selected");
     assert.ok(result.error.includes("Access denied"), "error must mention Access denied");
   });
 });
@@ -104,14 +105,14 @@ test("git show HEAD:README.md is denied when README.md is not selected", async (
 test("git show HEAD -- README.md is allowed when README.md is selected", async () => {
   await runWithAllowedReadPaths(["README.md"], async () => {
     const result = await runCommand("git show HEAD -- README.md");
-    assert.ok(!result.error, "git show HEAD -- README.md must be allowed when README.md is selected");
+    assert.ok(!isToolError(result), "git show HEAD -- README.md must be allowed when README.md is selected");
   });
 });
 
 test("git show HEAD -- README.md is denied when README.md is not selected", async () => {
   await runWithAllowedReadPaths(["other.md"], async () => {
     const result = await runCommand("git show HEAD -- README.md");
-    assert.ok(result.error, "git show HEAD -- README.md must be denied when README.md is not selected");
+    assert.ok(isToolError(result), "git show HEAD -- README.md must be denied when README.md is not selected");
     assert.ok(result.error.includes("Access denied"), "error must mention Access denied");
   });
 });
@@ -120,42 +121,42 @@ test("git show HEAD -- README.md is denied when README.md is not selected", asyn
 test("git show --oneline HEAD is denied (shows full patch despite --oneline)", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --oneline HEAD");
-    assert.ok(result.error, "--oneline must not bypass the permission check");
+    assert.ok(isToolError(result), "--oneline must not bypass the permission check");
   });
 });
 
 test("git show --stat --patch HEAD is denied (--patch overrides --stat)", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --stat --patch HEAD");
-    assert.ok(result.error, "--stat --patch must not bypass the permission check");
+    assert.ok(isToolError(result), "--stat --patch must not bypass the permission check");
   });
 });
 
 test("git show --no-patch --patch HEAD is denied (--patch overrides --no-patch)", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --no-patch --patch HEAD");
-    assert.ok(result.error, "--no-patch --patch must not bypass the permission check");
+    assert.ok(isToolError(result), "--no-patch --patch must not bypass the permission check");
   });
 });
 
 test("git show --format=oneline HEAD is denied (--format shows patch)", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --format=oneline HEAD");
-    assert.ok(result.error, "--format=oneline must not bypass the permission check");
+    assert.ok(isToolError(result), "--format=oneline must not bypass the permission check");
   });
 });
 
 test("git show --name-only --patch HEAD is allowed (--name-only suppresses patch)", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --name-only --patch HEAD");
-    assert.ok(!result.error, "--name-only --patch must be allowed: no file contents shown");
+    assert.ok(!isToolError(result), "--name-only --patch must be allowed: no file contents shown");
   });
 });
 
 test("git show --name-status --patch HEAD is allowed (--name-status suppresses patch)", async () => {
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --name-status --patch HEAD");
-    assert.ok(!result.error, "--name-status --patch must be allowed: no file contents shown");
+    assert.ok(!isToolError(result), "--name-status --patch must be allowed: no file contents shown");
   });
 });
 
@@ -287,16 +288,16 @@ test("isCommandAllowed: shell operators embedded in the command string are token
 
 test("runCommand rejects chained/pipe/redirect commands even when the first token is allowlisted", async () => {
   const r1 = await runCommand("git status && whoami");
-  assert.ok(r1.error, "&& chain must be rejected");
+  assert.ok(isToolError(r1), "&& chain must be rejected");
   const r2 = await runCommand("npm test; rm -rf /");
-  assert.ok(r2.error, "; chain must be rejected");
+  assert.ok(isToolError(r2), "; chain must be rejected");
   const r3 = await runCommand("git status | grep secret");
-  assert.ok(r3.error, "pipe must be rejected");
+  assert.ok(isToolError(r3), "pipe must be rejected");
   const r4 = await runCommand("git log > /tmp/leak.txt");
-  assert.ok(r4.error, "redirect must be rejected");
+  assert.ok(isToolError(r4), "redirect must be rejected");
   const r5 = await runCommand("git status `whoami`");
-  assert.ok(r5.error, "backtick substitution must be rejected");
+  assert.ok(isToolError(r5), "backtick substitution must be rejected");
   const r6 = await runCommand("git status $(whoami)");
-  assert.ok(r6.error, "$() substitution must be rejected");
+  assert.ok(isToolError(r6), "$() substitution must be rejected");
 });
 
