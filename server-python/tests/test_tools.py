@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -741,3 +742,20 @@ def test_new_git_tools_are_registered_consistently():
 
 def test_git_pull_is_forbidden_in_run_command_allowlist():
     assert "git pull" in tools.FORBIDDEN_ALLOWED_COMMAND_PREFIXES
+
+
+def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
+    """On Windows, `pwd` is not a standalone executable. run_command must
+    translate it to `cmd /c cd` so the user gets the current directory,
+    matching the TypeScript implementation."""
+
+    monkeypatch.setattr(tools, "PROJECT_ROOT", Path(tempfile.mkdtemp()))
+    
+    # Force the Windows code path even on non-Windows test runners.
+    monkeypatch.setattr(tools.os, "name", "nt")
+    
+    result = tools.run_command("pwd")
+    assert "error" not in result, f"pwd must work on Windows: {result.get('error')}"
+    assert result["returncode"] == 0
+    # stdout should contain the project root path.
+    assert str(tools.PROJECT_ROOT) in result["stdout"]

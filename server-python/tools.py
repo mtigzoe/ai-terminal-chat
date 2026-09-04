@@ -683,6 +683,11 @@ def run_command(command: str) -> dict:
     try:
         args = shlex.split(command, posix=False)
         
+        # `pwd` is not a standalone executable on Windows.
+        # Translate to `cmd /c cd`, which prints the current directory.
+        if os.name == "nt" and args and args[0].lower() == "pwd":
+            args = ["cmd", "/c", "cd"]
+        
         # `ls` is a PowerShell alias on Windows, not an executable.
         # Use the native cmd.exe directory command while preserving
         # `ls` as the cross-platform command exposed to the agent.
