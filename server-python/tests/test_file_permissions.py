@@ -282,4 +282,60 @@ def test_git_show_shell_blocked_when_restricted(project_root):
     result = tools.run_command("git show HEAD:other.md")
     assert "error" in result
     err = result["error"].lower()
-    assert "blocked" in err or "read_file" in err or "not allowed" in err
+    assert "access denied" in err
+
+
+def test_git_show_head_denied_when_restricted(project_root):
+    """git show HEAD exposes the full commit diff and must be denied when
+    no files are selected."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show HEAD")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err
+
+
+def test_git_show_stat_allowed_when_restricted(project_root):
+    """git show --stat HEAD shows only change statistics, no file contents."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --stat HEAD")
+    assert "error" not in result
+
+
+def test_git_show_no_patch_allowed_when_restricted(project_root):
+    """git show --no-patch HEAD shows only commit metadata, no file contents."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --no-patch HEAD")
+    assert "error" not in result
+
+
+def test_git_show_colon_path_allowed_for_selected_file(project_root):
+    """git show HEAD:README.md must be allowed when README.md is selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD:README.md")
+    assert "error" not in result
+
+
+def test_git_show_colon_path_denied_for_unselected_file(project_root):
+    """git show HEAD:other.md must be denied when other.md is not selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD:other.md")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err
+
+
+def test_git_show_dash_path_allowed_for_selected_file(project_root):
+    """git show HEAD -- README.md must be allowed when README.md is selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD -- README.md")
+    assert "error" not in result
+
+
+def test_git_show_dash_path_denied_for_unselected_file(project_root):
+    """git show HEAD -- other.md must be denied when other.md is not selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD -- other.md")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err

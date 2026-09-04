@@ -362,7 +362,53 @@ function runCommandRespectsReadPermissions(
   const lower = command.toLowerCase();
 
   if (lower.startsWith("git show ")) {
-    if (args.length === 1 && gitShowPathAllowed(args[0])) {
+    // Use the full tokenized args (not contentPathArguments, which strips
+    // flags and the command name) so we can inspect --stat/--no-patch
+    // and handle commit:path / -- path syntax correctly.
+    let fullArgs: string[];
+    try {
+      fullArgs = tokenizeCommand(command);
+    } catch {
+      fullArgs = command.trim().split(/\s+/);
+    }
+
+    const noContentFlags = new Set([
+      "--stat",
+      "--no-patch",
+      "--name-only",
+      "--oneline",
+      "--quiet",
+    ]);
+    const hasNoContentFlag = fullArgs.slice(2).some((arg) => noContentFlags.has(arg));
+
+    if (hasNoContentFlag) {
+      return null;
+    }
+
+    const explicitPaths: string[] = [];
+    let pastDoubleDash = false;
+
+    for (let i = 2; i < fullArgs.length; i++) {
+      const arg = fullArgs[i];
+      if (arg === "--") {
+        pastDoubleDash = true;
+        continue;
+      }
+      if (pastDoubleDash) {
+        explicitPaths.push(arg);
+      } else if (!arg.startsWith("-") && arg.includes(":")) {
+        explicitPaths.push(arg.slice(arg.indexOf(":") + 1));
+      }
+    }
+
+    if (explicitPaths.length === 0) {
+      return (
+        "Access denied: git show can expose file contents. " +
+        "Use --stat, --no-patch, or specify an allowed file path."
+      );
+    }
+
+    if (explicitPaths.every((path) => isReadAllowed(path))) {
       return null;
     }
 
