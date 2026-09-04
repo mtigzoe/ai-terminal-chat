@@ -402,3 +402,50 @@ describe("POST /providers/select project_path", () => {
     }
   });
 });
+
+describe("config lost-update race", () => {
+  beforeEach(() => {
+    tempConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-term-cfg-"));
+    setConfigFileForTests(path.join(tempConfigDir, "config.json"));
+    writeConfig({});
+  });
+
+  afterEach(() => {
+    setConfigFileForTests(null);
+    try {
+      fs.rmSync(tempConfigDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it("concurrent requests to different config endpoints preserve all changes", async () => {
+    const newRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ai-term-concurrent-"));
+
+    const [resA, resB] = await Promise.all([
+      app.request("http://localhost/project-root", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: newRoot }),
+      }),
+      app.request("http://localhost/providers/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "ollama",
+          model: "llama3.1",
+          ollama_base_url: "cyber.local:11434",
+        }),
+      }),
+    ]);
+
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+
+    const config = readConfig();
+    expect(config.project_root).toBe(newRoot);
+    expect(config.provider).toBe("ollama");
+    expect(config.model).toBe("llama3.1");
+    expect(config.ollama_base_url).toBe("http://cyber.local:11434");
+  });
+});

@@ -11,12 +11,19 @@ import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from threading import Lock
 from typing import Iterable, Optional
 
 
 _CONFIG_DIR = Path.home() / ".ai-terminal-chat"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__"
+# Lock protecting the load-modify-write sequence against concurrent
+# mutations from multiple threads (e.g. Flask threaded=True or a
+# multi-threaded WSGI server). Without this, two threads can read the
+# same config, mutate different keys, and write back in either order,
+# silently dropping the other thread's changes.
+_CONFIG_LOCK = Lock()
 
 
 def _default_project_root() -> Path:
@@ -140,9 +147,10 @@ def _persist_project_root(root: Path) -> None:
     allowed_commands) are preserved.
     """
 
-    payload = _load_config()
-    payload["project_root"] = str(root)
-    _persist_config(payload)
+    with _CONFIG_LOCK:
+        payload = _load_config()
+        payload["project_root"] = str(root)
+        _persist_config(payload)
 
 
 def load_provider_selection() -> dict:
@@ -180,25 +188,26 @@ def persist_provider_selection(
     across provider switches.
     """
 
-    payload = _load_config()
-    payload["provider"] = str(provider).strip().lower()
-    if model is not None:
-        model_s = str(model).strip()
-        if model_s:
-            payload["model"] = model_s
-        else:
-            payload.pop("model", None)
-    if ollama_base_url is not None:
-        url = str(ollama_base_url).strip()
-        if url:
-            if "://" not in url:
-                url = f"http://{url}"
-            payload["ollama_base_url"] = url
-        else:
+    with _CONFIG_LOCK:
+        payload = _load_config()
+        payload["provider"] = str(provider).strip().lower()
+        if model is not None:
+            model_s = str(model).strip()
+            if model_s:
+                payload["model"] = model_s
+            else:
+                payload.pop("model", None)
+        if ollama_base_url is not None:
+            url = str(ollama_base_url).strip()
+            if url:
+                if "://" not in url:
+                    url = f"http://{url}"
+                payload["ollama_base_url"] = url
+            else:
+                payload.pop("ollama_base_url", None)
+        elif payload.get("provider") != "ollama":
             payload.pop("ollama_base_url", None)
-    elif payload.get("provider") != "ollama":
-        payload.pop("ollama_base_url", None)
-    _persist_config(payload)
+        _persist_config(payload)
 
 
 def _choose_project_root() -> Path:
