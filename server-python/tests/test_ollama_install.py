@@ -119,6 +119,33 @@ def test_launch_ollama_run_accepts_namespaced_and_tagged_models():
     assert args[0] == ["ollama", "run", "myuser/mymodel:latest"]
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-oss:20b-cloud",
+        # Cloud models can chain more than one colon segment, e.g. what
+        # `ollama run gpt-oss:20b:cloud` prints when connecting to
+        # ollama.com. This used to be rejected as "not a valid Ollama
+        # model name" even though the same string works fine typed
+        # directly into a terminal.
+        "gpt-oss:20b:cloud",
+        "qwen3-coder-480b:cloud",
+        "kimi-k2:1t-cloud",
+        "leckminartor/qwen3.5-uncensored:397b-cloud",
+    ],
+)
+def test_launch_ollama_run_accepts_cloud_model_names(model):
+    fake_process = Mock(pid=1)
+    with patch("ollama.shutil.which", return_value="/usr/local/bin/ollama"), patch(
+        "ollama.platform.system", return_value="Linux"
+    ), patch("ollama.subprocess.Popen", return_value=fake_process) as popen:
+        result = launch_ollama_run(model)
+
+    assert result == {"started": True, "model": model, "pid": 1}
+    args, _ = popen.call_args
+    assert args[0] == ["ollama", "run", model]
+
+
 # ---------------------------------------------------------------------
 # Flask routes
 # ---------------------------------------------------------------------

@@ -71,9 +71,14 @@ def model_ids_match(requested: str, installed: str) -> bool:
 
 
 # Ollama model names look like ``llama3.1``, ``llama3.1:8b``, or
-# ``myuser/mymodel:tag``. Restrict to that shape so a value coming from
-# the Settings UI can never be smuggled in as a CLI flag or option.
-_SAFE_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?$")
+# ``myuser/mymodel:tag``. Cloud models can chain more than one colon
+# segment (e.g. ``gpt-oss:20b:cloud``, ``gpt-oss:20b-cloud``), so this
+# allows any number of ``:segment`` parts rather than just one. What it
+# guards against is a leading ``-`` (so a typed value can never be read
+# as a CLI flag) and characters outside the set Ollama itself uses.
+_SAFE_MODEL_NAME = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+)
 
 
 def is_ollama_cli_installed() -> bool:
