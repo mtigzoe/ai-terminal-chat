@@ -9,6 +9,7 @@ for read_file, search_files, list_files, and file-reading shell commands.
 internal/test use only; chat requests never pass None.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -383,3 +384,33 @@ def test_git_show_name_status_patch_allowed(project_root):
     security.set_allowed_read_paths([])
     result = tools.run_command("git show --name-status --patch HEAD")
     assert "error" not in result
+
+
+def test_persist_config_survives_windows_permission_error(monkeypatch, tmp_path):
+    """If os.replace raises PermissionError (Windows file lock), the
+    fallback direct write must still persist the configuration."""
+
+    from security import _persist_config
+
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(security, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+
+    original_replace = os.replace
+
+    def mock_replace(src, dst):
+        # Simulate the Windows EPERM failure on the first call only.
+        if Path(dst) == config_file and not getattr(mock_replace, "called", False):
+            mock_replace.called = True
+            raise PermissionError(5, "Access is denied", str(dst))
+        return original_replace(src, dst)
+
+    mock_replace.called = False
+    monkeypatch.setattr(os, "replace", mock_replace)
+
+    payload = {"provider": "gemini", "model": "gemini-2.0-flash"}
+    _persist_config(payload)
+
+    data = json.loads(config_file.read_text(encoding="utf-8"))
+    assert data["provider"] == "gemini"
+    assert data["model"] == "gemini-2.0-flash"
