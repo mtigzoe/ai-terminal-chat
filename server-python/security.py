@@ -110,7 +110,14 @@ def _load_config() -> dict:
 
 
 def _persist_config(payload: dict) -> None:
-    """Persist the full configuration dict atomically outside the project."""
+    """Persist the full configuration dict atomically outside the project.
+
+    On Windows, ``os.replace`` can raise ``PermissionError`` when the
+    target is briefly locked by another process (antivirus, indexer, or
+    a lingering file handle). In that case we fall back to a direct
+    write so config saves still succeed. Atomicity is a durability
+    optimization, not a correctness requirement here.
+    """
 
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -124,7 +131,18 @@ def _persist_config(payload: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
             handle.write("\n")
-        os.replace(temp_name, _CONFIG_FILE)
+        try:
+            os.replace(temp_name, _CONFIG_FILE)
+        except OSError:
+            # Windows can briefly lock the target file. Fall back to a
+            # direct write, matching TypeScript's behavior. Clean up the
+            # temp file ourselves because we handled the error below.
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            with open(_CONFIG_FILE, "w", encoding="utf-8") as target:
+                target.write(f"{json.dumps(payload, indent=2)}\n")
     except Exception:
         try:
             os.unlink(temp_name)
