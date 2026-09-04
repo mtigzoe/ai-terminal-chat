@@ -61,4 +61,4 @@ def test_readme_not_selected_cannot_be_read_by_content_commands(
 
     assert result is not None
     assert "error" in result
-    assert "README.md" in result["error"]
+    assert "access denied" in result["error"].lower()

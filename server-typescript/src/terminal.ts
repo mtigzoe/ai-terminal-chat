@@ -362,7 +362,81 @@ function runCommandRespectsReadPermissions(
   const lower = command.toLowerCase();
 
   if (lower.startsWith("git show ")) {
-    if (args.length === 1 && gitShowPathAllowed(args[0])) {
+    // Use the full tokenized args (not contentPathArguments, which strips
+    // flags and the command name) so we can inspect flags and handle
+    // commit:path / -- path syntax correctly.
+    let fullArgs: string[];
+    try {
+      fullArgs = tokenizeCommand(command);
+    } catch {
+      fullArgs = command.trim().split(/\s+/);
+    }
+
+    const argsAfterShow = fullArgs.slice(2);
+
+    // --name-only and --name-status suppress patch output even when
+    // combined with --patch, so they are always safe.
+    if (
+      argsAfterShow.some(
+        (arg) => arg === "--name-only" || arg === "--name-status"
+      )
+    ) {
+      return null;
+    }
+
+    // Content-producing flags that must be denied. These either enable
+    // patch output explicitly or use a format that includes patch output
+    // by default.
+    const hasContentFlag = argsAfterShow.some((arg) => {
+      if (arg === "--patch" || arg === "-p" || arg === "--unified" || arg === "--oneline") {
+        return true;
+      }
+      if (arg.startsWith("--format=") || arg.startsWith("--pretty=")) {
+        return true;
+      }
+      if (arg.startsWith("--unified=")) {
+        return true;
+      }
+      return false;
+    });
+
+    if (hasContentFlag) {
+      return (
+        "Access denied: git show can expose file contents. " +
+        "Remove content-producing flags or use --no-patch/--stat/--name-only."
+      );
+    }
+
+    // Content-suppressing flags that are safe.
+    const noContentFlags = new Set(["--no-patch", "--quiet", "--stat"]);
+    if (argsAfterShow.some((arg) => noContentFlags.has(arg))) {
+      return null;
+    }
+
+    const explicitPaths: string[] = [];
+    let pastDoubleDash = false;
+
+    for (let i = 2; i < fullArgs.length; i++) {
+      const arg = fullArgs[i];
+      if (arg === "--") {
+        pastDoubleDash = true;
+        continue;
+      }
+      if (pastDoubleDash) {
+        explicitPaths.push(arg);
+      } else if (!arg.startsWith("-") && arg.includes(":")) {
+        explicitPaths.push(arg.slice(arg.indexOf(":") + 1));
+      }
+    }
+
+    if (explicitPaths.length === 0) {
+      return (
+        "Access denied: git show can expose file contents. " +
+        "Use --no-patch, --stat, --name-only, or specify an allowed file path."
+      );
+    }
+
+    if (explicitPaths.every((path) => isReadAllowed(path))) {
       return null;
     }
 

@@ -282,4 +282,104 @@ def test_git_show_shell_blocked_when_restricted(project_root):
     result = tools.run_command("git show HEAD:other.md")
     assert "error" in result
     err = result["error"].lower()
-    assert "blocked" in err or "read_file" in err or "not allowed" in err
+    assert "access denied" in err
+
+
+def test_git_show_head_denied_when_restricted(project_root):
+    """git show HEAD exposes the full commit diff and must be denied when
+    no files are selected."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show HEAD")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err
+
+
+def test_git_show_stat_allowed_when_restricted(project_root):
+    """git show --stat HEAD shows only change statistics, no file contents."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --stat HEAD")
+    assert "error" not in result
+
+
+def test_git_show_no_patch_allowed_when_restricted(project_root):
+    """git show --no-patch HEAD shows only commit metadata, no file contents."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --no-patch HEAD")
+    assert "error" not in result
+
+
+def test_git_show_colon_path_allowed_for_selected_file(project_root):
+    """git show HEAD:README.md must be allowed when README.md is selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD:README.md")
+    assert "error" not in result
+
+
+def test_git_show_colon_path_denied_for_unselected_file(project_root):
+    """git show HEAD:other.md must be denied when other.md is not selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD:other.md")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err
+
+
+def test_git_show_dash_path_allowed_for_selected_file(project_root):
+    """git show HEAD -- README.md must be allowed when README.md is selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD -- README.md")
+    assert "error" not in result
+
+
+def test_git_show_dash_path_denied_for_unselected_file(project_root):
+    """git show HEAD -- other.md must be denied when other.md is not selected."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show HEAD -- other.md")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err
+
+
+def test_git_show_oneline_denied(project_root):
+    """--oneline does not suppress patch output and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --oneline HEAD")
+    assert "error" in result
+    err = result["error"].lower()
+    assert "access denied" in err
+
+
+def test_git_show_stat_patch_denied(project_root):
+    """--stat --patch still shows the patch and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --stat --patch HEAD")
+    assert "error" in result
+
+
+def test_git_show_no_patch_patch_denied(project_root):
+    """--no-patch --patch shows the patch (--patch wins) and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --no-patch --patch HEAD")
+    assert "error" in result
+
+
+def test_git_show_format_denied(project_root):
+    """--format=<spec> shows the patch by default and must be denied."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --format=oneline HEAD")
+    assert "error" in result
+
+
+def test_git_show_name_only_patch_allowed(project_root):
+    """--name-only overrides --patch and is safe."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --name-only --patch HEAD")
+    assert "error" not in result
+
+
+def test_git_show_name_status_patch_allowed(project_root):
+    """--name-status overrides --patch and is safe."""
+    security.set_allowed_read_paths([])
+    result = tools.run_command("git show --name-status --patch HEAD")
+    assert "error" not in result

@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   __setAllowedCommandsForTests,
@@ -14,6 +18,7 @@ import {
   runCommand,
   tokenizeCommand,
 } from "./terminal.ts";
+import { __setProjectRootForTests, __resetProjectRootForTests, runWithAllowedReadPaths } from "./security.ts";
 
 void BLOCKED_COMMAND_PATTERNS;
 void DANGEROUS_COMMAND_CHARACTERS;
@@ -26,6 +31,132 @@ test.afterEach(() => {
   // then reload into memory.
   persistAllowedCommands([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
   reloadAllowedCommands();
+  __resetProjectRootForTests();
+});
+
+let gitShowTestDir: string;
+
+test.beforeEach(() => {
+  // Set up a throwaway git repository for git show permission tests.
+  gitShowTestDir = mkdtempSync(join(tmpdir(), "git-show-test-"));
+  execSync("git init", { cwd: gitShowTestDir, stdio: "ignore" });
+  execSync("git config user.email test@test.com", { cwd: gitShowTestDir, stdio: "ignore" });
+  execSync("git config user.name Test", { cwd: gitShowTestDir, stdio: "ignore" });
+  writeFileSync(join(gitShowTestDir, "README.md"), "# README\n");
+  writeFileSync(join(gitShowTestDir, "other.md"), "# Other\n");
+  execSync("git add .", { cwd: gitShowTestDir, stdio: "ignore" });
+  execSync("git commit -m initial", { cwd: gitShowTestDir, stdio: "ignore" });
+  __setProjectRootForTests(gitShowTestDir);
+});
+
+test.afterEach(() => {
+  if (gitShowTestDir) {
+    try {
+      rmSync(gitShowTestDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+  __resetProjectRootForTests();
+});
+
+// ---------------------------------------------------------------------------
+// git show read-permission regression tests
+// ---------------------------------------------------------------------------
+
+test("git show HEAD is denied when read restrictions are active (shows full diff)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show HEAD");
+    assert.ok(result.error, "git show HEAD must be denied when no files are selected");
+    assert.ok(result.error.includes("Access denied"), "error must mention Access denied");
+  });
+});
+
+test("git show --stat HEAD is allowed even when read restrictions are active", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --stat HEAD");
+    assert.ok(!result.error, "git show --stat HEAD must be allowed: --stat shows no file contents");
+  });
+});
+
+test("git show --no-patch HEAD is allowed even when read restrictions are active", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --no-patch HEAD");
+    assert.ok(!result.error, "git show --no-patch HEAD must be allowed: no file contents shown");
+  });
+});
+
+test("git show HEAD:README.md is allowed when README.md is selected", async () => {
+  await runWithAllowedReadPaths(["README.md"], async () => {
+    const result = await runCommand("git show HEAD:README.md");
+    assert.ok(!result.error, "git show HEAD:README.md must be allowed when README.md is selected");
+  });
+});
+
+test("git show HEAD:README.md is denied when README.md is not selected", async () => {
+  await runWithAllowedReadPaths(["other.md"], async () => {
+    const result = await runCommand("git show HEAD:README.md");
+    assert.ok(result.error, "git show HEAD:README.md must be denied when README.md is not selected");
+    assert.ok(result.error.includes("Access denied"), "error must mention Access denied");
+  });
+});
+
+test("git show HEAD -- README.md is allowed when README.md is selected", async () => {
+  await runWithAllowedReadPaths(["README.md"], async () => {
+    const result = await runCommand("git show HEAD -- README.md");
+    assert.ok(!result.error, "git show HEAD -- README.md must be allowed when README.md is selected");
+  });
+});
+
+test("git show HEAD -- README.md is denied when README.md is not selected", async () => {
+  await runWithAllowedReadPaths(["other.md"], async () => {
+    const result = await runCommand("git show HEAD -- README.md");
+    assert.ok(result.error, "git show HEAD -- README.md must be denied when README.md is not selected");
+    assert.ok(result.error.includes("Access denied"), "error must mention Access denied");
+  });
+});
+
+// Bypass regression tests: content-producing flags must not slip through.
+test("git show --oneline HEAD is denied (shows full patch despite --oneline)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --oneline HEAD");
+    assert.ok(result.error, "--oneline must not bypass the permission check");
+  });
+});
+
+test("git show --stat --patch HEAD is denied (--patch overrides --stat)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --stat --patch HEAD");
+    assert.ok(result.error, "--stat --patch must not bypass the permission check");
+  });
+});
+
+test("git show --no-patch --patch HEAD is denied (--patch overrides --no-patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --no-patch --patch HEAD");
+    assert.ok(result.error, "--no-patch --patch must not bypass the permission check");
+  });
+});
+
+test("git show --format=oneline HEAD is denied (--format shows patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --format=oneline HEAD");
+    assert.ok(result.error, "--format=oneline must not bypass the permission check");
+  });
+});
+
+test("git show --name-only --patch HEAD is allowed (--name-only suppresses patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --name-only --patch HEAD");
+    assert.ok(!result.error, "--name-only --patch must be allowed: no file contents shown");
+  });
+});
+
+test("git show --name-status --patch HEAD is allowed (--name-status suppresses patch)", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git show --name-status --patch HEAD");
+    assert.ok(!result.error, "--name-status --patch must be allowed: no file contents shown");
+  });
 });
 
 test("default terminal allowlist defines the expected safe Git inspection commands", () => {

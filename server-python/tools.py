@@ -528,10 +528,72 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     except ValueError:
         args = command.split()
 
+    # Special handling for git show: allow --no-patch/--stat/--name-only,
+    # and properly extract paths from commit:path and -- path syntax.
+    if len(args) >= 2 and args[0].lower() == "git" and args[1].lower() == "show":
+        args_after_show = args[2:]
+        
+        # --name-only and --name-status suppress patch output even when
+        # combined with --patch, so they are always safe.
+        if any(arg in ("--name-only", "--name-status") for arg in args_after_show):
+            return None
+        
+        # Content-producing flags that must be denied.
+        has_content_flag = any(
+            arg in ("--patch", "-p", "--unified", "--oneline")
+            or arg.startswith("--format=")
+            or arg.startswith("--pretty=")
+            or arg.startswith("--unified=")
+            for arg in args_after_show
+        )
+        
+        if has_content_flag:
+            return {
+                "error": (
+                    "Access denied: git show can expose file contents. "
+                    "Remove content-producing flags or use --no-patch/--stat/--name-only."
+                )
+            }
+        
+        # Content-suppressing flags that are safe.
+        no_content_flags = {"--no-patch", "--quiet", "--stat"}
+        if any(arg in no_content_flags for arg in args_after_show):
+            return None
+        
+        explicit_paths = []
+        past_double_dash = False
+        
+        for i in range(2, len(args)):
+            arg = args[i]
+            if arg == "--":
+                past_double_dash = True
+                continue
+            if past_double_dash:
+                explicit_paths.append(arg)
+            elif ":" in arg and not arg.startswith("-"):
+                explicit_paths.append(arg.split(":", 1)[1])
+        
+        if not explicit_paths:
+            return {
+                "error": (
+                    "Access denied: git show can expose file contents. "
+                    "Use --no-patch, --stat, --name-only, or specify an allowed file path."
+                )
+            }
+        
+        if all(is_read_allowed(p) for p in explicit_paths):
+            return None
+        
+        return {
+            "error": (
+                "Access denied: git show can expose file contents and the "
+                "requested file was not selected on the Project page."
+            )
+        }
+
+    # Existing logic for other file-content commands.
     path_args = [a for a in args[1:] if a and not a.startswith("-")]
-    if path_args and all(
-        is_read_allowed(p) for p in path_args
-    ):
+    if path_args and all(is_read_allowed(p) for p in path_args):
         return None
 
     paths_hint = ", ".join(path_args) if path_args else "the requested file"
