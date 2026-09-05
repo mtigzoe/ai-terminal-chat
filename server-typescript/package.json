@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "npm run test:unit && vitest run",
+    "test:unit": "tsx --test src/config.test.ts src/filesystem.test.ts src/git.test.ts src/security.test.ts src/terminal.test.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
