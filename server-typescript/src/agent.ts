@@ -1,4 +1,5 @@
-import { Provider, ProviderResponse } from "./providers/base.ts";
+import { Provider, ProviderResponse, ToolCall } from "./providers/base.ts";
+import type { PendingAction, ResumeState } from "./pending.ts";
 
 function tokenizeShellCommand(command: string): string[] {
   const tokens: string[] = [];
@@ -117,8 +118,18 @@ export interface AgentLoopOptions {
   createPending: (
     toolName: string,
     args: Record<string, unknown>,
-    preview: Record<string, unknown>
+    preview: Record<string, unknown>,
+    resume?: ResumeState
   ) => { action_id: string };
+}
+
+/** Identify a provider+model pair so a resumed loop can refuse to run
+ * against a different backend than the one that produced its saved
+ * `contents` (those are provider-specific objects and are not
+ * interchangeable across providers). Mirrors agent.py's provider_fingerprint(). */
+export function providerFingerprint(provider: Provider): string {
+  const name = provider.name || provider.constructor.name;
+  return `${name}:${provider.model || ""}`;
 }
 
 export interface ProgressEvent {
@@ -427,32 +438,65 @@ function directGitCommand(contents: unknown[]): ProviderResponse | null {
   return null;
 }
 
-export async function* runAgentLoop(
-  options: AgentLoopOptions
+interface CoreLoopOptions extends AgentLoopOptions {
+  startRoundIndex: number;
+  // undefined = fresh loop, call the model. An array (even empty) = resuming
+  // mid-round: skip the model call and finish out these calls first. This
+  // mirrors the None-vs-list distinction on seed_tool_calls in
+  // server-python/agent.py's _agent_loop().
+  seedToolCalls?: ToolCall[];
+  seedToolResults?: { name: string; result: unknown }[];
+  seedLastCallSignature?: [string, string] | null;
+  seedConsecutiveRepeatCount?: number;
+  seedConsecutiveErrorCount?: number;
+}
+
+/**
+ * Core round loop, shared by a fresh runAgentLoop() call and by a
+ * resumeAgentLoop() continuation. When seedToolCalls is given (even as an
+ * empty array), the first iteration skips calling the model and instead
+ * finishes out the in-progress round using the seeded calls and results —
+ * this is how a resumed confirmation picks up mid-round. Mirrors
+ * server-python/agent.py's `_agent_loop`.
+ */
+async function* agentLoopCore(
+  options: CoreLoopOptions
 ): AsyncGenerator<AgentEvent, void, unknown> {
   const {
     provider,
-    contents,
     toolFunctions,
     cancelSignal,
     createPending,
+    startRoundIndex,
+    seedToolCalls,
+    seedToolResults,
   } = options;
 
-  let lastCallSignature: [string, string] | null = null;
-  let consecutiveRepeatCount = 0;
-  let consecutiveErrorCount = 0;
+  let lastCallSignature: [string, string] | null =
+    options.seedLastCallSignature ?? null;
+  let consecutiveRepeatCount = options.seedConsecutiveRepeatCount ?? 0;
+  let consecutiveErrorCount = options.seedConsecutiveErrorCount ?? 0;
 
-  yield {
-    type: "progress",
-    phase: "plan",
-    message: "Planning next step",
-    round: 1,
-    max_rounds: MAX_TOOL_ROUNDS,
-  };
+  if (seedToolCalls === undefined) {
+    yield {
+      type: "progress",
+      phase: "plan",
+      message: "Planning next step",
+      round: 1,
+      max_rounds: MAX_TOOL_ROUNDS,
+    };
+  }
 
-  let currentContents = contents;
+  let currentContents = options.contents;
+  let pendingCalls: ToolCall[] | undefined = seedToolCalls;
+  let pendingResults: { name: string; result: unknown }[] | undefined =
+    seedToolResults;
 
-  for (let roundIndex = 0; roundIndex < MAX_TOOL_ROUNDS; roundIndex++) {
+  for (
+    let roundIndex = startRoundIndex;
+    roundIndex < MAX_TOOL_ROUNDS;
+    roundIndex++
+  ) {
     const roundNumber = roundIndex + 1;
 
     if (cancelSignal?.aborted) {
@@ -467,56 +511,70 @@ export async function* runAgentLoop(
       return;
     }
 
-    let response: ProviderResponse;
-    try {
-      const directResponse = roundIndex === 0 ? directGitCommand(currentContents) : null;
-      response = directResponse ?? (await provider.generate(currentContents));
-    } catch (exc) {
-      yield {
-        type: "progress",
-        phase: "error",
-        message: `Provider failed: ${exc}`,
-        round: roundNumber,
-        max_rounds: MAX_TOOL_ROUNDS,
-      };
-      yield {
-        type: "error",
-        message: `${provider.constructor.name} error: ${exc}`,
-      };
-      return;
-    }
+    let currentToolCalls: ToolCall[];
+    let toolResults: { name: string; result: unknown }[];
 
-    if (!response.tool_calls || response.tool_calls.length === 0) {
-      if (!response.text) {
+    if (pendingCalls !== undefined) {
+      currentToolCalls = pendingCalls;
+      toolResults = pendingResults ?? [];
+      pendingCalls = undefined;
+      pendingResults = undefined;
+    } else {
+      let response: ProviderResponse;
+      try {
+        const directResponse =
+          roundIndex === 0 ? directGitCommand(currentContents) : null;
+        response = directResponse ?? (await provider.generate(currentContents));
+      } catch (exc) {
         yield {
           type: "progress",
           phase: "error",
-          message: "Model returned no text and requested no further tools.",
+          message: `Provider failed: ${exc}`,
           round: roundNumber,
           max_rounds: MAX_TOOL_ROUNDS,
         };
         yield {
           type: "error",
-          message: "Model returned no text and requested no further tools.",
+          message: `${provider.constructor.name} error: ${exc}`,
         };
         return;
       }
 
-      yield {
-        type: "progress",
-        phase: "complete",
-        message: "Task completed",
-        round: roundNumber,
-        max_rounds: MAX_TOOL_ROUNDS,
-      };
-      yield { type: "final", text: response.text };
-      return;
+      if (!response.tool_calls || response.tool_calls.length === 0) {
+        if (!response.text) {
+          yield {
+            type: "progress",
+            phase: "error",
+            message: "Model returned no text and requested no further tools.",
+            round: roundNumber,
+            max_rounds: MAX_TOOL_ROUNDS,
+          };
+          yield {
+            type: "error",
+            message: "Model returned no text and requested no further tools.",
+          };
+          return;
+        }
+
+        yield {
+          type: "progress",
+          phase: "complete",
+          message: "Task completed",
+          round: roundNumber,
+          max_rounds: MAX_TOOL_ROUNDS,
+        };
+        yield { type: "final", text: response.text };
+        return;
+      }
+
+      currentContents = provider.appendModelTurn(currentContents, response);
+      currentToolCalls = response.tool_calls;
+      toolResults = [];
     }
 
-    currentContents = provider.appendModelTurn(currentContents, response);
-    const toolResults: { name: string; result: unknown }[] = [];
+    for (let callIndex = 0; callIndex < currentToolCalls.length; callIndex++) {
+      const call = currentToolCalls[callIndex];
 
-    for (const call of response.tool_calls) {
       if (cancelSignal?.aborted) {
         yield {
           type: "progress",
@@ -638,7 +696,22 @@ export async function* runAgentLoop(
           "requires_confirmation" in result
         ) {
           const preview = result as Record<string, unknown>;
-          const action = createPending(functionName, functionArgs, preview);
+          const resumeState: ResumeState = {
+            provider_fingerprint: providerFingerprint(provider),
+            contents: currentContents,
+            round_index: roundIndex,
+            tool_results: [...toolResults],
+            remaining_calls: currentToolCalls.slice(callIndex),
+            last_call_signature: lastCallSignature,
+            consecutive_repeat_count: consecutiveRepeatCount,
+            consecutive_error_count: consecutiveErrorCount,
+          };
+          const action = createPending(
+            functionName,
+            functionArgs,
+            preview,
+            resumeState
+          );
           const path = functionArgs.path as string | undefined;
           let confirmMessage: string;
           if (functionName === "apply_patch") {
@@ -689,6 +762,60 @@ export async function* runAgentLoop(
           functionName,
           TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
         );
+      }
+
+      // Reading a file outside the user's current Project-page selection is
+      // a permission boundary, not a normal model/tool error. Pause here
+      // and let the browser present an explicit Allow/Decline choice,
+      // rather than handing the model a dead-end "Access denied" error.
+      if (
+        functionName === "read_file" &&
+        result &&
+        typeof result === "object" &&
+        typeof (result as Record<string, unknown>).error === "string" &&
+        ((result as Record<string, unknown>).error as string).startsWith("Access denied:")
+      ) {
+        const readPath = functionArgs.path as string | undefined;
+        if (readPath?.trim()) {
+          const resumeState: ResumeState = {
+            provider_fingerprint: providerFingerprint(provider),
+            contents: currentContents,
+            round_index: roundIndex,
+            tool_results: [...toolResults],
+            remaining_calls: currentToolCalls.slice(callIndex),
+            last_call_signature: lastCallSignature,
+            consecutive_repeat_count: consecutiveRepeatCount,
+            consecutive_error_count: consecutiveErrorCount,
+          };
+          const permissionPreview = {
+            message: `The assistant wants to read '${readPath}'. Allowing this will add the file to your Project-page agent selection.`,
+            permission_request: true,
+          };
+          const action = createPending(
+            "read_file_permission",
+            { path: readPath },
+            permissionPreview,
+            resumeState
+          );
+
+          yield {
+            type: "progress",
+            phase: "confirm",
+            message: `Waiting for permission to read ${readPath}`,
+            round: roundNumber,
+            max_rounds: MAX_TOOL_ROUNDS,
+            tool: "read_file",
+            action_id: action.action_id,
+          };
+          yield {
+            type: "pending_confirmation",
+            action_id: action.action_id,
+            name: "read_file_permission",
+            args: { path: readPath },
+            preview: permissionPreview,
+          };
+          return;
+        }
       }
 
       if (
@@ -786,6 +913,123 @@ export async function* runAgentLoop(
     message:
       "Model exceeded the maximum number of tool-calling rounds without producing a final response.",
   };
+}
+
+export async function* runAgentLoop(
+  options: AgentLoopOptions
+): AsyncGenerator<AgentEvent, void, unknown> {
+  yield* agentLoopCore({ ...options, startRoundIndex: 0 });
+}
+
+export interface ResumeAgentLoopOptions {
+  provider: Provider;
+  action: PendingAction;
+  confirmed: boolean;
+  toolFunctions: Record<string, (args: Record<string, unknown>) => unknown>;
+  cancelSignal?: AbortSignal;
+  createPending: AgentLoopOptions["createPending"];
+}
+
+/**
+ * Resume an agent loop that paused on `action` for confirmation.
+ *
+ * Executes (or, if declined, records the cancellation of) the tool call the
+ * user just resolved, then continues the loop exactly as if it had never
+ * paused: any further tool calls the model already queued up in the same
+ * round are run next, and once the round is complete the model gets to see
+ * the result and keep going. This is what lets a compound request like
+ * "add, commit, and push" actually finish across several Allow clicks
+ * instead of stopping after the first one. Mirrors
+ * server-python/agent.py's `resume_agent_loop`.
+ *
+ * `action.resume` must be present — callers should fall back to a one-off
+ * tool execution for legacy pending actions that don't carry loop state.
+ */
+export async function* resumeAgentLoop(
+  options: ResumeAgentLoopOptions
+): AsyncGenerator<AgentEvent, void, unknown> {
+  const { provider, action, confirmed, toolFunctions, cancelSignal, createPending } =
+    options;
+
+  const resume = action.resume;
+  if (!resume) {
+    throw new Error(
+      `Pending action ${action.action_id} has no saved loop state to resume.`
+    );
+  }
+
+  const savedFingerprint = resume.provider_fingerprint;
+  const currentFingerprint = providerFingerprint(provider);
+  if (savedFingerprint && savedFingerprint !== currentFingerprint) {
+    throw new Error(
+      "Cannot resume this action because the selected AI provider/model differs from the provider/model that created the pending action."
+    );
+  }
+
+  const remainingCalls = [...resume.remaining_calls];
+  const call = remainingCalls.shift();
+  if (!call) {
+    throw new Error(
+      `Pending action ${action.action_id} has no saved tool call to resume.`
+    );
+  }
+  const functionName = call.name;
+  const functionArgs = { ...call.args };
+
+  let result: unknown;
+  if (action.tool_name === "read_file_permission") {
+    // The caller (routes.ts) is responsible for granting read access for
+    // this path via runWithAllowedReadPaths() before this generator is
+    // consumed, so the retried read below actually succeeds.
+    if (confirmed) {
+      const toolFn = toolFunctions["read_file"];
+      if (!toolFn) {
+        result = { error: "Unknown tool requested: read_file." };
+      } else {
+        result = await executeTool(
+          toolFn,
+          functionArgs,
+          "read_file",
+          TOOL_TIMEOUTS["read_file"] || DEFAULT_TOOL_TIMEOUT
+        );
+      }
+    } else {
+      result = { cancelled: true, message: "Action declined by user." };
+    }
+  } else if (confirmed) {
+    const toolFn = toolFunctions[functionName];
+    if (!toolFn) {
+      result = { error: `Unknown tool requested: ${functionName}.` };
+    } else {
+      const confirmArgs = { ...functionArgs, confirm: true };
+      result = await executeTool(
+        toolFn,
+        confirmArgs,
+        functionName,
+        TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+      );
+    }
+  } else {
+    result = { cancelled: true, message: "Action declined by user." };
+  }
+
+  yield { type: "tool_result", name: functionName, result };
+
+  const toolResults = [...resume.tool_results, { name: functionName, result }];
+
+  yield* agentLoopCore({
+    provider,
+    contents: resume.contents,
+    toolFunctions,
+    cancelSignal,
+    createPending,
+    startRoundIndex: resume.round_index,
+    seedToolCalls: remainingCalls,
+    seedToolResults: toolResults,
+    seedLastCallSignature: resume.last_call_signature,
+    seedConsecutiveRepeatCount: resume.consecutive_repeat_count,
+    seedConsecutiveErrorCount: resume.consecutive_error_count,
+  });
 }
 
 async function executeTool(

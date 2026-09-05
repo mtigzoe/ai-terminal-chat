@@ -8,7 +8,9 @@ import {
   setProjectRoot,
   loadProviderSelection,
   persistProviderSelection,
+  runWithAllowedReadPaths,
 } from "./security.ts";
+import { isOllamaCliInstalled, launchOllamaRun } from "./ollama-cli.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
@@ -22,7 +24,14 @@ import {
 } from "./terminal.ts";
 import { createPending, getPending, popPending } from "./pending.ts";
 import { cancel, release, register } from "./cancellation.ts";
-import { runAgentLoop, type AgentEvent } from "./agent.ts";
+import {
+  runAgentLoop,
+  resumeAgentLoop,
+  providerFingerprint,
+  type AgentEvent,
+  type PendingConfirmationEvent,
+} from "./agent.ts";
+import type { PendingAction } from "./pending.ts";
 import {
   create_file,
   write_file,
@@ -300,6 +309,36 @@ app.get("/providers/:name/models", async (c) => {
   }
 });
 
+/**
+ * Report whether the `ollama` CLI is recognized on this machine's PATH.
+ * Distinct from `/providers/:name/models`'s probe, which checks the
+ * background server over HTTP: this is what lets the Settings page show
+ * "Install Ollama" or "Run Ollama" without trying to reach the server.
+ */
+app.get("/providers/ollama/status", (c) => {
+  return c.json({ installed: isOllamaCliInstalled() });
+});
+
+/**
+ * Start `ollama run <model>` in the background for the Settings page's
+ * "Run Ollama" button, so the user does not have to type it themselves.
+ */
+app.post("/providers/ollama/run", async (c) => {
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    // Mirrors app.py's request.get_json(silent=True) or {} - an empty or
+    // invalid body just means no model was given, handled below.
+  }
+  const model = String(data.model || "").trim();
+  const result = await launchOllamaRun(model);
+  if (result.error) {
+    return c.json(result, 400 as any);
+  }
+  return c.json(result);
+});
+
 app.get("/project-root", (c) => {
   return c.json({ path: getProjectRoot() });
 });
@@ -426,6 +465,16 @@ app.post("/terminal/run", async (c) => {
   return c.json(result);
 });
 
+/**
+ * Files the user has explicitly selected on the Project page for this
+ * request. Mirrors server-python/app.py's `_extract_allowed_paths`.
+ */
+function extractAllowedPaths(data: Record<string, unknown>): string[] {
+  const raw = data.allowed_paths;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 app.post("/chat", async (c) => {
   let data: Record<string, unknown> = {};
   try {
@@ -460,38 +509,40 @@ app.post("/chat", async (c) => {
   const cancelSignal = register(requestId);
 
   try {
-    for await (const event of runAgentLoop({
-      provider,
-      contents,
-      toolFunctions: getToolFunctions(),
-      cancelSignal,
-      createPending: (toolName, args, preview) => {
-        const action = createPending(toolName, args, preview);
-        return { action_id: action.action_id };
-      },
-    })) {
-      if (event.type === "progress") {
-        toolActivity.push({
-          type: "progress",
-          phase: event.phase,
-          message: event.message,
-          round: event.round,
-          tool: event.tool,
-        });
-      } else if (event.type === "tool_call") {
-        toolActivity.push(event);
-      } else if (event.type === "tool_result") {
-        toolActivity.push(event);
-      } else if (event.type === "pending_confirmation") {
-        toolActivity.push(event);
-      } else if (event.type === "final") {
-        finalText = event.text;
-      } else if (event.type === "error") {
-        errorMessage = event.message;
-      } else if (event.type === "cancelled") {
-        cancelled = true;
+    await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
+      for await (const event of runAgentLoop({
+        provider,
+        contents,
+        toolFunctions: getToolFunctions(),
+        cancelSignal,
+        createPending: (toolName, args, preview, resume) => {
+          const action = createPending(toolName, args, preview, resume);
+          return { action_id: action.action_id };
+        },
+      })) {
+        if (event.type === "progress") {
+          toolActivity.push({
+            type: "progress",
+            phase: event.phase,
+            message: event.message,
+            round: event.round,
+            tool: event.tool,
+          });
+        } else if (event.type === "tool_call") {
+          toolActivity.push(event);
+        } else if (event.type === "tool_result") {
+          toolActivity.push(event);
+        } else if (event.type === "pending_confirmation") {
+          toolActivity.push(event);
+        } else if (event.type === "final") {
+          finalText = event.text;
+        } else if (event.type === "error") {
+          errorMessage = event.message;
+        } else if (event.type === "cancelled") {
+          cancelled = true;
+        }
       }
-    }
+    });
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
@@ -557,22 +608,24 @@ app.post("/stream", async (c) => {
       const encoder = new TextEncoder();
       (async () => {
         try {
-          for await (const event of runAgentLoop({
-            provider,
-            contents,
-            toolFunctions: getToolFunctions(),
-            cancelSignal,
-            createPending: (toolName, args, preview) => {
-              const action = createPending(toolName, args, preview);
-              return { action_id: action.action_id };
-            },
-          })) {
-            if (cancelSignal.aborted) break;
-            const line = wantsNdjson
-              ? JSON.stringify(event) + "\n"
-              : formatPlainStreamEvent(event);
-            controller.enqueue(encoder.encode(line));
-          }
+          await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
+            for await (const event of runAgentLoop({
+              provider,
+              contents,
+              toolFunctions: getToolFunctions(),
+              cancelSignal,
+              createPending: (toolName, args, preview, resume) => {
+                const action = createPending(toolName, args, preview, resume);
+                return { action_id: action.action_id };
+              },
+            })) {
+              if (cancelSignal.aborted) break;
+              const line = wantsNdjson
+                ? JSON.stringify(event) + "\n"
+                : formatPlainStreamEvent(event);
+              controller.enqueue(encoder.encode(line));
+            }
+          });
         } catch (exc) {
           const event: AgentEvent = { type: "error", message: String(exc) };
           controller.enqueue(encoder.encode(
@@ -600,56 +653,77 @@ app.post("/cancel/:request_id", (c) => {
   return c.json({ request_id: requestId, cancelled });
 });
 
-app.post("/confirm", async (c) => {
-  let data: Record<string, unknown> = {};
-  try {
-    data = (await c.req.json()) as Record<string, unknown>;
-  } catch {
-    return c.json({ error: "Invalid JSON body." }, 400 as any);
-  }
+const CONFIRMABLE_TOOL_NAMES = new Set([
+  "read_file_permission",
+  "create_file",
+  "write_file",
+  "apply_patch",
+  "delete_file",
+  "git_add",
+  "git_pull",
+  "git_restore",
+  "git_commit",
+  "git_push",
+]);
 
-  const actionId = String(data.action_id || "").trim();
-  const confirmed = data.confirmed === true;
-
-  if (!actionId) {
-    return c.json({ error: "action_id is required." }, 400 as any);
+/**
+ * Execute a single confirmed/declined action in isolation, with no saved
+ * loop state to resume. This is the original /confirm behavior, kept as a
+ * fallback for pending actions that predate resumable loop state (e.g.
+ * actions still pending across a server restart, though the in-memory
+ * store does not currently survive one) or that were created against a
+ * provider that has since been switched out from under them. Mirrors
+ * server-python/app.py's `_confirm_legacy`.
+ */
+async function confirmLegacy(
+  action: PendingAction,
+  actionId: string,
+  confirmed: boolean
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  if (action.tool_name === "read_file_permission") {
+    const readPath = action.args.path;
+    if (confirmed) {
+      return {
+        status: 200,
+        body: {
+          confirmed: true,
+          action_id: actionId,
+          tool: action.tool_name,
+          permission_granted: true,
+          path: readPath,
+          result: {
+            permission_granted: true,
+            path: readPath,
+            message: `Read access granted for '${readPath}'.`,
+          },
+        },
+      };
+    }
+    return {
+      status: 200,
+      body: {
+        confirmed: false,
+        action_id: actionId,
+        tool: action.tool_name,
+        permission_granted: false,
+        cancelled: true,
+      },
+    };
   }
 
   if (!confirmed) {
-    const action = popPending(actionId);
-    if (!action) {
-      return c.json({ error: "Pending action not found or already resolved." }, 404 as any);
-    }
-    return c.json({
-      confirmed: false,
-      action_id: actionId,
-      cancelled: true,
-    });
-  }
-
-  const action = popPending(actionId);
-  if (!action) {
-    return c.json({ error: "Pending action not found or already resolved." }, 404 as any);
-  }
-
-  const WRITE_TOOLS = new Set([
-    "create_file",
-    "write_file",
-    "apply_patch",
-    "delete_file",
-    "git_add",
-    "git_pull",
-    "git_restore",
-    "git_commit",
-    "git_push",
-  ]);
-  if (!WRITE_TOOLS.has(action.tool_name)) {
-    return c.json({ error: "Only pending write actions can be confirmed." }, 400 as any);
+    return {
+      status: 200,
+      body: { confirmed: false, action_id: actionId, tool: action.tool_name, cancelled: true },
+    };
   }
 
   const fn = getToolFunctions()[action.tool_name];
   if (!fn) {
-    return c.json({ error: `Tool no longer exists: ${action.tool_name}` }, 500 as any);
+    return {
+      status: 500,
+      body: { error: `Tool no longer exists: ${action.tool_name}` },
+    };
   }
 
   const confirmedArgs = { ...action.args, confirm: true };
@@ -664,26 +738,145 @@ app.post("/confirm", async (c) => {
     ]);
 
     if (result && typeof result === "object" && "error" in result && result.error) {
-      return c.json(
-        {
-          confirmed: true,
-          action_id: actionId,
-          tool: action.tool_name,
-          result,
-        },
-        400 as any
-      );
+      return {
+        status: 400,
+        body: { confirmed: true, action_id: actionId, tool: action.tool_name, result },
+      };
     }
 
-    return c.json({
-      confirmed: true,
-      action_id: actionId,
-      tool: action.tool_name,
-      result,
+    return {
+      status: 200,
+      body: { confirmed: true, action_id: actionId, tool: action.tool_name, result },
+    };
+  } catch (exc) {
+    return {
+      status: 500,
+      body: { error: `Tool ${action.tool_name} failed: ${exc}` },
+    };
+  }
+}
+
+app.post("/confirm", async (c) => {
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: "Invalid JSON body." }, 400 as any);
+  }
+
+  const actionId = String(data.action_id || "").trim();
+  const confirmed = data.confirmed === true;
+  const requestId = String(data.request_id || crypto.randomUUID());
+
+  if (!actionId) {
+    return c.json({ error: "action_id is required." }, 400 as any);
+  }
+
+  const action = popPending(actionId);
+  if (!action) {
+    return c.json({ error: "Pending action not found or already resolved." }, 404 as any);
+  }
+
+  if (!CONFIRMABLE_TOOL_NAMES.has(action.tool_name)) {
+    return c.json({ error: "Only pending write actions can be confirmed." }, 400 as any);
+  }
+
+  const provider = getActiveProvider();
+  const canResume =
+    action.resume !== undefined &&
+    action.resume.provider_fingerprint === providerFingerprint(provider);
+
+  if (!canResume) {
+    const { status, body } = await confirmLegacy(action, actionId, confirmed);
+    return c.json(body, status as any);
+  }
+
+  const baseResponse: Record<string, unknown> = {
+    confirmed,
+    action_id: actionId,
+    tool: action.tool_name,
+  };
+  if (action.tool_name === "read_file_permission") {
+    baseResponse.permission_granted = confirmed;
+    baseResponse.path = action.args.path;
+  }
+
+  const toolActivity: AgentEvent[] = [];
+  let finalText = "";
+  let errorMessage: string | null = null;
+  let cancelled = false;
+  let nextPending: PendingConfirmationEvent | null = null;
+  let resultCaptured = false;
+  const cancelSignal = register(requestId);
+
+  let allowedPaths = extractAllowedPaths(data);
+  if (
+    action.tool_name === "read_file_permission" &&
+    confirmed &&
+    typeof action.args.path === "string"
+  ) {
+    allowedPaths = [...allowedPaths, action.args.path];
+  }
+
+  try {
+    await runWithAllowedReadPaths(allowedPaths, async () => {
+      for await (const event of resumeAgentLoop({
+        provider,
+        action,
+        confirmed,
+        toolFunctions: getToolFunctions(),
+        cancelSignal,
+        createPending: (toolName, args, preview, resume) => {
+          const created = createPending(toolName, args, preview, resume);
+          return { action_id: created.action_id };
+        },
+      })) {
+        if (
+          event.type === "progress" ||
+          event.type === "tool_call"
+        ) {
+          toolActivity.push(event);
+        } else if (event.type === "tool_result") {
+          toolActivity.push(event);
+          if (!resultCaptured) {
+            baseResponse.result = event.result;
+            resultCaptured = true;
+          }
+        } else if (event.type === "pending_confirmation") {
+          toolActivity.push(event);
+          nextPending = event;
+        } else if (event.type === "final") {
+          finalText = event.text;
+        } else if (event.type === "error") {
+          errorMessage = event.message;
+        } else if (event.type === "cancelled") {
+          cancelled = true;
+        }
+      }
     });
   } catch (exc) {
-    return c.json({ error: `Tool ${action.tool_name} failed: ${exc}` }, 500 as any);
+    errorMessage = `Unexpected server error: ${exc}`;
+  } finally {
+    release(requestId);
   }
+
+  baseResponse.tool_activity = toolActivity;
+  baseResponse.text = finalText;
+  baseResponse.request_id = requestId;
+  if (nextPending) {
+    baseResponse.pending_confirmation = nextPending;
+  }
+  if (cancelled) {
+    baseResponse.cancelled = true;
+  }
+  if (!confirmed && !nextPending) {
+    baseResponse.cancelled = true;
+  }
+  if (errorMessage && !finalText) {
+    baseResponse.error = errorMessage;
+    return c.json(baseResponse, 502 as any);
+  }
+  return c.json(baseResponse);
 });
 
 function getToolFunctions(): Record<string, (args: Record<string, unknown>) => unknown> {

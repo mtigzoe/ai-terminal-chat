@@ -74,7 +74,13 @@ describe("explicit Git command routing", () => {
     expect(createPending).toHaveBeenCalledWith(
       "git_add",
       { path: "hellov4.txt" },
-      { requires_confirmation: true, path: "hellov4.txt" }
+      { requires_confirmation: true, path: "hellov4.txt" },
+      expect.objectContaining({
+        provider_fingerprint: "FakeProvider:",
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [{ name: "git_add", args: { path: "hellov4.txt" } }],
+      })
     );
     expect(events).toContainEqual(
       expect.objectContaining({

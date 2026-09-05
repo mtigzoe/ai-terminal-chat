@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { StubProvider } from "../src/providers/stub.ts";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { execSync } from "node:child_process";
 
 const gitStatusMock = vi.hoisted(() => vi.fn());
 
@@ -42,9 +46,11 @@ vi.mock("../src/git.ts", () => ({
 }));
 
 import { app } from "../src/routes.js";
-import { clear as clearPending } from "../src/pending.js";
+import { clear as clearPending, createPending } from "../src/pending.js";
+import { providerFingerprint } from "../src/agent.js";
+import { getProvider } from "../src/providers/factory.js";
 import { clear as clearCancellation } from "../src/cancellation.js";
-import { setProjectRoot } from "../src/security.js";
+import { setProjectRoot, getProjectRoot } from "../src/security.js";
 import { reloadAllowedCommands, persistAllowedCommands, DEFAULT_ALLOWED_COMMAND_PREFIXES } from "../src/terminal.js";
 function createTestApp() {
   return app;
@@ -77,6 +83,52 @@ describe("GET /providers", () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.name).toBeDefined();
+  });
+});
+
+describe("GET /providers/ollama/status", () => {
+  it("reports whether the ollama CLI is on PATH", async () => {
+    const res = await createTestApp().request("http://localhost/providers/ollama/status");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    // This sandbox has no ollama binary installed, so this doubles as a
+    // real (not mocked) check of the PATH-scanning logic.
+    expect(data).toEqual({ installed: false });
+  });
+});
+
+describe("POST /providers/ollama/run", () => {
+  it("returns an error when no model is given", async () => {
+    const res = await createTestApp().request("http://localhost/providers/ollama/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toBe("A model name is required.");
+  });
+
+  it("returns an error when the model name is invalid", async () => {
+    const res = await createTestApp().request("http://localhost/providers/ollama/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "--help" }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toContain("not a valid Ollama model name");
+  });
+
+  it("returns an error when ollama is not installed", async () => {
+    const res = await createTestApp().request("http://localhost/providers/ollama/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "llama3.1" }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toContain("was not found on PATH");
   });
 });
 
@@ -612,5 +664,114 @@ describe("POST /confirm", () => {
     expect(res.status).toBe(404);
     const data = await res.json();
     expect(data.error).toBeDefined();
+  });
+
+  it("resumes the agent loop end-to-end after a real /chat confirmation", async () => {
+    // Regression test for the /confirm handler running the confirmed tool
+    // in isolation and stopping, instead of letting the model take another
+    // turn afterward. "git add <path>" is routed straight to git_add by
+    // agent.ts's directGitCommand() shortcut, so this needs no scripted
+    // provider tool call to set up the pending confirmation.
+    const originalRoot = getProjectRoot();
+    const root = path.join(os.tmpdir(), `confirm-resume-${Date.now()}`);
+    fs.mkdirSync(root, { recursive: true });
+    execSync("git init -q", { cwd: root, stdio: "ignore" });
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: "ignore" });
+    execSync('git config user.name "Test"', { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(path.join(root, "hello.txt"), "hi");
+    setProjectRoot(root);
+
+    try {
+      const chatRes = await createTestApp().request("http://localhost/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat: "git add hello.txt", history: [] }),
+      });
+      expect(chatRes.status).toBe(200);
+      const chatData = await chatRes.json();
+      const pending = chatData.tool_activity.find(
+        (event: { type: string }) => event.type === "pending_confirmation"
+      );
+      expect(pending).toBeDefined();
+      expect(pending.name).toBe("git_add");
+
+      const confirmRes = await createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: pending.action_id, confirmed: true }),
+      });
+      expect(confirmRes.status).toBe(200);
+      const confirmData = await confirmRes.json();
+
+      // The confirmed git_add actually ran...
+      expect(confirmData.result).toMatchObject({ staged: true });
+      const staged = execSync("git diff --cached --name-only", { cwd: root }).toString();
+      expect(staged.trim()).toBe("hello.txt");
+
+      // ...and the loop kept going afterward instead of stopping: the
+      // (stubbed) model got a follow-up turn and produced final text.
+      expect(confirmData.text).toContain("[stub] Hello from");
+      expect(confirmData.pending_confirmation).toBeUndefined();
+      expect(confirmData.cancelled).toBeUndefined();
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("grants read access end-to-end and resumes with the real file contents", async () => {
+    // Regression test for the read-permission gate: security.ts's
+    // allowedReadPaths scoping existed but nothing in routes.ts ever called
+    // runWithAllowedReadPaths(), so a granted read_file_permission had no
+    // way to actually unblock the retried read. Seeds the pending action
+    // directly (agent.ts has no "read <path>" shortcut the way it does for
+    // git commands, so there's no scriptable way to make the stub provider
+    // request the read on its own) to isolate the /confirm-side wiring.
+    const originalRoot = getProjectRoot();
+    const root = path.join(os.tmpdir(), `confirm-read-permission-${Date.now()}`);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, "notes.txt"), "shh");
+    setProjectRoot(root);
+
+    try {
+      const provider = getProvider();
+      const action = createPending(
+        "read_file_permission",
+        { path: "notes.txt" },
+        { message: "The assistant wants to read 'notes.txt'.", permission_request: true },
+        {
+          provider_fingerprint: providerFingerprint(provider),
+          contents: [],
+          round_index: 0,
+          tool_results: [],
+          remaining_calls: [{ name: "read_file", args: { path: "notes.txt" } }],
+          last_call_signature: null,
+          consecutive_repeat_count: 1,
+          consecutive_error_count: 0,
+        }
+      );
+
+      const confirmRes = await createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: true }),
+      });
+      expect(confirmRes.status).toBe(200);
+      const confirmData = await confirmRes.json();
+
+      expect(confirmData.permission_granted).toBe(true);
+      expect(confirmData.path).toBe("notes.txt");
+      // The retried read actually succeeded against the real filesystem,
+      // proving the granted path was threaded through
+      // runWithAllowedReadPaths() into security.ts's allowed-paths store.
+      expect(confirmData.result).toMatchObject({ path: "notes.txt", contents: "shh" });
+      // And the loop kept going afterward rather than stopping.
+      expect(confirmData.text).toContain("[stub] Hello from");
+      expect(confirmData.pending_confirmation).toBeUndefined();
+      expect(confirmData.cancelled).toBeUndefined();
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
