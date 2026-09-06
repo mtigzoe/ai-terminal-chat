@@ -356,10 +356,26 @@ class OpenAICompatibleProvider(Provider):
         return self._parse_completion(data)
 
     def append_model_turn(self, contents, response):
-        message = dict(response.raw) if isinstance(response.raw, dict) else {
-            "role": "assistant",
-            "content": response.text or "",
-        }
+        if isinstance(response.raw, dict):
+            message = dict(response.raw)
+        else:
+            # Direct command responses (agent._direct_git_command /
+            # _direct_read_command) carry no native payload. Rebuild the
+            # tool_calls block so append_tool_results() below can pair each
+            # result with a tool_call_id instead of dropping them all.
+            message = {"role": "assistant", "content": response.text or ""}
+            if response.tool_calls:
+                message["tool_calls"] = [
+                    {
+                        "id": call.id or f"call-{index}",
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": json.dumps(call.args or {}),
+                        },
+                    }
+                    for index, call in enumerate(response.tool_calls)
+                ]
         message.setdefault("role", "assistant")
         # Ollama (and some other OpenAI-compatible servers) reject
         # "content": null on assistant messages. The OpenAI spec allows

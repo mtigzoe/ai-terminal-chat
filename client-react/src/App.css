@@ -766,6 +766,42 @@ body {
   outline-offset: 2px;
 }
 
+/* Settings page agent permissions */
+.settings-agent-permissions {
+  text-align: left;
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #9a9caa;
+  background: #f7f6f3;
+}
+.settings-agent-permissions h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+.settings-radio-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.settings-radio {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  margin-bottom: 12px;
+}
+.settings-radio label {
+  font-weight: 600;
+}
+.settings-radio .settings-help {
+  grid-column: 2;
+  margin: 0;
+}
+.settings-radio input[type='radio']:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 2px;
+}
+
 /* Settings page memory toggle */
 .settings-memory {
   text-align: left;

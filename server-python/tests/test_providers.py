@@ -351,6 +351,39 @@ def test_openai_compatible_append_tool_results_synthesizes_missing_ids():
     assert contents[0]["tool_calls"][0]["id"] == "call-0"
 
 
+def test_openai_compatible_append_model_turn_rebuilds_none_raw():
+    """Direct command responses (e.g. git commit) have raw=None.
+
+    Without rebuilt tool_calls the assistant turn carries no ids, so
+    append_tool_results() would zip against an empty list and silently
+    drop every tool result — the model would never see that the commit
+    ran and would just ask to commit again after each Allow.
+    """
+    provider = OpenAICompatibleProvider(
+        base_url="http://localhost:11434/v1",
+        model="test-model",
+    )
+
+    contents = [{"role": "user", "content": "git commit -m test"}]
+    response = ProviderResponse(
+        text=None,
+        tool_calls=[ToolCall("git_commit", {"message": "test"})],
+    )
+
+    contents = provider.append_model_turn(contents, response)
+    assistant = contents[-1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"] == ""
+    assert assistant["tool_calls"][0]["function"]["name"] == "git_commit"
+
+    contents = provider.append_tool_results(
+        contents, [{"name": "git_commit", "result": {"committed": True}}]
+    )
+    assert contents[-1]["role"] == "tool"
+    assert contents[-1]["tool_call_id"] == assistant["tool_calls"][0]["id"]
+    assert "committed" in contents[-1]["content"]
+
+
 def test_gemini_constructor_uses_passed_model_without_env(monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
@@ -384,13 +417,17 @@ def test_gemini_constructor_requires_api_key(monkeypatch):
             raise AssertionError("GeminiProvider should require an API key")
 
 
-def test_gemini_append_model_turn_skips_none_raw():
+def test_gemini_append_model_turn_rebuilds_none_raw():
     """Direct command responses (e.g. git_commit) have raw=None.
 
     append_model_turn must not append None to the contents list, because
     the next provider.generate() call would pass it to the Gemini SDK,
     which fails pydantic validation with "Input should be a valid
-    Content, str, File, Part, or list[union[str, File, Part]]".
+    Content, str, File, Part, or list[union[str, File, Part]]". It must
+    still append a model turn carrying the function call, or
+    append_tool_results() would post a function response with no
+    preceding function call for Gemini to match it against — which is
+    what broke resuming a confirmed action.
     """
     from gemini import GeminiProvider
     from google.genai import types
@@ -411,6 +448,31 @@ def test_gemini_append_model_turn_skips_none_raw():
         tool_calls=[ToolCall("git_commit", {"message": "test"})],
     )
     updated = provider.append_model_turn(contents, response)
+    assert None not in updated
+    assert updated[0] is user_content
+    assert len(updated) == 2
+    model_turn = updated[1]
+    assert model_turn.role == "model"
+    assert model_turn.parts[0].function_call.name == "git_commit"
+    assert model_turn.parts[0].function_call.args == {"message": "test"}
+
+
+def test_gemini_append_model_turn_skips_none_raw_without_tool_calls():
+    """A raw-less text-only response still must not append None."""
+    from gemini import GeminiProvider
+    from google.genai import types
+
+    fake_client = Mock()
+    with patch("gemini.genai.Client", return_value=fake_client):
+        provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash")
+
+    user_content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="git fetch --all")],
+    )
+    updated = provider.append_model_turn(
+        [user_content], ProviderResponse(text="Unsupported git fetch option.", tool_calls=[])
+    )
     assert updated == [user_content]
     assert None not in updated
 

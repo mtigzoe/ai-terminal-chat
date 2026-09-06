@@ -96,9 +96,21 @@ export class AnthropicProvider extends Provider {
   }
 
   appendModelTurn(contents: unknown[], response: ProviderResponse): unknown[] {
-    const content = Array.isArray(response.raw)
-      ? response.raw
-      : [{ type: "text", text: response.text || "" }];
+    if (Array.isArray(response.raw)) {
+      return [...contents, { role: "assistant", content: response.raw }];
+    }
+    // Direct command responses (agent.ts directGitCommand) carry no native
+    // payload. Rebuild the tool_use blocks so appendToolResults() finds a
+    // matching id instead of throwing.
+    const content =
+      response.tool_calls.length > 0
+        ? response.tool_calls.map((call, index) => ({
+            type: "tool_use",
+            id: call.id || `toolu_synthetic_${index}`,
+            name: call.name,
+            input: call.args || {},
+          }))
+        : [{ type: "text", text: response.text || "" }];
     return [...contents, { role: "assistant", content }];
   }
 

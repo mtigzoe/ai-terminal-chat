@@ -106,6 +106,24 @@ export class GeminiProvider extends Provider {
     if (response.raw && typeof response.raw === "object") {
       return [...contents, response.raw];
     }
+    // Direct command responses (agent.ts directGitCommand) carry no native
+    // payload. Rebuild the function calls so appendToolResults() finds a
+    // match instead of throwing.
+    if (response.tool_calls.length > 0) {
+      return [
+        ...contents,
+        {
+          role: "model",
+          parts: response.tool_calls.map((call) => ({
+            functionCall: {
+              name: call.name,
+              args: call.args || {},
+              ...(call.id ? { id: call.id } : {}),
+            },
+          })),
+        },
+      ];
+    }
     return [...contents, { role: "model", parts: [{ text: response.text || "" }] }];
   }
 

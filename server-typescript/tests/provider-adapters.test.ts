@@ -582,6 +582,77 @@ describe("OpenAICompatibleProvider.appendModelTurn", () => {
     const contents = provider.appendModelTurn([], { text: null, tool_calls: [], raw: null });
     expect(contents.at(-1)).toEqual({ role: "assistant", content: "" });
   });
+
+  it("rebuilds tool_calls when a raw-less response carries them", () => {
+    // Direct git commands (agent.directGitCommand) have no raw payload. Without
+    // rebuilt tool_calls the assistant turn has no ids, so appendToolResults
+    // drops every result and the model asks to commit again after each Allow.
+    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    let contents = provider.appendModelTurn([{ role: "user", content: "git commit -m test" }], {
+      text: null,
+      tool_calls: [{ name: "git_commit", args: { message: "test" } }],
+      raw: null,
+    });
+    expect(contents.at(-1)).toEqual({
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: "call-0",
+          type: "function",
+          function: { name: "git_commit", arguments: JSON.stringify({ message: "test" }) },
+        },
+      ],
+    });
+
+    contents = provider.appendToolResults(contents, [
+      { name: "git_commit", result: { committed: true } },
+    ]);
+    expect(contents.at(-1)).toEqual({
+      role: "tool",
+      tool_call_id: "call-0",
+      content: JSON.stringify({ committed: true }),
+    });
+  });
+});
+
+describe("appendModelTurn rebuilds raw-less tool calls for native providers", () => {
+  it("Gemini rebuilds a model turn with functionCall parts", () => {
+    const provider = new GeminiProvider({ api_key: "k", model: "gemini-test" });
+    const contents = provider.appendModelTurn(
+      [{ role: "user", parts: [{ text: "git commit -m test" }] }],
+      { text: null, tool_calls: [{ name: "git_commit", args: { message: "test" } }], raw: null }
+    );
+    expect(contents.at(-1)).toEqual({
+      role: "model",
+      parts: [{ functionCall: { name: "git_commit", args: { message: "test" } } }],
+    });
+    expect(() =>
+      provider.appendToolResults(contents, [{ name: "git_commit", result: { committed: true } }])
+    ).not.toThrow();
+  });
+
+  it("Anthropic rebuilds an assistant turn with tool_use blocks", () => {
+    const provider = new AnthropicProvider({ api_key: "k", model: "claude-test" });
+    const contents = provider.appendModelTurn(
+      [{ role: "user", content: "git commit -m test" }],
+      { text: null, tool_calls: [{ name: "git_commit", args: { message: "test" } }], raw: null }
+    );
+    expect(contents.at(-1)).toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_synthetic_0",
+          name: "git_commit",
+          input: { message: "test" },
+        },
+      ],
+    });
+    expect(() =>
+      provider.appendToolResults(contents, [{ name: "git_commit", result: { committed: true } }])
+    ).not.toThrow();
+  });
 });
 
 describe("OpenAICompatibleProvider.appendToolResults", () => {
