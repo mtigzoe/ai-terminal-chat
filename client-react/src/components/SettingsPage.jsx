@@ -2,6 +2,11 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import MainNav from './MainNav.jsx';
 import ProjectRootManager from './ProjectRootManager.jsx';
+import {
+  AGENT_PERMISSION_OPTIONS,
+  AGENT_PERMISSION_STORAGE_KEY,
+  readAgentPermissionMode,
+} from '../agentPermissions.js';
 
 const formatOllamaHostname = (baseUrl) => {
   const value = String(baseUrl || '').trim();
@@ -47,6 +52,8 @@ const SettingsPage = ({ host }) => {
     }
   });
   const [memoryStatus, setMemoryStatus] = useState('');
+  const [agentPermissionMode, setAgentPermissionMode] = useState(readAgentPermissionMode);
+  const [agentPermissionStatus, setAgentPermissionStatus] = useState('');
 
   const STORAGE_KEY = 'ai-terminal-chat:provider-selection';
 
@@ -327,6 +334,20 @@ const SettingsPage = ({ host }) => {
       );
     } finally {
       setAllowedCommandsBusy(false);
+    }
+  };
+
+  const handleAgentPermissionChange = (event) => {
+    const next = event.target.value;
+    const previous = agentPermissionMode;
+    const option = AGENT_PERMISSION_OPTIONS.find((item) => item.value === next);
+    setAgentPermissionMode(next);
+    try {
+      localStorage.setItem(AGENT_PERMISSION_STORAGE_KEY, next);
+      setAgentPermissionStatus(`Agent permissions set to ${option ? option.label : next}.`);
+    } catch {
+      setAgentPermissionMode(previous);
+      setAgentPermissionStatus('Could not save the agent permissions setting.');
     }
   };
 
@@ -621,6 +642,44 @@ const SettingsPage = ({ host }) => {
           aria-atomic="true"
         >
           {allowedCommandsStatus}
+        </div>
+      </section>
+
+      <section className="settings-agent-permissions" aria-labelledby="agent-permissions-heading">
+        <h2 id="agent-permissions-heading">Agent Permissions</h2>
+        <p id="agent-permissions-help" className="settings-help">
+          Choose how much the agent may do on its own. Actions that change files
+          or Git state normally pause the chat and wait for you to choose Allow
+          or Decline. The Allowed Commands list above still limits which
+          terminal commands can run, whichever option you pick here.
+        </p>
+        <fieldset className="settings-radio-group">
+          <legend className="sr-only">Agent permission level</legend>
+          {AGENT_PERMISSION_OPTIONS.map((option) => (
+            <div className="settings-radio" key={option.value}>
+              <input
+                type="radio"
+                id={`agent-permission-${option.value}`}
+                name="agent-permission-mode"
+                value={option.value}
+                checked={agentPermissionMode === option.value}
+                onChange={handleAgentPermissionChange}
+                aria-describedby={`agent-permission-${option.value}-help`}
+              />
+              <label htmlFor={`agent-permission-${option.value}`}>{option.label}</label>
+              <p id={`agent-permission-${option.value}-help`} className="settings-help">
+                {option.description}
+              </p>
+            </div>
+          ))}
+        </fieldset>
+        <div
+          className={`settings-status${agentPermissionStatus.startsWith('Could not') ? ' settings-status--error' : ''}`}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {agentPermissionStatus}
         </div>
       </section>
 

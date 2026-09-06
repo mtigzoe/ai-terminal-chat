@@ -264,10 +264,25 @@ export class OpenAICompatibleProvider extends Provider {
     contents: unknown[],
     response: ProviderResponse
   ): unknown[] {
-    const message: Record<string, unknown> =
-      typeof response.raw === "object" && response.raw !== null
-        ? { ...(response.raw as Record<string, unknown>) }
-        : { role: "assistant", content: response.text || "" };
+    let message: Record<string, unknown>;
+    if (typeof response.raw === "object" && response.raw !== null) {
+      message = { ...(response.raw as Record<string, unknown>) };
+    } else {
+      // Direct command responses (agent.ts directGitCommand) carry no native
+      // payload. Rebuild the tool_calls block so appendToolResults() below
+      // can pair each result with a tool_call_id instead of dropping them.
+      message = { role: "assistant", content: response.text || "" };
+      if (response.tool_calls.length > 0) {
+        message.tool_calls = response.tool_calls.map((call, index) => ({
+          id: call.id || `call-${index}`,
+          type: "function",
+          function: {
+            name: call.name,
+            arguments: JSON.stringify(call.args || {}),
+          },
+        }));
+      }
+    }
     message.role = "assistant";
     // Ollama (and some other OpenAI-compatible servers) reject
     // "content": null on assistant messages. The OpenAI spec allows

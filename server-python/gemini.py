@@ -239,12 +239,23 @@ class GeminiProvider(Provider):
 
     def append_model_turn(self, contents, response):
         # Preserve Gemini's function-call (or text) message.
-        # For direct command responses, response.raw is None — skip it
-        # so the next provider.generate() call doesn't pass a None entry
-        # to the Gemini SDK (which would fail pydantic validation).
-        if response.raw is None:
-            return contents
-        return contents + [response.raw]
+        if response.raw is not None:
+            return contents + [response.raw]
+
+        # Direct command responses (agent._direct_git_command /
+        # _direct_read_command) carry no native payload. Rebuild the model
+        # turn from the normalized tool calls so append_tool_results() has a
+        # matching function call to answer — Gemini rejects a function
+        # response that is not immediately preceded by its function call.
+        if response.tool_calls:
+            parts = [
+                types.Part.from_function_call(
+                    name=call.name, args=dict(call.args or {})
+                )
+                for call in response.tool_calls
+            ]
+            return contents + [types.Content(role="model", parts=parts)]
+        return contents
 
     def append_tool_results(self, contents, results):
         # IMPORTANT: google-genai 2.17.0 does not accept id= here.
