@@ -12,16 +12,12 @@ import { delimiter, join } from "node:path";
 import { spawn } from "node:child_process";
 
 /**
- * True if the `ollama` executable is recognized on this machine's PATH.
- * Node has no built-in equivalent of Python's `shutil.which`, so this
- * scans PATH directories directly, checking each PATHEXT extension on
- * Windows (where executables need one) and the bare name elsewhere.
+ * Find `command` on PATH and return its absolute path, or null. Node has
+ * no built-in equivalent of Python's `shutil.which`, so this scans PATH
+ * directories directly, checking each PATHEXT extension on Windows (where
+ * executables need one) and the bare name elsewhere.
  */
-export function isOllamaCliInstalled(): boolean {
-  return commandExistsOnPath("ollama");
-}
-
-function commandExistsOnPath(command: string): boolean {
+function findOnPath(command: string): string | null {
   const pathEnv = process.env.PATH || process.env.Path || "";
   const dirs = pathEnv.split(delimiter).filter(Boolean);
 
@@ -29,18 +25,59 @@ function commandExistsOnPath(command: string): boolean {
     const pathext = (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean);
     for (const dir of dirs) {
       for (const ext of pathext) {
-        if (existsSync(join(dir, command + ext))) return true;
+        const candidate = join(dir, command + ext);
+        if (existsSync(candidate)) return candidate;
       }
       // Some installs place an extensionless shim on PATH too.
-      if (existsSync(join(dir, command))) return true;
+      const bare = join(dir, command);
+      if (existsSync(bare)) return bare;
     }
-    return false;
+    return null;
   }
 
   for (const dir of dirs) {
-    if (existsSync(join(dir, command))) return true;
+    const candidate = join(dir, command);
+    if (existsSync(candidate)) return candidate;
   }
-  return false;
+  return null;
+}
+
+/**
+ * Resolve the `ollama` executable's absolute path: first via PATH, then
+ * (on Windows) via Ollama's documented default install location.
+ *
+ * The fallback matters in practice, not just in theory: Ollama's Windows
+ * installer places the binaries in `%LOCALAPPDATA%\Programs\Ollama` and
+ * adds that directory to the user's PATH in the registry [1], but a
+ * long-running server process only sees the PATH it inherited when it
+ * started. Installing Ollama (or logging back in so a PATH change takes
+ * effect) *after* the server is already running won't update
+ * `process.env.PATH` until the server itself is restarted - PATH edits
+ * never propagate to already-running processes on Windows. Checking the
+ * known default location directly catches that common ordering (install
+ * Ollama, then check status without restarting the dev server) without
+ * requiring one. This doesn't cover a custom `/DIR=` install location
+ * chosen at install time, which genuinely does need a server restart to
+ * pick up - same limitation Python's shutil.which()-based check has.
+ *
+ * [1] https://docs.ollama.com/windows - "explorer %LOCALAPPDATA%\Programs\Ollama
+ *     contains the binaries (The installer adds this to your user PATH)"
+ */
+function resolveOllamaExecutable(): string | null {
+  const onPath = findOnPath("ollama");
+  if (onPath) return onPath;
+
+  if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+    const defaultInstallPath = join(process.env.LOCALAPPDATA, "Programs", "Ollama", "ollama.exe");
+    if (existsSync(defaultInstallPath)) return defaultInstallPath;
+  }
+
+  return null;
+}
+
+/** True if the `ollama` executable is recognized on this machine. */
+export function isOllamaCliInstalled(): boolean {
+  return resolveOllamaExecutable() !== null;
 }
 
 // Ollama model names look like `llama3.1`, `llama3.1:8b`, or
@@ -83,22 +120,25 @@ export async function launchOllamaRun(model: string): Promise<LaunchOllamaRunRes
   if (!SAFE_MODEL_NAME.test(trimmedModel)) {
     return { error: `'${trimmedModel}' is not a valid Ollama model name.` };
   }
-  if (!isOllamaCliInstalled()) {
+
+  const resolvedExecutable = resolveOllamaExecutable();
+  if (!resolvedExecutable) {
     return {
       error: "The `ollama` command was not found on PATH. Install Ollama first, then try again.",
     };
   }
 
-  const notFoundResult: LaunchOllamaRunResult = {
-    error: "The `ollama` command was not found on PATH. Install Ollama first, then try again.",
-  };
-
   if (process.platform === "win32") {
     // SAFE_MODEL_NAME already rules out spaces, quotes, `$`, backticks,
     // and semicolons, so trimmedModel is safe to place directly inside a
-    // single-quoted PowerShell string.
+    // single-quoted PowerShell string. resolvedExecutable is a real
+    // filesystem path we found via existsSync just above rather than
+    // user input, but a username containing a literal `'` (rare, though
+    // possible) would otherwise break out of the quoted string, so it
+    // gets the standard PowerShell single-quote escape (doubling it) too.
+    const psPath = resolvedExecutable.replace(/'/g, "''");
     const psCommand =
-      `$p = Start-Process -FilePath 'ollama' -ArgumentList 'run','${trimmedModel}' ` +
+      `$p = Start-Process -FilePath '${psPath}' -ArgumentList 'run','${trimmedModel}' ` +
       `-PassThru; Write-Output $p.Id`;
 
     return new Promise<LaunchOllamaRunResult>((resolve) => {
@@ -133,7 +173,7 @@ export async function launchOllamaRun(model: string): Promise<LaunchOllamaRunRes
   }
 
   try {
-    const child = spawn("ollama", ["run", trimmedModel], {
+    const child = spawn(resolvedExecutable, ["run", trimmedModel], {
       detached: true,
       stdio: "ignore",
     });
@@ -146,7 +186,7 @@ export async function launchOllamaRun(model: string): Promise<LaunchOllamaRunRes
   } catch (exc) {
     const message = exc instanceof Error ? exc.message : String(exc);
     return message.includes("ENOENT")
-      ? notFoundResult
+      ? { error: "The `ollama` command was not found on PATH. Install Ollama first, then try again." }
       : { error: `Could not start \`ollama run ${trimmedModel}\`: ${message}` };
   }
 }
