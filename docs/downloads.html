@@ -12,17 +12,16 @@
 <main class="wrap page">
   <p class="eyebrow">Get AI Terminal Chat</p>
   <h1>Downloads</h1>
-  <p class="lead">Download the latest Windows build directly. You do not need to open the Releases page.</p>
+  <p class="lead">Download AI Terminal Chat v0.2.0 for Windows directly from GitHub.</p>
 
   <section class="download-card" aria-labelledby="latest-heading">
-    <h2 id="latest-heading">Latest version <span id="version">Loading…</span></h2>
-    <p>Choose the Windows installer or portable version below.</p>
+    <h2 id="latest-heading">AI Terminal Chat v0.2.0</h2>
+    <p>Choose the Windows installer or portable version below. Activating either button downloads the <code>.exe</code> file directly.</p>
     <div class="actions">
-      <a class="button" id="installer-download" href="https://github.com/mtigzoe/ai-terminal-chat/releases/latest" aria-describedby="download-help">Download Windows Installer (.exe)</a>
-      <a class="button secondary" id="portable-download" href="https://github.com/mtigzoe/ai-terminal-chat/releases/latest" aria-describedby="download-help">Download Windows Portable (.exe)</a>
+      <a class="button" href="https://github.com/mtigzoe/ai-terminal-chat/releases/download/v0.2.0/AI-Terminal-Chat-Setup-0.2.0.exe">Download Windows Installer (.exe)</a>
+      <a class="button secondary" href="https://github.com/mtigzoe/ai-terminal-chat/releases/download/v0.2.0/AI-Terminal-Chat-Portable-0.2.0.exe">Download Windows Portable (.exe)</a>
     </div>
-    <p id="download-status" role="status" aria-live="polite">Finding the latest release…</p>
-    <p id="download-help">The download should start when you activate a button. If it does not start, activate the button again or use <a href="https://github.com/mtigzoe/ai-terminal-chat/releases/latest">the latest release page</a>.</p>
+    <p id="download-help">If a direct download does not start, use the <a href="https://github.com/mtigzoe/ai-terminal-chat/releases/tag/v0.2.0">AI Terminal Chat v0.2.0 release page</a>.</p>
   </section>
 
   <section>
@@ -32,37 +31,5 @@
   </section>
 </main>
 <footer><div class="wrap"><p>AI Terminal Chat is open source under the Apache License 2.0.</p></div></footer>
-<script>
-(async function () {
-  const releaseUrl = 'https://api.github.com/repos/mtigzoe/ai-terminal-chat/releases/latest';
-  const version = document.getElementById('version');
-  const installer = document.getElementById('installer-download');
-  const portable = document.getElementById('portable-download');
-  const status = document.getElementById('download-status');
-
-  try {
-    const response = await fetch(releaseUrl, { headers: { Accept: 'application/vnd.github+json' } });
-    if (!response.ok) throw new Error('Unable to retrieve the latest release.');
-    const release = await response.json();
-    const assets = Array.isArray(release.assets) ? release.assets : [];
-    const installerAsset = assets.find(asset => /AI-Terminal-Chat-Setup-.*\.exe$/i.test(asset.name));
-    const portableAsset = assets.find(asset => /AI-Terminal-Chat-Portable-.*\.exe$/i.test(asset.name));
-
-    version.textContent = release.tag_name || 'Latest';
-
-    if (installerAsset) installer.href = installerAsset.browser_download_url;
-    if (portableAsset) portable.href = portableAsset.browser_download_url;
-
-    if (installerAsset || portableAsset) {
-      status.textContent = 'Direct download links are ready.';
-    } else {
-      status.textContent = 'The latest release does not currently contain the expected Windows .exe files. Use the latest release page below.';
-    }
-  } catch (error) {
-    version.textContent = 'Latest';
-    status.textContent = 'The direct download links could not be loaded. Use the latest release page below.';
-  }
-}());
-</script>
 </body>
 </html>
