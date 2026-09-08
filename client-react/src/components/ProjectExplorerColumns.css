@@ -36,16 +36,14 @@
 }
 
 .project-tree-header-cell-type {
-  flex: 0 0 130px;
+  flex: 0 0 110px;
 }
-
-.project-tree-header-cell-size {
-  flex: 0 0 70px;
-  justify-content: flex-end;
-}
-
-.project-tree-header-cell-modified {
-  flex: 0 0 90px;
+/* Hide empty dummy columns that have no backend server support */
+.project-tree-header-cell-size,
+.project-tree-header-cell-modified,
+.project-entry-cell-size,
+.project-entry-cell-modified {
+  display: none !important;
 }
 
 .project-sort-button {
