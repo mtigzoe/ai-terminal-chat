@@ -11,6 +11,7 @@ const { app, BrowserWindow, shell, ipcMain, dialog, utilityProcess } = require('
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
+const { spawn } = require('node:child_process');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -21,6 +22,13 @@ let backendStderr = '';
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = 9000;
+
+const KNOWN_EDITORS = [
+  { id: 'code', name: 'VS Code', bin: process.platform === 'win32' ? 'code.cmd' : 'code' },
+  { id: 'cursor', name: 'Cursor', bin: process.platform === 'win32' ? 'cursor.cmd' : 'cursor' },
+  { id: 'windsurf', name: 'Windsurf', bin: process.platform === 'win32' ? 'windsurf.cmd' : 'windsurf' },
+  { id: 'sublime', name: 'Sublime Text', bin: 'subl' },
+];
 
 function getRendererEntry() {
   const production = app.isPackaged || process.argv.includes('--production');
@@ -219,6 +227,34 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
     return null;
   }
   return result.filePaths[0];
+});
+
+ipcMain.handle('editor:open', async (event, { filePath, editorId }) => {
+  if (!filePath) return false;
+  if (!editorId || editorId === 'system') {
+    await shell.openPath(filePath);
+    return true;
+  }
+  const targetEditor = KNOWN_EDITORS.find((item) => item.id === editorId);
+  const bin = targetEditor ? targetEditor.bin : editorId;
+  try {
+    spawn(bin, [filePath], { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  } catch (err) {
+    console.error('Failed to spawn editor:', err);
+    await shell.openPath(filePath);
+    return false;
+  }
+});
+
+ipcMain.handle('shell:reveal', async (event, filePath) => {
+  if (!filePath) return false;
+  shell.showItemInFolder(filePath);
+  return true;
+});
+
+ipcMain.handle('editor:getAvailable', async () => {
+  return [{ id: 'system', name: 'System Default' }, ...KNOWN_EDITORS];
 });
 
 app.whenReady().then(async () => {

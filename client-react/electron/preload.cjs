@@ -16,4 +16,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<string|null>}
    */
   chooseFolder: (defaultPath) => ipcRenderer.invoke('dialog:chooseFolder', defaultPath),
+  /**
+   * Open a target file or folder in a specified editor or system default.
+   */
+  openInEditor: (filePath, editorId) =>
+    ipcRenderer.invoke('editor:open', { filePath, editorId }),
+  revealInFileExplorer: (filePath) =>
+    ipcRenderer.invoke('shell:reveal', filePath),
+  getAvailableEditors: () =>
+    ipcRenderer.invoke('editor:getAvailable'),
 });
