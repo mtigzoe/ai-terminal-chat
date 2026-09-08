@@ -113,6 +113,20 @@ export default function ProjectTreeContextMenu() {
     }
   };
 
+  const openInExternalEditor = async (editorId) => {
+    if (window.electronAPI?.openInEditor) {
+      await window.electronAPI.openInEditor(path, editorId);
+    } else {
+      clickTreeItem();
+    }
+  };
+
+  const revealInFileManager = async () => {
+    if (window.electronAPI?.revealInFileExplorer) {
+      await window.electronAPI.revealInFileExplorer(path);
+    }
+  };
+
   const menuItems = [];
   if (isDirectory) {
     menuItems.push({
@@ -122,11 +136,20 @@ export default function ProjectTreeContextMenu() {
   } else {
     menuItems.push({ label: 'Open file', action: clickTreeItem });
     menuItems.push({
+      label: 'Open in VS Code',
+      action: () => openInExternalEditor('code'),
+    });
+    menuItems.push({
+      label: 'Open in Cursor',
+      action: () => openInExternalEditor('cursor'),
+    });
+    menuItems.push({
       label: isSelected ? 'Remove from agent selection' : 'Select for agent',
       action: toggleSelection,
       disabled: !checkbox,
     });
   }
+  menuItems.push({ label: 'Reveal in File Manager', action: revealInFileManager });
   menuItems.push({ label: 'Copy path', action: copyPath });
   menuItems.push({
     label: 'Insert path into terminal',
