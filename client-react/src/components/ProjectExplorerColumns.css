@@ -38,10 +38,7 @@
 .project-tree-header-cell-type {
   flex: 0 0 110px;
 }
-<<<<<<< HEAD
 
-=======
->>>>>>> 0a340ef406acc60d5b2399f5f1fded75cd84aa2c
 /* Hide empty dummy columns that have no backend server support */
 .project-tree-header-cell-size,
 .project-tree-header-cell-modified,
