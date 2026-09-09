@@ -256,21 +256,83 @@ describe("persistAppConfig concurrency", () => {
     // Writer A: manually create and hold the lock (simulating long-running operation)
     const lockFdA = fs.openSync(lockPath, "wx");
 
-    // Writer B: try to acquire the same lock - should time out
+    // Writer B: run in a separate process to genuinely test lock contention.
+    // This avoids the event-loop blocking issue of Atomics.wait in the main test process.
+    const { spawn } = await import("node:child_process");
+    const child = spawn(process.execPath, [
+      "-e",
+      `
+        const fs = require("fs");
+        const path = require("path");
+        const lockPath = process.argv[2];
+        const maxLockWaitMs = 200;
+        const lockWaitStart = Date.now();
+
+        function sleepSync(ms) {
+          if (ms <= 0) return;
+          const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+          const view = new Int32Array(buffer);
+          Atomics.wait(view, 0, 0, ms);
+        }
+
+        let lockFd = null;
+        let lockAcquired = false;
+
+        while (Date.now() - lockWaitStart < maxLockWaitMs) {
+          try {
+            lockFd = fs.openSync(lockPath, "wx");
+            lockAcquired = true;
+            break;
+          } catch (err) {
+            if (err.code === "EEXIST") {
+              const elapsed = Date.now() - lockWaitStart;
+              const backoff = Math.min(10 + elapsed * 0.1, 100);
+              sleepSync(backoff);
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        if (!lockAcquired) {
+          process.exit(1); // timeout - expected
+        }
+
+        // If we got here, we acquired the lock (shouldn't happen in this test)
+        if (lockFd !== null) {
+          fs.closeSync(lockFd);
+        }
+        fs.rmSync(lockPath, { force: true });
+        process.exit(0);
+      `,
+      lockPath,
+    ], {
+      cwd: dir,
+      stdio: "ignore",
+    });
+
     let timedOut = false;
-    try {
-      // Use a shorter timeout for the test
-      const configPathB = configPath;
-      const originalTimeout = 5000;
-      // We'll test by trying to acquire with a very short custom timeout
-      // But persistAppConfig has hardcoded 5000ms, so we'll just verify the lock isn't deleted
-      await Promise.race([
-        persistAppConfig({ value: 2 }, configPathB),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 100))
-      ]);
-    } catch (e) {
-      timedOut = true;
-    }
+    let exited = false;
+
+    await new Promise<void>((resolve) => {
+      child.on("exit", (code) => {
+        exited = true;
+        timedOut = code === 1; // Exit code 1 = timeout
+        resolve();
+      });
+      child.on("error", () => {
+        exited = true;
+        resolve();
+      });
+      // Safety timeout
+      setTimeout(() => {
+        if (!exited) {
+          child.kill();
+          timedOut = true;
+          resolve();
+        }
+      }, 1000);
+    });
 
     // Verify: Writer A's lock was NOT deleted by Writer B
     assert.ok(fs.existsSync(lockPath), "Writer A's lock must still exist");
