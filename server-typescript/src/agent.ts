@@ -1,54 +1,102 @@
 import { Provider, ProviderResponse, ToolCall } from "./providers/base.ts";
 import type { PendingAction, ResumeState } from "./pending.ts";
 
-function tokenizeShellCommand(command: string): string[] {
+/**
+ * Tokenize a shell command string, matching Python's shlex.split(posix=False)
+ * behavior. This is used for direct command parsing (e.g., "read file.txt",
+ * "git add path").
+ *
+ * Key behaviors (posix=False):
+ * - Outside quotes: backslash is NOT an escape character; it's literal
+ * - Inside double quotes: backslash escapes only '"' and '\\'
+ * - Inside single quotes: no escaping; everything is literal until closing quote
+ * - Quote characters are not included in the output tokens
+ * - Whitespace separates tokens unless quoted
+ * - Unterminated quotes raise an error
+ * - Empty quoted strings produce an empty token
+ */
+export function tokenizeShellCommand(command: string): string[] {
   const tokens: string[] = [];
   let current = "";
   let i = 0;
+  let inQuotes = false;
+  let lastWasQuoted = false;
 
   while (i < command.length) {
     const char = command[i];
 
-    if (char === "\\" && i + 1 < command.length) {
-      current += command[i + 1];
-      i += 2;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      const quote = char;
-      current += quote;
-      i++;
-      while (i < command.length && command[i] !== quote) {
-        if (command[i] === "\\" && i + 1 < command.length) {
-          current += command[i + 1];
-          i += 2;
-        } else {
-          current += command[i];
-          i++;
-        }
-      }
-      if (i < command.length) {
-        current += quote;
-        i++;
-      }
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (current) {
+    // Whitespace separates tokens (outside quotes)
+    if (/\s/.test(char) && !inQuotes) {
+      if (current || lastWasQuoted) {
         tokens.push(current);
         current = "";
+        lastWasQuoted = false;
       }
       i++;
       continue;
     }
 
+    // Double-quoted string
+    if (char === '"') {
+      inQuotes = true;
+      i++;
+      let foundClosingQuote = false;
+      while (i < command.length) {
+        const c = command[i];
+        if (c === '"') {
+          i++;
+          foundClosingQuote = true;
+          break;
+        }
+        // Inside double quotes, backslash escapes only " and \
+        if (c === "\\" && i + 1 < command.length) {
+          const next = command[i + 1];
+          if (next === '"' || next === "\\") {
+            current += next;
+            i += 2;
+            continue;
+          }
+        }
+        current += c;
+        i++;
+      }
+      inQuotes = false;
+      if (!foundClosingQuote) {
+        throw new Error("Unterminated double quote");
+      }
+      lastWasQuoted = true;
+      continue;
+    }
+
+    // Single-quoted string (no escaping inside)
+    if (char === "'") {
+      inQuotes = true;
+      i++;
+      let foundClosingQuote = false;
+      while (i < command.length && command[i] !== "'") {
+        current += command[i];
+        i++;
+      }
+      if (i < command.length && command[i] === "'") {
+        i++;
+        foundClosingQuote = true;
+      }
+      inQuotes = false;
+      if (!foundClosingQuote) {
+        throw new Error("Unterminated single quote");
+      }
+      lastWasQuoted = true;
+      continue;
+    }
+
+    // Regular character (outside quotes, backslash is literal)
     current += char;
+    lastWasQuoted = false;
     i++;
   }
 
-  if (current) {
+  // Handle trailing token (including empty quoted string at end)
+  if (current || lastWasQuoted) {
     tokens.push(current);
   }
 

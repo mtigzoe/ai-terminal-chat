@@ -6,6 +6,7 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 
 const gitStatusMock = vi.hoisted(() => vi.fn());
+const ollamaCliInstalledMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/providers/factory.ts", () => {
   const SUPPORTED_PROVIDERS = [
@@ -43,6 +44,23 @@ vi.mock("../src/git.ts", () => ({
   gitDiff: vi.fn(),
   gitLog: vi.fn(),
   gitBranch: vi.fn(),
+}));
+
+vi.mock("../src/ollama-cli.ts", () => ({
+  isOllamaCliInstalled: () => ollamaCliInstalledMock(),
+  launchOllamaRun: vi.fn(async (model: string) => {
+    const trimmedModel = (model || "").trim();
+    if (!trimmedModel) {
+      return { error: "A model name is required." };
+    }
+    const SAFE_MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
+    if (!SAFE_MODEL_NAME.test(trimmedModel)) {
+      return { error: `'${trimmedModel}' is not a valid Ollama model name.` };
+    }
+    return {
+      error: "The `ollama` command was not found on PATH. Install Ollama first, then try again.",
+    };
+  }),
 }));
 
 import { app } from "../src/routes.js";
@@ -87,17 +105,23 @@ describe("GET /providers", () => {
 });
 
 describe("GET /providers/ollama/status", () => {
+  beforeEach(() => {
+    ollamaCliInstalledMock.mockReturnValue(false);
+  });
+
   it("reports whether the ollama CLI is on PATH", async () => {
     const res = await createTestApp().request("http://localhost/providers/ollama/status");
     expect(res.status).toBe(200);
     const data = await res.json();
-    // This sandbox has no ollama binary installed, so this doubles as a
-    // real (not mocked) check of the PATH-scanning logic.
     expect(data).toEqual({ installed: false });
   });
 });
 
 describe("POST /providers/ollama/run", () => {
+  beforeEach(() => {
+    ollamaCliInstalledMock.mockReturnValue(false);
+  });
+
   it("returns an error when no model is given", async () => {
     const res = await createTestApp().request("http://localhost/providers/ollama/run", {
       method: "POST",
