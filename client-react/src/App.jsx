@@ -182,8 +182,33 @@ function App() {
       awaitingConfirmationRef.current = false;
 
       if (is_stream) {
-        // In streaming mode, the in-progress response is in `answer` state, not `data`.
-        // Append the confirmation results to the streaming buffer.
+        // In streaming mode, find the pending model message in data and update it.
+        setData((current) => {
+          // Find the last model message with pendingConfirmation flag
+          const lastPendingIndex = current
+            .map((message, idx) => (message.role === 'model' && message.pendingConfirmation ? idx : -1))
+            .filter((idx) => idx !== -1)
+            .pop();
+          if (lastPendingIndex === undefined) {
+            // Fallback: append as new message (shouldn't happen normally)
+            return [...current, { role: 'model', parts: [{ text: finalText }], toolActivity: newActivityItems }];
+          }
+          return current.map((message, index) => {
+            if (index !== lastPendingIndex) return message;
+            const updated = {
+              ...message,
+              toolActivity: [...(message.toolActivity || []), ...newActivityItems],
+              pendingConfirmation: !!nextPending, // still pending if there's another confirmation
+            };
+            if (finalText) {
+              const priorText = message.parts?.[0]?.text || '';
+              updated.parts = [{ text: priorText ? `${priorText}\n\n${finalText}` : finalText }];
+            }
+            return updated;
+          });
+        });
+
+        // Update streaming buffer to match (for display consistency during multi-confirmation)
         setStreamToolActivity((current) => [...current, ...newActivityItems]);
         if (finalText) {
           setAnswer((currentAnswer) => currentAnswer ? `${currentAnswer}\n\n${finalText}` : finalText);
@@ -210,24 +235,17 @@ function App() {
         setPendingConfirmation(nextPending);
         setAgentStatus(statusFromPendingConfirmation(nextPending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false });
       } else {
-        // All confirmations resolved - commit the final response
+        // All confirmations resolved - clean up the pending flag
         setPendingConfirmation(null);
         if (is_stream) {
-          // Move the completed response from the streaming buffer to data
+          // Remove pendingConfirmation flag from the model message
           setData((current) => {
-            const lastModelIndex = current.map((message) => message.role).lastIndexOf('model');
-            if (lastModelIndex === -1) {
-              // No model message yet (shouldn't happen normally, but handle gracefully)
-              return [...current, { role: 'model', parts: [{ text: finalText || '' }], toolActivity: newActivityItems }];
-            }
-            return current.map((message, index) => {
-              if (index !== lastModelIndex) return message;
-              const updated = { ...message, toolActivity: [...(message.toolActivity || []), ...newActivityItems] };
-              if (finalText) {
-                const priorText = message.parts?.[0]?.text || '';
-                updated.parts = [{ text: priorText ? `${priorText}\n\n${finalText}` : finalText }];
+            return current.map((message) => {
+              if (message.role === 'model' && message.pendingConfirmation) {
+                const { pendingConfirmation, ...rest } = message;
+                return rest;
               }
-              return updated;
+              return message;
             });
           });
           showStreamdiv(false);
@@ -264,6 +282,22 @@ function App() {
       if (error?.response) {
         setPendingConfirmation(null);
         awaitingConfirmationRef.current = false;
+        // Also clean up the pending model message on error
+        if (is_stream) {
+          setData((current) => {
+            return current.map((message) => {
+              if (message.role === 'model' && message.pendingConfirmation) {
+                const { pendingConfirmation, ...rest } = message;
+                return { ...rest, toolActivity: [...(message.toolActivity || []), { type: 'tool_result', name: action.name, result: { error: message } }] };
+              }
+              return message;
+            });
+          });
+          showStreamdiv(false);
+          setAnswer('');
+          setStreamToolActivity([]);
+          setWaiting(false);
+        }
         setStreamToolActivity((current) => [...current, { type: 'tool_result', name: action.name, result: { error: message } }]);
       }
     } finally {
@@ -315,6 +349,18 @@ function App() {
           setPendingConfirmation(event);
           // Mark that we're awaiting user confirmation; the stream will end here.
           awaitingConfirmationRef.current = true;
+          // Commit the current streaming buffer as a pending model message to data.
+          // This ensures there's a model message to update when confirmation resolves.
+          const pendingModelMessage = {
+            role: "model",
+            parts: [{ text: modelResponse }],
+            toolActivity: [...toolActivity],
+            pendingConfirmation: true,
+          };
+          flushSync(() => {
+            setData((current) => [...current, pendingModelMessage]);
+            setWaiting(true);
+          });
           return;
         }
         if (event.type === "text" || event.type === "final") {
@@ -402,8 +448,15 @@ function App() {
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
         if (requestIdRef.current === requestId) requestIdRef.current = null;
         // If we're awaiting confirmation, the stream ended at pending_confirmation.
-        // Do NOT commit to data or clear streaming state - the confirmation flow will handle it.
-        if (!awaitingConfirmationRef.current) {
+        // We already committed a pending model message to data. Don't create another one.
+        // Just clear the streaming buffer since the pending message is now in data.
+        if (awaitingConfirmationRef.current) {
+          setAnswer("");
+          showStreamdiv(false);
+          setStreamToolActivity([]);
+          executeScroll();
+          window.setTimeout(() => inputRef.current?.focus(), 0);
+        } else {
           setAnswer("");
           const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }];
           flushSync(() => { setData(updatedData); setWaiting(false); });
