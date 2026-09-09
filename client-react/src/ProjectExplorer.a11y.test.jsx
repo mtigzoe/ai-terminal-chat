@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { axe, toHaveNoViolations } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import axios from 'axios';
 import ProjectExplorer from './components/ProjectExplorer';
+
+expect.extend(toHaveNoViolations);
 
 vi.mock('axios', () => ({
   default: {
@@ -30,6 +33,19 @@ afterEach(() => {
 });
 
 describe('ProjectExplorer accessibility', () => {
+  test('has no automated accessibility violations', async () => {
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: '.', entries: [
+        { name: 'README.md', type: 'file' },
+        { name: 'src', type: 'directory' },
+      ] },
+    });
+    axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+
+    const { container } = render(<ProjectExplorer host={host} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
   test('renders an accessible tree with labelled panels', async () => {
     axiosInstance.get.mockResolvedValueOnce({
       data: { path: '.', entries: [
