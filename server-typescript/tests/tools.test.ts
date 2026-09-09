@@ -480,3 +480,174 @@ describe("new git tool registration", () => {
     }
   });
 });
+
+describe("git show flag parsing - read permission bypasses", () => {
+  beforeEach(() => {
+    // Ensure git show is in allowlist (it is by default)
+    const cmds = getAllowedCommands();
+    expect(cmds).toContain("git show");
+  });
+
+  it("blocks git show --format %H (space-separated form)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-show-format-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "secret content");
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "other content");
+    spawnSync("git", ["add", "file.txt", "other.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      // Only allow other.txt, not file.txt
+      await runWithAllowedReadPaths(["other.txt"], async () => {
+        // Try to read file.txt via git show --format %H (should be blocked)
+        const result = await runCommand("git show HEAD --format %H -- file.txt");
+        expect(result.error).toBeDefined();
+        expect(String(result.error).toLowerCase()).toContain("access denied");
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks git show --pretty %H (space-separated form)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-show-pretty-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "secret content");
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "other content");
+    spawnSync("git", ["add", "file.txt", "other.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      await runWithAllowedReadPaths(["other.txt"], async () => {
+        const result = await runCommand("git show HEAD --pretty %H -- file.txt");
+        expect(result.error).toBeDefined();
+        expect(String(result.error).toLowerCase()).toContain("access denied");
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks git show --unified 3 (space-separated form)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-show-unified-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "secret content");
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "other content");
+    spawnSync("git", ["add", "file.txt", "other.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      await runWithAllowedReadPaths(["other.txt"], async () => {
+        const result = await runCommand("git show HEAD --unified 3 -- file.txt");
+        expect(result.error).toBeDefined();
+        expect(String(result.error).toLowerCase()).toContain("access denied");
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks git show --format=%H (equals form)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-show-format-eq-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "secret content");
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "other content");
+    spawnSync("git", ["add", "file.txt", "other.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      await runWithAllowedReadPaths(["other.txt"], async () => {
+        const result = await runCommand("git show HEAD --format=%H -- file.txt");
+        expect(result.error).toBeDefined();
+        expect(String(result.error).toLowerCase()).toContain("access denied");
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows git show --no-patch -- file.txt when file not allowed (safe flag)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-show-nopatch-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "secret content");
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "other content");
+    spawnSync("git", ["add", "file.txt", "other.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      await runWithAllowedReadPaths(["other.txt"], async () => {
+        const result = await runCommand("git show HEAD --no-patch -- file.txt");
+        expect(result.error).toBeUndefined();
+        expect(result.stdout).toBeDefined();
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows git show --stat -- file.txt when file not allowed (safe flag)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-show-stat-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "secret content");
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "other content");
+    spawnSync("git", ["add", "file.txt", "other.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      await runWithAllowedReadPaths(["other.txt"], async () => {
+        const result = await runCommand("git show HEAD --stat -- file.txt");
+        expect(result.error).toBeUndefined();
+        expect(result.stdout).toBeDefined();
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows git show --name-only -- file.txt when file not allowed (safe flag)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-show-nameonly-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "secret content");
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "other content");
+    spawnSync("git", ["add", "file.txt", "other.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      await runWithAllowedReadPaths(["other.txt"], async () => {
+        const result = await runCommand("git show HEAD --name-only -- file.txt");
+        expect(result.error).toBeUndefined();
+        expect(result.stdout).toBeDefined();
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
