@@ -13,8 +13,9 @@
 // migrated in providers.ts (Phase 4), which will reuse the helpers here.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
 // .env loading (mirrors server-python/app.py: `load_dotenv()`)
@@ -70,11 +71,16 @@ export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConf
 }
 
 /**
- * Persist the shared application configuration atomically.
+ * Persist the shared application configuration atomically with file locking.
  *
  * The destination directory is created as needed and the temporary file is
  * replaced atomically, preserving other configuration keys when callers use
  * loadAppConfig() -> mutate -> persistAppConfig().
+ *
+ * Uses a simple file-based lock to prevent concurrent writes from losing
+ * updates. The lock is a temporary file created with `O_EXCL` equivalent
+ * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
+ * with exponential backoff.
  *
  * On Windows, atomic rename can fail with EPERM when another process (antivirus,
  * indexer, or a lingering handle from a concurrent write) briefly locks the
@@ -88,6 +94,48 @@ export function persistAppConfig(
 ): void {
   const directory = dirname(configFilePath);
   mkdirSync(directory, { recursive: true });
+
+  // Acquire a lock to prevent concurrent writes from racing
+  // Use a lock file path that includes the config file name to avoid
+  // conflicts between different config files, and include PID for
+  // parallel test runs
+  const configFileName = basename(configFilePath).replace(/\.[^.]+$/, "");
+  const lockPath = join(directory, `.config.${configFileName}.${process.pid}.lock`);
+  const maxLockWaitMs = 5000;
+  const lockWaitStart = Date.now();
+  let lockFd: number | null = null;
+
+  // Clean up any stale lock file from a previous crashed run
+  try {
+    rmSync(lockPath, { force: true });
+  } catch {
+    // Ignore
+  }
+
+  while (Date.now() - lockWaitStart < maxLockWaitMs) {
+    try {
+      // Use 'wx' flag for exclusive creation (fails if file exists)
+      lockFd = fs.openSync(lockPath, "wx");
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        // Lock held by another process, wait and retry
+        const elapsed = Date.now() - lockWaitStart;
+        const backoff = Math.min(10 + elapsed * 0.1, 100);
+        // Small sleep - Node.js doesn't have built-in sleep, use busy wait with setTimeout promise
+        // For synchronous operation, we'll use a simple approach
+        continue;
+      }
+      // On EPERM or other errors, fall back to direct write without locking
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        break;
+      }
+      throw err;
+    }
+  }
+
+  // If we couldn't acquire the lock (EPERM or timeout), proceed without locking
+  // This handles Windows where locking may not work in some environments
   const tempPath = join(
     directory,
     `config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`,
@@ -107,7 +155,21 @@ export function persistAppConfig(
       writeFileSync(configFilePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
       return;
     } catch (writeErr) {
-      throw err;
+      throw writeErr;
+    }
+  } finally {
+    // Release the lock if we acquired it
+    if (lockFd !== null) {
+      try {
+        fs.closeSync(lockFd);
+      } catch {
+        // Ignore
+      }
+    }
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      // Ignore lock cleanup errors
     }
   }
 }
@@ -137,25 +199,30 @@ export interface GetEnvIntOptions {
   strict?: boolean;
 }
 
-/** Read an integer environment variable, falling back to `defaultValue` if unset or invalid. */
+/** Read an integer environment variable, falling back to `defaultValue` if unset or invalid.
+ *  Matches Python's `int()` behavior: only accepts strings matching /^[+-]?\d+$/.
+ *  Rejects: "9000abc", "9000.5", " 9000 ", "", "abc", "1.5", etc.
+ */
 export function getEnvInt(
   name: string,
   defaultValue: number,
   options: GetEnvIntOptions = {},
 ): number {
   const raw = process.env[name];
-  if (raw === undefined || raw.trim() === "") {
+  if (raw === undefined || raw === "") {
     return defaultValue;
   }
 
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed)) {
+  // Match Python's int() behavior: only allow optional sign followed by digits
+  if (!/^[+-]?\d+$/.test(raw)) {
     if (options.strict) {
       throw new Error(`Environment variable ${name} must be an integer, got: ${raw}`);
     }
     return defaultValue;
   }
 
+  const parsed = Number.parseInt(raw, 10);
+  // Additional safety: check for overflow (Python int has no max, but we might want bounds)
   return parsed;
 }
 

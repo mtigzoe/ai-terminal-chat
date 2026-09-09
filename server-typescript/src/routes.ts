@@ -210,11 +210,19 @@ app.post("/providers/select", async (c) => {
     }
   }
 
-  // Switching away from Ollama must remove any previously persisted
-  // OLLAMA_BASE_URL from the process environment so a stale value is
-  // not inherited by subsequent requests.
+  // Switching away from Ollama: only remove OLLAMA_BASE_URL from the process
+  // environment if it was previously set by the application (i.e., there's a
+  // persisted ollama_base_url in the config). If it was a system environment
+  // variable, leave it alone so it can serve as a fallback when the user
+  // later selects Ollama without providing an explicit base URL.
   if (name !== "ollama") {
-    delete process.env.OLLAMA_BASE_URL;
+    const saved = loadProviderSelection();
+    const hadPersistedOllamaUrl = saved.provider === "ollama" &&
+      saved.ollama_base_url &&
+      saved.ollama_base_url.trim();
+    if (hadPersistedOllamaUrl) {
+      delete process.env.OLLAMA_BASE_URL;
+    }
   }
 
   const envApiKeyMap: Record<string, string | undefined> = {

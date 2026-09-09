@@ -12,7 +12,6 @@ import {
   persistAllowedCommands,
   reloadAllowedCommands,
   DEFAULT_ALLOWED_COMMAND_PREFIXES,
-  BLOCKED_COMMAND_PATTERNS,
   DANGEROUS_COMMAND_CHARACTERS,
   isCommandAllowed,
   runCommand,
@@ -21,7 +20,6 @@ import {
 import { __setProjectRootForTests, __resetProjectRootForTests, runWithAllowedReadPaths } from "./security.ts";
 import { isToolError } from "./types.ts";
 
-void BLOCKED_COMMAND_PATTERNS;
 void DANGEROUS_COMMAND_CHARACTERS;
 
 // Restore the default allowlist after every test so mutations do not leak
@@ -192,7 +190,8 @@ test("tokenizeCommand handles quoted arguments without invoking a shell", () => 
 });
 
 test("tokenizeCommand rejects unterminated quotes", () => {
-  assert.throws(() => tokenizeCommand('git log "unterminated'), /Unterminated quote/);
+  assert.throws(() => tokenizeCommand('git log "unterminated'), /Unterminated double quote/);
+  assert.throws(() => tokenizeCommand("git log 'unterminated"), /Unterminated single quote/);
 });
 
 // ---------------------------------------------------------------------------

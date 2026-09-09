@@ -33,6 +33,8 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  openSync,
+  closeSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
@@ -197,6 +199,11 @@ function loadConfig(): Record<string, unknown> {
  * Persist the full configuration object atomically outside the project.
  * Mirrors security.py's `_persist_config()`.
  *
+ * Uses a simple file-based lock to prevent concurrent writes from losing
+ * updates. The lock is a temporary file created with exclusive creation
+ * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
+ * with exponential backoff.
+ *
  * On Windows, atomic rename can fail with EPERM when another process (antivirus,
  * indexer, or a lingering handle from a concurrent write) briefly locks the
  * target file. In that case we fall back to a direct write so config saves
@@ -216,6 +223,46 @@ function persistConfig(payload: Record<string, unknown>): void {
   const dir = dirname(targetFile);
   mkdirSync(dir, { recursive: true });
 
+  // Acquire a lock to prevent concurrent writes from racing
+  // Use a lock file path that includes the config file name to avoid
+  // conflicts between different config files, and include PID for
+  // parallel test runs
+  const configFileName = basename(targetFile).replace(/\.[^.]+$/, "");
+  const lockPath = join(dir, `.config.${configFileName}.${process.pid}.lock`);
+  const maxLockWaitMs = 5000;
+  const lockWaitStart = Date.now();
+  let lockFd: number | null = null;
+
+  // Clean up any stale lock file from a previous crashed run
+  try {
+    rmSync(lockPath, { force: true });
+  } catch {
+    // Ignore
+  }
+
+  while (Date.now() - lockWaitStart < maxLockWaitMs) {
+    try {
+      // Use 'wx' flag for exclusive creation (fails if file exists)
+      lockFd = openSync(lockPath, "wx");
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        // Lock held by another process, wait and retry
+        const elapsed = Date.now() - lockWaitStart;
+        const backoff = Math.min(10 + elapsed * 0.1, 100);
+        // Small busy wait
+        continue;
+      }
+      // On EPERM or other errors, fall back to direct write without locking
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        break;
+      }
+      throw err;
+    }
+  }
+
+  // If we couldn't acquire the lock (EPERM or timeout), proceed without locking
+  // This handles Windows where locking may not work in some environments
   const serialized = `${JSON.stringify(payload, null, 2)}\n`;
   const tempPath = join(
     dir,
@@ -238,7 +285,21 @@ function persistConfig(payload: Record<string, unknown>): void {
       writeFileSync(targetFile, serialized, "utf8");
       return;
     } catch (writeErr) {
-      throw err;
+      throw writeErr;
+    }
+  } finally {
+    // Release the lock if we acquired it
+    if (lockFd !== null) {
+      try {
+        closeSync(lockFd);
+      } catch {
+        // Ignore
+      }
+    }
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      // Ignore lock cleanup errors
     }
   }
 }

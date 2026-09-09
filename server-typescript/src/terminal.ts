@@ -65,25 +65,6 @@ export const DANGEROUS_COMMAND_CHARACTERS = [
   "\n",
 ] as const;
 
-export const BLOCKED_COMMAND_PATTERNS = [
-  /\brm\s+-rf\b/i,
-  /\bsudo\b/i,
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-  /\bpoweroff\b/i,
-  /\bhalt\b/i,
-  /\bmkfs\b/i,
-  /\bformat\b/i,
-  /\bdd\s+if=/i,
-  /\bchmod\s+777\b/i,
-  /\bchown\b/i,
-  /\.env\b/i,
-  /\bgoogle_api_key\b/i,
-  /\bprintenv\b/i,
-  /\bcredential/i,
-  /\bid_rsa\b/i,
-] as const;
-
 export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "rm",
   "del",
@@ -245,60 +226,96 @@ export function isCommandAllowed(command: string): boolean {
 }
 
 /**
- * Tokenize one plain command without invoking a shell. Supports whitespace,
- * single/double quotes, and backslash escaping. Shell operators are rejected
- * before tokenization, so this parser never needs to implement shell syntax.
+ * Tokenize one plain command without invoking a shell, matching Python's
+ * shlex.split(posix=False) behavior. Supports whitespace, single/double quotes,
+ * and backslash escaping inside double quotes. Backslash is literal outside quotes.
+ * Shell operators are rejected before tokenization, so this parser never needs
+ * to implement shell syntax.
  */
 export function tokenizeCommand(command: string): string[] {
   const tokens: string[] = [];
   let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
+  let i = 0;
+  let inQuotes = false;
+  let lastWasQuoted = false;
 
-  for (const char of command) {
-    if (escaping) {
-      current += char;
-      escaping = false;
-      continue;
-    }
+  while (i < command.length) {
+    const char = command[i];
 
-    if (char === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-
-    if (quote !== null) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (current) {
+    // Whitespace separates tokens (outside quotes)
+    if (/\s/.test(char) && !inQuotes) {
+      if (current || lastWasQuoted) {
         tokens.push(current);
         current = "";
+        lastWasQuoted = false;
       }
+      i++;
       continue;
     }
 
+    // Double-quoted string
+    if (char === '"') {
+      inQuotes = true;
+      i++;
+      let foundClosingQuote = false;
+      while (i < command.length) {
+        const c = command[i];
+        if (c === '"') {
+          i++;
+          foundClosingQuote = true;
+          break;
+        }
+        // Inside double quotes, backslash escapes only " and \
+        if (c === "\\" && i + 1 < command.length) {
+          const next = command[i + 1];
+          if (next === '"' || next === "\\") {
+            current += next;
+            i += 2;
+            continue;
+          }
+        }
+        current += c;
+        i++;
+      }
+      inQuotes = false;
+      if (!foundClosingQuote) {
+        throw new Error("Unterminated double quote");
+      }
+      lastWasQuoted = true;
+      continue;
+    }
+
+    // Single-quoted string (no escaping inside)
+    if (char === "'") {
+      inQuotes = true;
+      i++;
+      let foundClosingQuote = false;
+      while (i < command.length && command[i] !== "'") {
+        current += command[i];
+        i++;
+      }
+      if (i < command.length && command[i] === "'") {
+        i++;
+        foundClosingQuote = true;
+      }
+      inQuotes = false;
+      if (!foundClosingQuote) {
+        throw new Error("Unterminated single quote");
+      }
+      lastWasQuoted = true;
+      continue;
+    }
+
+    // Regular character (outside quotes, backslash is literal)
     current += char;
+    lastWasQuoted = false;
+    i++;
   }
 
-  if (escaping) current += "\\";
-
-  if (quote !== null) {
-    throw new Error("Unterminated quote in command.");
+  // Handle trailing token (including empty quoted string at end)
+  if (current || lastWasQuoted) {
+    tokens.push(current);
   }
-
-  if (current) tokens.push(current);
 
   return tokens;
 }
@@ -387,14 +404,22 @@ function runCommandRespectsReadPermissions(
     // Content-producing flags that must be denied. These either enable
     // patch output explicitly or use a format that includes patch output
     // by default.
-    const hasContentFlag = argsAfterShow.some((arg) => {
-      if (arg === "--patch" || arg === "-p" || arg === "--unified" || arg === "--oneline") {
+    const hasContentFlag = argsAfterShow.some((arg, idx) => {
+      if (arg === "--patch" || arg === "-p" || arg === "--oneline") {
         return true;
       }
-      if (arg.startsWith("--format=") || arg.startsWith("--pretty=")) {
+      if (arg === "--unified") {
+        // --unified without =value still enables patch output (default 3 lines)
         return true;
       }
       if (arg.startsWith("--unified=")) {
+        return true;
+      }
+      if (arg === "--format" || arg === "--pretty") {
+        // Space-separated form: --format %H or --pretty %H
+        return true;
+      }
+      if (arg.startsWith("--format=") || arg.startsWith("--pretty=")) {
         return true;
       }
       return false;
@@ -477,12 +502,82 @@ function runCommandRespectsReadPermissions(
 }
 
 function commandBlocked(command: string): string | null {
-  for (const pattern of BLOCKED_COMMAND_PATTERNS) {
-    if (pattern.test(command)) {
+  // Tokenize to get the command name (first token) and avoid false positives
+  // from matching flag names like --format, --pretty, etc.
+  let tokens: string[];
+  try {
+    tokens = tokenizeCommand(command);
+  } catch {
+    tokens = command.trim().split(/\s+/);
+  }
+
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const cmd = tokens[0].toLowerCase();
+
+  // Blocked command names (exact match on first token)
+  const blockedCommands = new Set([
+    "rm",
+    "del",
+    "rmdir",
+    "remove-item",
+    "sudo",
+    "shutdown",
+    "reboot",
+    "format",  // Windows format command, not git --format flag
+    "diskpart",
+    "mkfs",
+    "dd",
+    "chmod",
+    "chown",
+    "printenv",
+  ]);
+
+  if (blockedCommands.has(cmd)) {
+    // Special case: "rm -rf" is particularly dangerous
+    if (cmd === "rm" && tokens.length >= 2 && tokens[1] === "-rf") {
+      return `This command is blocked for safety: ${command}`;
+    }
+    // For other blocked commands, block regardless of arguments
+    return `This command is blocked for safety: ${command}`;
+  }
+
+  // Blocked command prefixes that would enable dangerous operations
+  // These are checked against the allowlist via isForbiddenPrefix, but
+  // we also block them here as defense in depth.
+  const blockedPrefixes = [
+    "git reset",
+    "git clean",
+    "git push",
+    "git commit",
+    "git pull",
+    "git add",
+  ];
+
+  const normalizedCommand = tokens.join(" ").toLowerCase();
+  for (const prefix of blockedPrefixes) {
+    if (normalizedCommand === prefix || normalizedCommand.startsWith(prefix + " ")) {
       return `This command is blocked for safety: ${command}`;
     }
   }
 
+  // Sensitive file patterns - check if command references sensitive files
+  // These are also caught by the allowlist (isForbiddenPrefix rejects prefixes
+  // that would allow these), but check here as defense in depth for commands
+  // that might slip through.
+  if (/\.env\b/i.test(command)) {
+    return `This command is blocked for safety: ${command}`;
+  }
+  if (/\bcredential/i.test(command)) {
+    return `This command is blocked for safety: ${command}`;
+  }
+  if (/\bid_rsa\b/i.test(command)) {
+    return `This command is blocked for safety: ${command}`;
+  }
+
+  // Dangerous metacharacters that indicate shell injection attempts
   if (
     DANGEROUS_COMMAND_CHARACTERS.some((character) =>
       command.includes(character),
