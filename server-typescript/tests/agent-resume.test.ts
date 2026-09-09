@@ -364,7 +364,7 @@ describe("resumeAgentLoop", () => {
     const firstEvents = await collectEvents(
       runAgentLoop({
         provider,
-        contents: [{ role: "user", content: "read secret.txt" }],
+        contents: [{ role: "user", content: "please read secret.txt" }],
         toolFunctions,
         createPending: realCreatePending,
       })

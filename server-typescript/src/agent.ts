@@ -215,6 +215,45 @@ function extractLastUserText(contents: unknown[]): string | null {
   return null;
 }
 
+function directReadCommand(contents: unknown[]): ProviderResponse | null {
+  const userText = extractLastUserText(contents);
+  if (!userText) return null;
+
+  const command = userText.trim();
+  let parts: string[];
+  try {
+    parts = tokenizeShellCommand(command);
+  } catch {
+    return null;
+  }
+
+  if (parts.length === 0) return null;
+
+  const subcommand = parts[0].toLowerCase();
+
+  if (subcommand === "read" || subcommand === "read_file") {
+    if (parts.length < 2) {
+      return {
+        text: "Please specify a file to read. Usage: read <path>",
+        tool_calls: [],
+        raw: null,
+      };
+    }
+    let path = parts[1];
+    if (!path || path.startsWith("-")) return null;
+    if (path.length >= 2 && path[0] === path[path.length - 1] && (path[0] === '"' || path[0] === "'")) {
+      path = path.slice(1, -1);
+    }
+    return {
+      text: null,
+      tool_calls: [{ name: "read_file", args: { path } }],
+      raw: null,
+    };
+  }
+
+  return null;
+}
+
 function directGitCommand(contents: unknown[]): ProviderResponse | null {
   const userText = extractLastUserText(contents);
   if (!userText) return null;
@@ -522,8 +561,13 @@ async function* agentLoopCore(
     } else {
       let response: ProviderResponse;
       try {
-        const directResponse =
-          roundIndex === 0 ? directGitCommand(currentContents) : null;
+        let directResponse: ProviderResponse | null = null;
+        if (roundIndex === 0) {
+          directResponse = directReadCommand(currentContents);
+          if (!directResponse) {
+            directResponse = directGitCommand(currentContents);
+          }
+        }
         response = directResponse ?? (await provider.generate(currentContents));
       } catch (exc) {
         yield {
