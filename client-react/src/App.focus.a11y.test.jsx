@@ -6,10 +6,19 @@ import App from './App';
 
 expect.extend(toHaveNoViolations);
 
+// URL-based mock implementation for deterministic request handling
 vi.mock('axios', () => ({
   default: {
     get: vi.fn(() => Promise.resolve({ data: { path: '/tmp/project' } })),
-    post: vi.fn(),
+    post: vi.fn((url, ...args) => {
+      if (url.endsWith('/chat')) {
+        return global.__chatResponse || Promise.resolve({ data: {} });
+      }
+      if (url.endsWith('/confirm')) {
+        return global.__confirmResponse || Promise.resolve({ data: { result: { cancelled: true } } });
+      }
+      throw new Error(`Unexpected axios POST: ${url}`);
+    }),
     isCancel: vi.fn(() => false),
   },
 }));
@@ -21,6 +30,9 @@ beforeEach(() => {
   // Default mock for project-root
   axiosInstance.get.mockResolvedValue({ data: { path: '/tmp/project' } });
   axiosInstance.isCancel.mockReturnValue(false);
+  // Reset global mock responses
+  global.__chatResponse = Promise.resolve({ data: {} });
+  global.__confirmResponse = Promise.resolve({ data: { result: { cancelled: true } } });
   try {
     localStorage.clear();
   } catch {
@@ -31,7 +43,17 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   delete global.fetch;
+  delete global.__chatResponse;
+  delete global.__confirmResponse;
 });
+
+function setChatResponse(response) {
+  global.__chatResponse = Promise.resolve(response);
+}
+
+function setConfirmResponse(response) {
+  global.__confirmResponse = Promise.resolve(response);
+}
 
 function makeStreamResponse(chunks, { ok = true, status = 200, statusText = 'OK' } = {}) {
   let index = 0;
@@ -72,11 +94,8 @@ async function sendMessage(text) {
   fireEvent.click(getSendButton());
 }
 
-// Helper to mock the confirmation resolution response
 function mockConfirmResponse(cancelled = true) {
-  axiosInstance.post.mockResolvedValueOnce({
-    data: { result: { cancelled } },
-  });
+  setConfirmResponse({ data: { result: { cancelled } } });
 }
 
 describe('ConfirmationDialog accessibility', () => {
@@ -181,16 +200,18 @@ describe('ConfirmationDialog variant: clear conversation', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /clear conversation/i }));
 
-    expect(screen.getByRole('dialog', { name: /clear conversation\?/i })).toBeInTheDocument();
-    expect(screen.getByText(/this will remove all messages/i)).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: /clear conversation\?/i });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/this will remove the current conversation from the chat view/i);
   });
 
   test('both buttons have accessible names', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /clear conversation/i }));
 
-    expect(screen.getByRole('button', { name: /^cancel$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^clear conversation$/i })).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: /^cancel$/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^clear conversation$/i })).toBeInTheDocument();
   });
 
   test('initial focus goes to deny button', () => {
@@ -261,24 +282,20 @@ describe('ConfirmationDialog variant: clear conversation', () => {
 
 describe('ConfirmationDialog variant: file read permission', () => {
   test('has no automated accessibility violations', async () => {
-    // Mock a file read permission pending confirmation
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-              preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+            preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -289,23 +306,20 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('has role=dialog and aria-modal=true', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-              preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+            preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -316,22 +330,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('title is "File access requested" for read permission', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -342,22 +353,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('includes file path in description', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -367,23 +375,20 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('includes preview text in aria-describedby when present', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-              preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+            preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -394,22 +399,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('omits preview element when preview is absent', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -419,22 +421,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('includes safety text specific to file read permission', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -444,23 +443,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('initial focus goes to allow button for file read permission', async () => {
-    // Note: ConfirmationDialog focuses allowRef by default (line 33 in App.jsx)
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -470,22 +465,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -503,22 +495,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('Shift+Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -533,22 +522,19 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('Escape closes the dialog and returns focus to trigger', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -562,23 +548,20 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('no duplicate or stale aria IDs', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'read-1',
-              name: 'read_file_permission',
-              args: { path: 'secret.txt' },
-              preview: { path: 'secret.txt', message: 'Preview text' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'read-1',
+            name: 'read_file_permission',
+            args: { path: 'secret.txt' },
+            preview: { path: 'secret.txt', message: 'Preview text' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -599,23 +582,20 @@ describe('ConfirmationDialog variant: file read permission', () => {
 
 describe('ConfirmationDialog variant: tool confirmation', () => {
   test('has no automated accessibility violations', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt', content: 'Hello' },
-              preview: { path: 'notes.txt', message: 'Create a new file with content.' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt', content: 'Hello' },
+            preview: { path: 'notes.txt', message: 'Create a new file with content.' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -626,23 +606,20 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('has role=dialog and aria-modal=true', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-              preview: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+            preview: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -653,22 +630,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('title is "Confirmation required" for tool confirmation', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -679,22 +653,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('includes tool name and args in description', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt', content: 'Hello' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt', content: 'Hello' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -705,23 +676,20 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('includes preview text when present', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-              preview: { path: 'notes.txt', message: 'Create a new file with content.' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+            preview: { path: 'notes.txt', message: 'Create a new file with content.' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -732,22 +700,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('omits preview element when preview is absent', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -757,22 +722,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('includes generic safety text for tool confirmation', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -782,22 +744,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('initial focus goes to allow button for tool confirmation', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -807,22 +766,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -840,22 +796,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('Shift+Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -870,22 +823,19 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('Escape closes the dialog and returns focus to trigger', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -899,23 +849,20 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('no duplicate or stale aria IDs', async () => {
-    axiosInstance.post
-      .mockResolvedValueOnce({
-        data: {
-          tool_activity: [
-            {
-              type: 'pending_confirmation',
-              action_id: 'write-1',
-              name: 'write_file',
-              args: { path: 'notes.txt' },
-              preview: { message: 'Preview text' },
-            },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        data: { result: { cancelled: true } },
-      });
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+            preview: { message: 'Preview text' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
 
     render(<App />);
     await sendMessage('create notes.txt');
