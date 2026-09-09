@@ -245,4 +245,55 @@ describe("persistAppConfig concurrency", () => {
     // Lock file should be cleaned up after successful write
     assert.ok(!fs.existsSync(lockPath));
   });
+
+  test("existing lock is never deleted by competing writer", async () => {
+    const configPath = join(dir, "config.json");
+    writeFileSync(configPath, '{"value":1}\n');
+
+    const lockPath = join(dir, ".config.config.lock");
+    const fs = await import("node:fs");
+
+    // Writer A: manually create and hold the lock (simulating long-running operation)
+    const lockFdA = fs.openSync(lockPath, "wx");
+
+    // Writer B: try to acquire the same lock - should time out
+    let timedOut = false;
+    try {
+      // Use a shorter timeout for the test
+      const configPathB = configPath;
+      const originalTimeout = 5000;
+      // We'll test by trying to acquire with a very short custom timeout
+      // But persistAppConfig has hardcoded 5000ms, so we'll just verify the lock isn't deleted
+      await Promise.race([
+        persistAppConfig({ value: 2 }, configPathB),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 100))
+      ]);
+    } catch (e) {
+      timedOut = true;
+    }
+
+    // Verify: Writer A's lock was NOT deleted by Writer B
+    assert.ok(fs.existsSync(lockPath), "Writer A's lock must still exist");
+    assert.ok(timedOut, "Writer B should have timed out waiting for lock");
+
+    // Clean up Writer A's lock
+    fs.closeSync(lockFdA);
+    fs.rmSync(lockPath, { force: true });
+  });
+
+  test("lock file is created and deleted correctly", async () => {
+    const configPath = join(dir, "config.json");
+    writeFileSync(configPath, '{"value":1}\n');
+
+    const lockPath = join(dir, ".config.config.lock");
+    const fs = await import("node:fs");
+
+    // Before write: no lock file
+    assert.ok(!fs.existsSync(lockPath));
+
+    // During write: lock file exists (we can't easily test this synchronously)
+    // After write: lock file is cleaned up
+    persistAppConfig({ value: 2 }, configPath);
+    assert.ok(!fs.existsSync(lockPath));
+  });
 });

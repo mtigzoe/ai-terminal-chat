@@ -231,16 +231,6 @@ function persistConfig(payload: Record<string, unknown>): void {
   let lockFd: number | null = null;
   let lockAcquired = false;
 
-  // Clean up any stale lock file from a previous crashed run.
-  // This is safe because we only delete our deterministic lock file,
-  // and if another process is actively holding it, the openSync("wx")
-  // below will fail with EEXIST anyway.
-  try {
-    rmSync(lockPath, { force: true });
-  } catch {
-    // Ignore - file may not exist or may be in use
-  }
-
   // Synchronous sleep using Atomics.wait on a SharedArrayBuffer.
   // This provides real sleep without busy-spinning the CPU.
   function sleepSync(ms: number): void {
