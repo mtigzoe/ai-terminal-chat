@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { axe, toHaveNoViolations } from 'jest-axe';
 import { describe, expect, test, vi } from 'vitest';
 import MessageInput from './components/MessageInput';
+
+expect.extend(toHaveNoViolations);
 
 describe('MessageInput accessibility', () => {
   const defaultProps = {
@@ -8,6 +11,24 @@ describe('MessageInput accessibility', () => {
     waiting: false,
     handleClick: () => {},
   };
+
+  test('has no automated accessibility violations', async () => {
+    const { container } = render(<MessageInput {...defaultProps} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  test('has no automated accessibility violations while waiting', async () => {
+    const { container } = render(<MessageInput {...defaultProps} waiting={true} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  test('has no automated accessibility violations with pending confirmation', async () => {
+    const { container } = render(<MessageInput {...defaultProps} pendingConfirmation={true} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
 
   test('associates a label with the textarea', () => {
     render(<MessageInput {...defaultProps} />);

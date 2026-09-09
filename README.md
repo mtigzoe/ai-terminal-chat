@@ -565,6 +565,12 @@ Run the accessibility-focused frontend tests from `client-react`:
 npm test -- --run
 ```
 
+This runs the full test suite including:
+- **Automated axe-core scans** for all major components (App, Header, TerminalPanel, ConversationDisplayArea, MessageInput, ProjectExplorer, WorkspaceTabs, SettingsPage, MainNav, InstructionsPage, HistoryPage, GitStatusPanel, ProjectPage)
+- **Keyboard navigation tests** for focus management, tab order, arrow key navigation, and keyboard shortcuts
+- **Screen-reader semantic tests** for ARIA roles, live regions, labels, and announcements
+- **Focus management tests** for dialogs, dynamic content, and cross-component focus movement
+
 ### Manual screen-reader testing
 
 Test the application with keyboard-only workflows and screen readers including JAWS, NVDA, and Orca.
@@ -574,6 +580,15 @@ Test the application with keyboard-only workflows and screen readers including J
 - Start the backend (`python app.py` from `server-python` or `server-typescript`) and frontend (`npm run dev` from `client-react`).
 - Open the app in a browser or the Electron shell.
 - Ensure the screen reader is running before interacting with the page.
+
+#### Test environment recommendations
+
+- **Browsers**: Chrome/Edge (best JAWS/NVDA support), Firefox (good NVDA support), Safari (VoiceOver)
+- **Screen readers**: JAWS 2024+, NVDA 2024+, Orca 46+, VoiceOver (macOS/iOS)
+- **Test modes**: Browser (Vite dev server), Electron desktop shell, Production build (nginx)
+- **Zoom levels**: Test at 100%, 150%, 200% to verify responsive layout doesn't break accessibility
+
+#### Keyboard-only testing
 
 #### Keyboard-only testing
 
@@ -585,6 +600,76 @@ Test the application with keyboard-only workflows and screen readers including J
 - **Home/End** move to the first/last visible item in the project tree.
 - **F6 / Shift+F6** cycles focus between the chat input, project tree, and terminal command field.
 - **Escape** closes dialogs (clear conversation, file preview, context menu) and cancels a streaming response when the Cancel button is focused.
+
+#### Comprehensive test scenarios
+
+Run through these complete workflows with a screen reader:
+
+**1. First-time user onboarding**
+- Navigate to the app, verify skip links work
+- Tab through all main navigation items (Chat, Instructions, History, Project, Settings)
+- Verify each page loads and announces its heading
+- Check that the chat page has all three skip links
+
+**2. Chat conversation flow**
+- Type a message, verify "Your message, message 1" is announced
+- Send message, verify agent status announces "Planning", "Inspecting", "Completed"
+- Verify final response announced as "Assistant message, message 2"
+- Test streaming mode: verify tool activity announced without leaving input
+- Test cancellation: verify "Response cancelled" announced
+
+**3. Terminal panel workflow**
+- F6 to terminal, type command, press Enter
+- Verify command submitted, focus returns to command input
+- Verify output announced with exit code and line counts
+- Test stderr: verify announced with role=alert
+- Test long-running command: verify "Running" button state announced
+
+**4. Project tree navigation**
+- F6 to project tree, use arrow keys to navigate
+- Expand/collapse folders with Right/Left arrows
+- Select files with Space, verify "selected for the agent" announced
+- Open file with Enter, verify file preview dialog accessible
+- Use Context Menu key or Shift+F10, navigate menu with arrows
+- Test filter input: type to filter, verify results announced
+
+**5. Settings page**
+- Navigate to Settings via main nav
+- Change provider, verify model dropdown updates
+- Save settings, verify success announced
+- Test error: disconnect backend, verify error announced with role=alert
+- Test keyboard shortcuts table: verify columns and rows accessible
+
+**6. Instructions page**
+- Navigate to Instructions, type custom instructions
+- Save, verify "Instructions saved" announced
+- Clear, verify "Instructions cleared" announced
+- Verify textarea retains focus after actions
+
+**7. History page**
+- Navigate to History, verify chat list loads
+- Search chats, verify filtered results announced
+- Restore a chat, verify redirect to chat page
+- Rename a chat: Enter on rename, type new name, Enter to save
+- Clear history, verify confirmation announced
+
+**8. Git status panel**
+- Verify Git status announced on page load
+- Make a change in the project, verify status updates announced
+- Test error state: disconnect backend, verify error announced politely
+
+**9. Dialog and focus management**
+- Clear conversation: verify dialog opens, focus on Deny button
+- Tab trap: Tab cycles between Deny and Clear buttons
+- Escape closes dialog, focus returns to trigger
+- File preview dialog: Escape closes, focus returns to tree item
+- Context menu: Escape closes, focus returns to tree item
+
+**10. Live region behavior**
+- Verify polite live regions don't interrupt typing
+- Verify assertive live regions (errors) interrupt immediately
+- Test duplicate announcement: same status repeated should re-announce
+- Test streaming tool activity: each item announced as it arrives
 
 #### What to verify
 
@@ -638,7 +723,20 @@ Test the application with keyboard-only workflows and screen readers including J
 - Use **D** to move through dialogs when one is open.
 - Use **E** to move through edit fields.
 - Use **Tab** and **Shift+Tab** for sequential focus movement.
+- Use **R** to move through regions/landmarks.
+- Use **L** to move through lists.
+- Use **K** to move through links.
 - When a live region updates, the screen reader should announce the new status. If identical text is repeated, the app clears and re-sets the live region to force re-announcement.
+
+**JAWS-specific:**
+- Use **Insert+Spacebar, then L** to list live regions
+- Use **Insert+F7** to open the Elements List dialog
+- Test with **Virtual Cursor** on and off for different interaction modes
+
+**NVDA-specific:**
+- Use **NVDA+F7** for Elements List
+- Use **NVDA+F5** for Speech Viewer (helpful for debugging)
+- Test with **Browse Mode** and **Focus Mode**
 
 #### Orca on Linux
 
@@ -646,7 +744,28 @@ Test the application with keyboard-only workflows and screen readers including J
 - Use **Space** to activate buttons and toggle checkboxes.
 - Use **Enter** to open files and confirm actions.
 - Use **Escape** to close dialogs.
+- Use **H** to move between headings.
+- Use **K** to move through links.
+- Use **B** to move through buttons.
+- Use **X** to move through checkboxes.
+- Use **R** to move through regions/landmarks.
 - Orca reads `aria-live` regions automatically when their content changes.
+- Use **Orca+Space** to toggle between flat review and focus tracking modes.
+
+#### VoiceOver on macOS / iOS
+
+- Use **Control+Option+Right/Left Arrow** (VO+arrows) for sequential navigation.
+- Use **Control+Option+Space** (VO+Space) to activate buttons and toggle checkboxes.
+- Use **Control+Option+Shift+Down Arrow** to interact with groups (tables, trees, lists).
+- Use **Control+Option+Shift+Up Arrow** to stop interacting.
+- Use **VO+H** to move between headings.
+- Use **VO+L** to move through links.
+- Use **VO+J** to move through form controls.
+- Use **VO+X** to move through lists.
+- Use **VO+R** to move through landmarks/regions.
+- VoiceOver announces `aria-live` regions when content changes.
+- Use **VO+U** for the Web Rotor to navigate by element type.
+- On iOS: Use **rotor gestures** (two-finger rotate) and **swipe** navigation.
 
 #### Reporting issues
 
@@ -660,6 +779,21 @@ If a screen reader skips an announcement, reads duplicate content, or loses focu
 ### Accessibility testing limitations
 
 Automated tests verify DOM structure, keyboard behaviour, and accessibility-oriented state changes, but they cannot fully validate how each screen reader announces dynamic content. Manual testing remains necessary.
+
+**Known limitations of automated testing:**
+- **jsdom limitations**: The test environment (jsdom) does not fully implement browser accessibility APIs. Some ARIA patterns (e.g., `aria-controls`, `aria-owns`, complex tree interactions) may pass automated tests but fail in real browsers.
+- **Live region timing**: Automated tests cannot verify the timing of live region announcements or whether screen readers actually speak updates.
+- **Focus management**: While tests verify focus moves to expected elements, they cannot verify visual focus indicators or screen reader focus announcements.
+- **Dynamic content**: Streaming responses, tool activity, and real-time updates are difficult to fully test in a simulated environment.
+- **Browser/screen reader combinations**: Each screen reader (JAWS, NVDA, Orca, VoiceOver) has unique behaviors and bugs that only manual testing can uncover.
+- **Electron-specific behaviors**: The Electron shell may have different accessibility tree exposure compared to Chrome/Edge/Firefox.
+
+**Recommended manual testing cadence:**
+- Run automated tests on every PR (CI)
+- Perform manual screen-reader testing before each release
+- Test with at least two screen readers (e.g., NVDA + VoiceOver, or JAWS + NVDA)
+- Include regression testing for previously fixed accessibility issues
+- Document any screen reader specific workarounds in code comments
 
 ## Development guidelines
 

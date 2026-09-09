@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { axe, toHaveNoViolations } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import axios from 'axios';
 import TerminalPanel from './components/TerminalPanel';
+
+expect.extend(toHaveNoViolations);
 
 vi.mock('axios', () => ({
   default: {
@@ -19,6 +22,48 @@ describe('TerminalPanel accessibility', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  test('has no automated accessibility violations', async () => {
+    const { container } = render(<TerminalPanel host={host} />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  test('has no automated accessibility violations with command output', async () => {
+    axios.post.mockResolvedValueOnce({
+      data: { command: 'pwd', returncode: 0, stdout: '/tmp/project\n', stderr: '' },
+    });
+
+    const { container } = render(<TerminalPanel host={host} />);
+    const input = screen.getByLabelText(/^command$/i);
+    fireEvent.change(input, { target: { value: 'pwd' } });
+    fireEvent.submit(input.closest('form'));
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(`${host}/terminal/run`, { command: 'pwd' });
+    });
+
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  test('has no automated accessibility violations with stderr output', async () => {
+    axios.post.mockResolvedValueOnce({
+      data: { command: 'bad', returncode: 1, stdout: '', stderr: 'command not found' },
+    });
+
+    const { container } = render(<TerminalPanel host={host} />);
+    const input = screen.getByLabelText(/^command$/i);
+    fireEvent.change(input, { target: { value: 'bad' } });
+    fireEvent.submit(input.closest('form'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/command not found/i);
+    });
+
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 
   test('renders accessible terminal controls', () => {
