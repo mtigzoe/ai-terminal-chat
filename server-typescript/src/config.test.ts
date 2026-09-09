@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
@@ -8,8 +8,10 @@ import {
   getConfiguredProviderName,
   getEnvInt,
   getEnvString,
+  loadAppConfig,
   loadEnvFile,
   loadServerConfig,
+  persistAppConfig,
   SERVER_HOST,
 } from "./config.js";
 
@@ -151,5 +153,96 @@ describe("loadEnvFile", () => {
 
   after(() => {
     delete process.env.AI_TERMINAL_CHAT_TEST_VAR;
+  });
+});
+
+describe("persistAppConfig concurrency", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "ai-terminal-chat-config-concurrency-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("concurrent writers modify different properties without losing updates", async () => {
+    const configPath = join(dir, "config.json");
+    // Initial config
+    writeFileSync(configPath, '{"project_root":"/tmp/test","provider":"gemini","ollama_base_url":null}\n');
+
+    const NUM_WRITERS = 10;
+    const ITERATIONS_PER_WRITER = 5;
+
+    async function writer(writerId: number) {
+      for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+        // Each writer modifies a different property
+        const payload = loadAppConfig(configPath);
+        payload[`writer_${writerId}_iter_${i}`] = `value_${writerId}_${i}`;
+        persistAppConfig(payload, configPath);
+      }
+    }
+
+    // Launch all writers concurrently
+    await Promise.all(
+      Array.from({ length: NUM_WRITERS }, (_, i) => writer(i))
+    );
+
+    // Verify all writes were persisted
+    const finalConfig = loadAppConfig(configPath);
+    let totalExpected = 0;
+    for (let w = 0; w < NUM_WRITERS; w++) {
+      for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+        const key = `writer_${w}_iter_${i}`;
+        assert.equal(finalConfig[key], `value_${w}_${i}`);
+        totalExpected++;
+      }
+    }
+    // Also verify original properties preserved
+    assert.equal(finalConfig.project_root, "/tmp/test");
+    assert.equal(finalConfig.provider, "gemini");
+    assert.equal(finalConfig.ollama_base_url, null);
+    // Verify we have all expected keys
+    const writerKeys = Object.keys(finalConfig).filter((k) => k.startsWith("writer_"));
+    assert.equal(writerKeys.length, totalExpected);
+  });
+
+  test("concurrent same-property writes: last writer wins but no corruption", async () => {
+    const configPath = join(dir, "config.json");
+    writeFileSync(configPath, '{"counter":0}\n');
+
+    const NUM_WRITERS = 10;
+    const ITERATIONS_PER_WRITER = 5;
+
+    async function writer(writerId: number) {
+      for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+        const payload = loadAppConfig(configPath);
+        payload.counter = writerId * 100 + i; // Each writer uses distinct range
+        persistAppConfig(payload, configPath);
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: NUM_WRITERS }, (_, i) => writer(i))
+    );
+
+    // Config should be valid JSON and contain one of the written values
+    const finalConfig = loadAppConfig(configPath);
+    assert.ok(typeof finalConfig.counter === "number");
+    // The counter should be in the range of written values (0 to 904)
+    assert.ok(finalConfig.counter >= 0 && finalConfig.counter <= 904);
+  });
+
+  test("lock cleanup after success", async () => {
+    const configPath = join(dir, "config.json");
+    writeFileSync(configPath, '{"value":1}\n');
+
+    // Successful write should clean up lock
+    persistAppConfig({ value: 2 }, configPath);
+    const lockPath = join(dir, ".config.config.lock");
+    const fs = await import("node:fs");
+    // Lock file should be cleaned up after successful write
+    assert.ok(!fs.existsSync(lockPath));
   });
 });

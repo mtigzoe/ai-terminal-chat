@@ -17,7 +17,7 @@ import {
   runCommand,
   tokenizeCommand,
 } from "./terminal.ts";
-import { __setProjectRootForTests, __resetProjectRootForTests, runWithAllowedReadPaths } from "./security.ts";
+import { __setProjectRootForTests, __resetProjectRootForTests, runWithAllowedReadPaths, getProjectRoot, setProjectRoot } from "./security.ts";
 import { isToolError } from "./types.ts";
 
 void DANGEROUS_COMMAND_CHARACTERS;
@@ -162,7 +162,9 @@ test("default terminal allowlist defines the expected safe Git inspection comman
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git status"));
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git diff"));
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git log"));
-  assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git branch"));
+  // git branch is now read-only: only --list and --show-current are permitted
+  assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git branch --list"));
+  assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("git branch --show-current"));
 });
 
 test("terminal allowlist uses complete prefixes rather than partial words", () => {
@@ -298,5 +300,110 @@ test("runCommand rejects chained/pipe/redirect commands even when the first toke
   assert.ok(isToolError(r5), "backtick substitution must be rejected");
   const r6 = await runCommand("git status $(whoami)");
   assert.ok(isToolError(r6), "$() substitution must be rejected");
+});
+
+// Git branch destructive options rejected
+test("git branch -d main is rejected", async () => {
+  const result = await runCommand("git branch -d main");
+  assert.ok(isToolError(result), "destructive git branch commands must be rejected");
+});
+
+test("git branch -D main is rejected", async () => {
+  const result = await runCommand("git branch -D main");
+  assert.ok(isToolError(result));
+});
+
+test("git branch -m main renamed is rejected", async () => {
+  const result = await runCommand("git branch -m main renamed");
+  assert.ok(isToolError(result));
+});
+
+test("git branch -M main renamed is rejected", async () => {
+  const result = await runCommand("git branch -M main renamed");
+  assert.ok(isToolError(result));
+});
+
+test("git branch -c main copied is rejected", async () => {
+  const result = await runCommand("git branch -c main copied");
+  assert.ok(isToolError(result));
+});
+
+test("git branch -C main copied is rejected", async () => {
+  const result = await runCommand("git branch -C main copied");
+  assert.ok(isToolError(result));
+});
+
+test("git branch --delete main is rejected", async () => {
+  const result = await runCommand("git branch --delete main");
+  assert.ok(isToolError(result));
+});
+
+test("git branch --move main renamed is rejected", async () => {
+  const result = await runCommand("git branch --move main renamed");
+  assert.ok(isToolError(result));
+});
+
+test("git branch --copy main copied is rejected", async () => {
+  const result = await runCommand("git branch --copy main copied");
+  assert.ok(isToolError(result));
+});
+
+test("git branch -Dmain (no space) is rejected", async () => {
+  const result = await runCommand("git branch -Dmain");
+  assert.ok(isToolError(result));
+});
+
+test("git branch -dfoo (unknown flag) is rejected as unknown command", async () => {
+  const result = await runCommand("git branch -dfoo");
+  // This might be rejected as an unknown flag or as blocked - either is fine
+  assert.ok(isToolError(result));
+});
+
+test("read-only git branch --list is allowed", async () => {
+  // Need a git repo for this to work
+  const repoDir = join(tmpdir(), `git-branch-list-${Date.now()}`);
+  import("node:fs").then((fs) => fs.mkdirSync(repoDir, { recursive: true }));
+  const { spawnSync } = await import("node:child_process");
+  spawnSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+  writeFileSync(join(repoDir, "file.txt"), "content");
+  spawnSync("git", ["add", "file.txt"], { cwd: repoDir, stdio: "ignore" });
+  spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+  const originalRoot = getProjectRoot();
+  setProjectRoot(repoDir);
+
+  try {
+    await runWithAllowedReadPaths([], async () => {
+      const result = await runCommand("git branch --list");
+      assert.ok(!isToolError(result));
+      assert.ok(String(result.stdout).includes("main") || String(result.stdout).includes("master"));
+    });
+  } finally {
+    setProjectRoot(originalRoot);
+    import("node:fs").then((fs) => fs.rmSync(repoDir, { recursive: true, force: true }));
+  }
+});
+
+test("read-only git branch --show-current is allowed", async () => {
+  const repoDir = join(tmpdir(), `git-branch-current-${Date.now()}`);
+  import("node:fs").then((fs) => fs.mkdirSync(repoDir, { recursive: true }));
+  const { spawnSync } = await import("node:child_process");
+  spawnSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+  writeFileSync(join(repoDir, "file.txt"), "content");
+  spawnSync("git", ["add", "file.txt"], { cwd: repoDir, stdio: "ignore" });
+  spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+  const originalRoot = getProjectRoot();
+  setProjectRoot(repoDir);
+
+  try {
+    await runWithAllowedReadPaths([], async () => {
+      const result = await runCommand("git branch --show-current");
+      assert.ok(!isToolError(result));
+      const out = String(result.stdout).trim();
+      assert.ok(out === "main" || out === "master");
+    });
+  } finally {
+    setProjectRoot(originalRoot);
+    import("node:fs").then((fs) => fs.rmSync(repoDir, { recursive: true, force: true }));
+  }
 });
 

@@ -20,7 +20,8 @@ const execFileAsync = promisify(execFile);
 
 export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "git status",
-  "git branch",
+  "git branch --list",
+  "git branch --show-current",
   "git log",
   "git diff",
   "git show",
