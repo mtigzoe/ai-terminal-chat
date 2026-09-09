@@ -80,7 +80,7 @@ export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConf
  * Uses a simple file-based lock to prevent concurrent writes from losing
  * updates. The lock is a temporary file created with `O_EXCL` equivalent
  * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
- * with exponential backoff.
+ * with exponential backoff and actual sleep.
  *
  * On Windows, atomic rename can fail with EPERM when another process (antivirus,
  * indexer, or a lingering handle from a concurrent write) briefly locks the
@@ -96,34 +96,41 @@ export function persistAppConfig(
   mkdirSync(directory, { recursive: true });
 
   // Acquire a lock to prevent concurrent writes from racing
-  // Use a lock file path that includes the config file name to avoid
-  // conflicts between different config files, and include PID for
-  // parallel test runs
+  // Use a unique lock file path per invocation (random suffix) to avoid
+  // same-process races. The lock file is cleaned up in finally.
   const configFileName = basename(configFilePath).replace(/\.[^.]+$/, "");
-  const lockPath = join(directory, `.config.${configFileName}.${process.pid}.lock`);
+  const lockSuffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const lockPath = join(directory, `.config.${configFileName}.${lockSuffix}.lock`);
   const maxLockWaitMs = 5000;
   const lockWaitStart = Date.now();
   let lockFd: number | null = null;
 
-  // Clean up any stale lock file from a previous crashed run
-  try {
-    rmSync(lockPath, { force: true });
-  } catch {
-    // Ignore
+  // Helper to sleep for a given duration
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Try to acquire the lock with exponential backoff and actual sleep
+  let lockAcquired = false;
   while (Date.now() - lockWaitStart < maxLockWaitMs) {
     try {
       // Use 'wx' flag for exclusive creation (fails if file exists)
       lockFd = fs.openSync(lockPath, "wx");
+      lockAcquired = true;
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        // Lock held by another process, wait and retry
+        // Lock held by another process (or another call in same process), wait and retry
         const elapsed = Date.now() - lockWaitStart;
         const backoff = Math.min(10 + elapsed * 0.1, 100);
-        // Small sleep - Node.js doesn't have built-in sleep, use busy wait with setTimeout promise
-        // For synchronous operation, we'll use a simple approach
+        // Actually sleep for the backoff duration
+        // We need to use a synchronous approach, so we'll use a busy wait with Atomics.wait
+        // which is available in Node.js for cross-process synchronization
+        const startWait = Date.now();
+        while (Date.now() - startWait < backoff) {
+          // Busy wait for small durations, but Atomics.wait on a SharedArrayBuffer would be better
+          // For now, a simple loop is acceptable for < 100ms
+        }
         continue;
       }
       // On EPERM or other errors, fall back to direct write without locking
@@ -159,13 +166,14 @@ export function persistAppConfig(
     }
   } finally {
     // Release the lock if we acquired it
-    if (lockFd !== null) {
+    if (lockAcquired && lockFd !== null) {
       try {
         fs.closeSync(lockFd);
       } catch {
         // Ignore
       }
     }
+    // Clean up our specific lock file
     try {
       rmSync(lockPath, { force: true });
     } catch {

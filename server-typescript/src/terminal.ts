@@ -81,6 +81,13 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git commit",
   "git pull",
   "git add",
+  // Destructive git branch options (read-only "git branch --list" is safe)
+  "git branch -d",
+  "git branch -D",
+  "git branch -m",
+  "git branch -M",
+  "git branch -c",
+  "git branch -C",
 ] as const;
 
 const COMMAND_TIMEOUT_MS = 60_000;
