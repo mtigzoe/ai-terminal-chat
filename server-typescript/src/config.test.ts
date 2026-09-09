@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   getConfiguredProviderName,
@@ -258,61 +259,46 @@ describe("persistAppConfig concurrency", () => {
 
     // Writer B: run in a separate process to genuinely test lock contention.
     // This avoids the event-loop blocking issue of Atomics.wait in the main test process.
+    // Writer B imports and calls the REAL persistAppConfig() from the compiled dist.
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const distPath = join(__dirname, "..", "dist", "config.js");
+    // Convert to file:// URL for ESM import on Windows
+    const distUrl = "file:///" + distPath.replace(/\\/g, "/");
     const { spawn } = await import("node:child_process");
     const child = spawn(process.execPath, [
+      "--experimental-vm-modules",
       "-e",
       `
-        const fs = require("fs");
-        const path = require("path");
-        const lockPath = process.argv[2];
+        import { persistAppConfig } from "${distUrl}";
+        const configPath = process.argv[2];
         const maxLockWaitMs = 200;
-        const lockWaitStart = Date.now();
-
-        function sleepSync(ms) {
-          if (ms <= 0) return;
-          const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-          const view = new Int32Array(buffer);
-          Atomics.wait(view, 0, 0, ms);
-        }
-
-        let lockFd = null;
-        let lockAcquired = false;
-
-        while (Date.now() - lockWaitStart < maxLockWaitMs) {
-          try {
-            lockFd = fs.openSync(lockPath, "wx");
-            lockAcquired = true;
-            break;
-          } catch (err) {
-            if (err.code === "EEXIST") {
-              const elapsed = Date.now() - lockWaitStart;
-              const backoff = Math.min(10 + elapsed * 0.1, 100);
-              sleepSync(backoff);
-              continue;
-            }
-            throw err;
+        
+        try {
+          // This will use the production locking implementation with the short timeout
+          await persistAppConfig({ value: 2 }, configPath);
+          // If we get here, we acquired the lock (shouldn't happen in this test)
+          process.exit(0);
+        } catch (err) {
+          if (err.message?.includes("Could not acquire config lock")) {
+            process.exit(1); // timeout - expected
           }
+          throw err;
         }
-
-        if (!lockAcquired) {
-          process.exit(1); // timeout - expected
-        }
-
-        // If we got here, we acquired the lock (shouldn't happen in this test)
-        if (lockFd !== null) {
-          fs.closeSync(lockFd);
-        }
-        fs.rmSync(lockPath, { force: true });
-        process.exit(0);
       `,
-      lockPath,
+      configPath,
     ], {
       cwd: dir,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     let timedOut = false;
     let exited = false;
+
+    // Capture stderr to detect any errors
+    child.stderr?.on("data", (data) => {
+      console.error("Worker stderr:", data.toString());
+    });
 
     await new Promise<void>((resolve) => {
       child.on("exit", (code) => {
@@ -331,16 +317,22 @@ describe("persistAppConfig concurrency", () => {
           timedOut = true;
           resolve();
         }
-      }, 1000);
+      }, 2000);
     });
 
     // Verify: Writer A's lock was NOT deleted by Writer B
     assert.ok(fs.existsSync(lockPath), "Writer A's lock must still exist");
     assert.ok(timedOut, "Writer B should have timed out waiting for lock");
 
-    // Clean up Writer A's lock
+    // Release Writer A's lock
     fs.closeSync(lockFdA);
     fs.rmSync(lockPath, { force: true });
+
+    // Verify that after releasing Writer A's lock, a normal persistAppConfig() succeeds
+    persistAppConfig({ value: 3 }, configPath);
+    const finalConfig = loadAppConfig(configPath);
+    assert.equal(finalConfig.value, 3);
+    assert.ok(!fs.existsSync(lockPath), "Lock should be cleaned up after successful write");
   });
 
   test("lock file is created and deleted correctly", async () => {
