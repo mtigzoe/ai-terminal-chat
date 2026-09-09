@@ -72,6 +72,13 @@ async function sendMessage(text) {
   fireEvent.click(getSendButton());
 }
 
+// Helper to mock the confirmation resolution response
+function mockConfirmResponse(cancelled = true) {
+  axiosInstance.post.mockResolvedValueOnce({
+    data: { result: { cancelled } },
+  });
+}
+
 describe('ConfirmationDialog accessibility', () => {
   test('is labelled with aria-labelledby and described by dynamic preview text', () => {
     render(<App />);
@@ -95,6 +102,7 @@ describe('ConfirmationDialog accessibility', () => {
     fireEvent.click(trigger);
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    mockConfirmResponse(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -157,7 +165,7 @@ describe('ConfirmationDialog variant: clear conversation', () => {
 
     const dialog = screen.getByRole('dialog', { name: /clear conversation\?/i });
     expect(dialog).toHaveAttribute('aria-labelledby', 'clear-conversation-title');
-    expect(screen.getById('clear-conversation-title')).toHaveTextContent(/clear conversation\?/i);
+    expect(document.getElementById('clear-conversation-title')).toHaveTextContent(/clear conversation\?/i);
   });
 
   test('aria-describedby points to existing description elements', () => {
@@ -166,7 +174,7 @@ describe('ConfirmationDialog variant: clear conversation', () => {
 
     const dialog = screen.getByRole('dialog', { name: /clear conversation\?/i });
     expect(dialog).toHaveAttribute('aria-describedby', 'clear-conversation-description');
-    expect(screen.getById('clear-conversation-description')).toBeInTheDocument();
+    expect(document.getElementById('clear-conversation-description')).toBeInTheDocument();
   });
 
   test('has accessible title and meaningful description', () => {
@@ -228,6 +236,7 @@ describe('ConfirmationDialog variant: clear conversation', () => {
     fireEvent.click(trigger);
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    mockConfirmResponse(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -253,19 +262,23 @@ describe('ConfirmationDialog variant: clear conversation', () => {
 describe('ConfirmationDialog variant: file read permission', () => {
   test('has no automated accessibility violations', async () => {
     // Mock a file read permission pending confirmation
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-            preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+              preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -276,19 +289,23 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('has role=dialog and aria-modal=true', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-            preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+              preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -299,127 +316,151 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('title is "File access requested" for read permission', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
 
     const dialog = await screen.findByRole('dialog', { name: /file access requested/i });
     expect(dialog).toBeInTheDocument();
-    expect(screen.getById('confirmation-dialog-title')).toHaveTextContent(/file access requested/i);
+    expect(document.getElementById('confirmation-dialog-title')).toHaveTextContent(/file access requested/i);
   });
 
   test('includes file path in description', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
 
     await screen.findByRole('dialog');
-    expect(screen.getById('confirmation-dialog-description')).toHaveTextContent(/secret\.txt/i);
+    expect(document.getElementById('confirmation-dialog-description')).toHaveTextContent(/secret\.txt/i);
   });
 
   test('includes preview text in aria-describedby when present', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-            preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+              preview: { path: 'secret.txt', message: 'This file contains sensitive data.' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveAttribute('aria-describedby', expect.stringContaining('confirmation-dialog-preview'));
-    expect(screen.getById('confirmation-dialog-preview')).toHaveTextContent(/sensitive data/i);
+    expect(document.getElementById('confirmation-dialog-preview')).toHaveTextContent(/sensitive data/i);
   });
 
   test('omits preview element when preview is absent', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
 
     await screen.findByRole('dialog');
-    expect(screen.queryById('confirmation-dialog-preview')).not.toBeInTheDocument();
+    expect(document.getElementById('confirmation-dialog-preview')).toBeNull();
   });
 
   test('includes safety text specific to file read permission', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
 
     await screen.findByRole('dialog');
-    expect(screen.getById('confirmation-dialog-safety')).toHaveTextContent(/add this file to the agent selection/i);
+    expect(document.getElementById('confirmation-dialog-safety')).toHaveTextContent(/add this file to the agent selection/i);
   });
 
   test('initial focus goes to allow button for file read permission', async () => {
     // Note: ConfirmationDialog focuses allowRef by default (line 33 in App.jsx)
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -429,18 +470,22 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -458,18 +503,22 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('Shift+Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -484,23 +533,28 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('Escape closes the dialog and returns focus to trigger', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
 
     const dialog = await screen.findByRole('dialog');
+    mockConfirmResponse(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -508,19 +562,23 @@ describe('ConfirmationDialog variant: file read permission', () => {
   });
 
   test('no duplicate or stale aria IDs', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'read-1',
-            name: 'read_file_permission',
-            args: { path: 'secret.txt' },
-            preview: { path: 'secret.txt', message: 'Preview text' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'read-1',
+              name: 'read_file_permission',
+              args: { path: 'secret.txt' },
+              preview: { path: 'secret.txt', message: 'Preview text' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('read secret.txt');
@@ -541,19 +599,23 @@ describe('ConfirmationDialog variant: file read permission', () => {
 
 describe('ConfirmationDialog variant: tool confirmation', () => {
   test('has no automated accessibility violations', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt', content: 'Hello' },
-            preview: { message: 'Create a new file with content.' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt', content: 'Hello' },
+              preview: { path: 'notes.txt', message: 'Create a new file with content.' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -564,18 +626,23 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('has role=dialog and aria-modal=true', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+              preview: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -586,127 +653,151 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('title is "Confirmation required" for tool confirmation', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
 
     const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
     expect(dialog).toBeInTheDocument();
-    expect(screen.getById('confirmation-dialog-title')).toHaveTextContent(/confirmation required/i);
+    expect(document.getElementById('confirmation-dialog-title')).toHaveTextContent(/confirmation required/i);
   });
 
   test('includes tool name and args in description', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt', content: 'Hello' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt', content: 'Hello' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
 
     await screen.findByRole('dialog');
-    expect(screen.getById('confirmation-dialog-description')).toHaveTextContent(/write_file/i);
-    expect(screen.getById('confirmation-dialog-description')).toHaveTextContent(/notes\.txt/i);
+    expect(document.getElementById('confirmation-dialog-description')).toHaveTextContent(/write_file/i);
+    expect(document.getElementById('confirmation-dialog-description')).toHaveTextContent(/notes\.txt/i);
   });
 
   test('includes preview text when present', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-            preview: { message: 'Create a new file with content.' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+              preview: { path: 'notes.txt', message: 'Create a new file with content.' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveAttribute('aria-describedby', expect.stringContaining('confirmation-dialog-preview'));
-    expect(screen.getById('confirmation-dialog-preview')).toHaveTextContent(/create a new file/i);
+    expect(document.getElementById('confirmation-dialog-preview')).toHaveTextContent(/create a new file/i);
   });
 
   test('omits preview element when preview is absent', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
 
     await screen.findByRole('dialog');
-    expect(screen.queryById('confirmation-dialog-preview')).not.toBeInTheDocument();
+    expect(document.getElementById('confirmation-dialog-preview')).toBeNull();
   });
 
   test('includes generic safety text for tool confirmation', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
 
     await screen.findByRole('dialog');
-    expect(screen.getById('confirmation-dialog-safety')).toHaveTextContent(/nothing will be changed unless you choose allow/i);
+    expect(document.getElementById('confirmation-dialog-safety')).toHaveTextContent(/nothing will be changed unless you choose allow/i);
   });
 
   test('initial focus goes to allow button for tool confirmation', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -716,18 +807,22 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -745,18 +840,22 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('Shift+Tab remains trapped inside the dialog', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -771,23 +870,28 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('Escape closes the dialog and returns focus to trigger', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
 
     const dialog = await screen.findByRole('dialog');
+    mockConfirmResponse(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -795,19 +899,23 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
   });
 
   test('no duplicate or stale aria IDs', async () => {
-    axiosInstance.post.mockResolvedValueOnce({
-      data: {
-        tool_activity: [
-          {
-            type: 'pending_confirmation',
-            action_id: 'write-1',
-            name: 'write_file',
-            args: { path: 'notes.txt' },
-            preview: { message: 'Preview text' },
-          },
-        ],
-      },
-    });
+    axiosInstance.post
+      .mockResolvedValueOnce({
+        data: {
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'write-1',
+              name: 'write_file',
+              args: { path: 'notes.txt' },
+              preview: { message: 'Preview text' },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { result: { cancelled: true } },
+      });
 
     render(<App />);
     await sendMessage('create notes.txt');
@@ -836,6 +944,7 @@ describe('ConfirmationDialog: cross-variant behavior', () => {
     expect(results).toHaveNoViolations();
 
     // Close dialog
+    mockConfirmResponse(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
@@ -847,6 +956,7 @@ describe('ConfirmationDialog: cross-variant behavior', () => {
     const clearDialog = screen.getByRole('dialog');
     expect(within(clearDialog).getByRole('button', { name: /^cancel$/i })).toHaveFocus();
 
+    mockConfirmResponse(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
@@ -859,6 +969,7 @@ describe('ConfirmationDialog: cross-variant behavior', () => {
     within(clearDialog).getByRole('button', { name: /^cancel$/i });
     within(clearDialog).getByRole('button', { name: /^clear conversation$/i });
 
+    mockConfirmResponse(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
