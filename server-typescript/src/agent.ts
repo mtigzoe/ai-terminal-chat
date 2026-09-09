@@ -1,6 +1,18 @@
 import { Provider, ProviderResponse, ToolCall } from "./providers/base.ts";
 import type { PendingAction, ResumeState } from "./pending.ts";
 
+/**
+ * Tokenize a shell command string, matching Python's shlex.split(posix=False)
+ * behavior. This is used for direct command parsing (e.g., "read file.txt",
+ * "git add path").
+ *
+ * Key behaviors (posix=False):
+ * - Outside quotes: backslash is NOT an escape character; it's literal
+ * - Inside double quotes: backslash escapes only '"' and '\\'
+ * - Inside single quotes: no escaping; everything is literal until closing quote
+ * - Quote characters are not included in the output tokens
+ * - Whitespace separates tokens unless quoted
+ */
 function tokenizeShellCommand(command: string): string[] {
   const tokens: string[] = [];
   let current = "";
@@ -9,32 +21,7 @@ function tokenizeShellCommand(command: string): string[] {
   while (i < command.length) {
     const char = command[i];
 
-    if (char === "\\" && i + 1 < command.length) {
-      current += command[i + 1];
-      i += 2;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      const quote = char;
-      current += quote;
-      i++;
-      while (i < command.length && command[i] !== quote) {
-        if (command[i] === "\\" && i + 1 < command.length) {
-          current += command[i + 1];
-          i += 2;
-        } else {
-          current += command[i];
-          i++;
-        }
-      }
-      if (i < command.length) {
-        current += quote;
-        i++;
-      }
-      continue;
-    }
-
+    // Whitespace separates tokens (outside quotes)
     if (/\s/.test(char)) {
       if (current) {
         tokens.push(current);
@@ -44,6 +31,44 @@ function tokenizeShellCommand(command: string): string[] {
       continue;
     }
 
+    // Double-quoted string
+    if (char === '"') {
+      i++;
+      while (i < command.length) {
+        const c = command[i];
+        if (c === '"') {
+          i++;
+          break;
+        }
+        // Inside double quotes, backslash escapes only " and \
+        if (c === "\\" && i + 1 < command.length) {
+          const next = command[i + 1];
+          if (next === '"' || next === "\\") {
+            current += next;
+            i += 2;
+            continue;
+          }
+        }
+        current += c;
+        i++;
+      }
+      continue;
+    }
+
+    // Single-quoted string (no escaping inside)
+    if (char === "'") {
+      i++;
+      while (i < command.length && command[i] !== "'") {
+        current += command[i];
+        i++;
+      }
+      if (i < command.length && command[i] === "'") {
+        i++;
+      }
+      continue;
+    }
+
+    // Regular character (outside quotes, backslash is literal)
     current += char;
     i++;
   }

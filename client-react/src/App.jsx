@@ -177,26 +177,54 @@ function App() {
       const nextPending = resumed ? response.data.pending_confirmation || null : null;
       const finalText = resumed ? (response.data.text || '') : '';
 
-      setStreamToolActivity((current) => [...current, ...newActivityItems]);
-      setData((current) => {
-        const lastModelIndex = current.map((message) => message.role).lastIndexOf('model');
-        if (lastModelIndex === -1) return current;
-        return current.map((message, index) => {
-          if (index !== lastModelIndex) return message;
-          const updated = { ...message, toolActivity: [...(message.toolActivity || []), ...newActivityItems] };
-          if (finalText) {
-            const priorText = message.parts?.[0]?.text || '';
-            updated.parts = [{ text: priorText ? `${priorText}\n\n${finalText}` : finalText }];
-          }
-          return updated;
+      // In streaming mode, the in-progress response is in `answer` state, not `data`.
+      // Append the confirmation results to the streaming buffer.
+      if (is_stream) {
+        setStreamToolActivity((current) => [...current, ...newActivityItems]);
+        if (finalText) {
+          setAnswer((currentAnswer) => currentAnswer ? `${currentAnswer}\n\n${finalText}` : finalText);
+        }
+      } else {
+        setStreamToolActivity((current) => [...current, ...newActivityItems]);
+        setData((current) => {
+          const lastModelIndex = current.map((message) => message.role).lastIndexOf('model');
+          if (lastModelIndex === -1) return current;
+          return current.map((message, index) => {
+            if (index !== lastModelIndex) return message;
+            const updated = { ...message, toolActivity: [...(message.toolActivity || []), ...newActivityItems] };
+            if (finalText) {
+              const priorText = message.parts?.[0]?.text || '';
+              updated.parts = [{ text: priorText ? `${priorText}\n\n${finalText}` : finalText }];
+            }
+            return updated;
+          });
         });
-      });
+      }
 
       if (nextPending) {
         setPendingConfirmation(nextPending);
         setAgentStatus(statusFromPendingConfirmation(nextPending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false });
       } else {
         setPendingConfirmation(null);
+        // In streaming mode, move the completed response from the streaming buffer to data
+        if (is_stream) {
+          setData((current) => {
+            const lastModelIndex = current.map((message) => message.role).lastIndexOf('model');
+            if (lastModelIndex === -1) return current;
+            return current.map((message, index) => {
+              if (index !== lastModelIndex) return message;
+              const updated = { ...message, toolActivity: [...(message.toolActivity || []), ...newActivityItems] };
+              if (finalText) {
+                const priorText = message.parts?.[0]?.text || '';
+                updated.parts = [{ text: priorText ? `${priorText}\n\n${finalText}` : finalText }];
+              }
+              return updated;
+            });
+          });
+          setStreamdiv(false);
+          setAnswer('');
+          setStreamToolActivity([]);
+        }
         if (resumed && response.data?.cancelled && !confirmed) {
           setAgentStatus({ phase: 'cancelled', message: 'Action declined by user.', assertive: false });
         } else if (resumed && response.data?.error && !finalText) {

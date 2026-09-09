@@ -402,6 +402,121 @@ describe('tool confirmation resolution', () => {
   });
 });
 
+describe('streaming tool confirmation resolution', () => {
+  function enableStreaming() {
+    const toggle = screen.getByRole('button', { name: /Stream response/ });
+    fireEvent.click(toggle);
+    if (toggle.getAttribute('aria-pressed') !== 'true') {
+      fireEvent.click(toggle);
+    }
+  }
+
+  test('resolves confirmation during streaming and appends final text to streaming buffer', async () => {
+    // First, the stream returns a pending_confirmation event
+    const streamChunks = [
+      JSON.stringify({ type: 'progress', phase: 'plan', message: 'Planning next step' }) + '\n',
+      JSON.stringify({ type: 'tool_call', name: 'write_file', args: { path: 'notes.txt' } }) + '\n',
+      JSON.stringify({ type: 'pending_confirmation', action_id: 'abc123', name: 'write_file', args: { path: 'notes.txt' } }) + '\n',
+    ];
+    global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(streamChunks));
+
+    render(<App />);
+    enableStreaming();
+    await sendMessage('write notes.txt');
+
+    // Wait for the confirmation dialog to appear
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+    expect(dialog).toBeInTheDocument();
+
+    // Resolve the confirmation - /confirm returns resumed loop results
+    axios.post.mockResolvedValueOnce({
+      data: {
+        confirmed: true,
+        action_id: 'abc123',
+        tool: 'write_file',
+        result: { written: true, path: 'notes.txt' },
+        tool_activity: [
+          { type: 'tool_result', name: 'write_file', result: { written: true, path: 'notes.txt' } },
+        ],
+        text: 'File written successfully.',
+        request_id: 'req-1',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    // Dialog should close
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    // After confirmation, the final text should appear in the conversation
+    await screen.findByText('File written successfully.');
+  });
+
+  test('handles multiple confirmations during streaming', async () => {
+    // Stream returns first confirmation
+    const streamChunks = [
+      JSON.stringify({ type: 'progress', phase: 'plan', message: 'Planning next step' }) + '\n',
+      JSON.stringify({ type: 'tool_call', name: 'git_add', args: { path: 'file.txt' } }) + '\n',
+      JSON.stringify({ type: 'pending_confirmation', action_id: 'add-1', name: 'git_add', args: { path: 'file.txt' } }) + '\n',
+    ];
+    global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(streamChunks));
+
+    render(<App />);
+    enableStreaming();
+    await sendMessage('add and commit file.txt');
+
+    await screen.findByRole('dialog', { name: /confirmation required/i });
+
+    // First confirmation resolves and returns second confirmation
+    axios.post.mockResolvedValueOnce({
+      data: {
+        confirmed: true,
+        action_id: 'add-1',
+        tool: 'git_add',
+        result: { staged: true, path: 'file.txt' },
+        tool_activity: [
+          { type: 'tool_result', name: 'git_add', result: { staged: true, path: 'file.txt' } },
+          { type: 'pending_confirmation', action_id: 'commit-1', name: 'git_commit', args: { message: 'add file' } },
+        ],
+        pending_confirmation: { type: 'pending_confirmation', action_id: 'commit-1', name: 'git_commit', args: { message: 'add file' } },
+        text: '',
+        request_id: 'req-1',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    // Second confirmation dialog should appear
+    await waitFor(() => {
+      expect(screen.getAllByRole('dialog', { name: /confirmation required/i })).toHaveLength(1);
+    });
+    const secondDialog = screen.getByRole('dialog', { name: /confirmation required/i });
+    expect(within(secondDialog).getByText(/git_commit/i)).toBeInTheDocument();
+
+    // Second confirmation resolves with final text
+    axios.post.mockResolvedValueOnce({
+      data: {
+        confirmed: true,
+        action_id: 'commit-1',
+        tool: 'git_commit',
+        result: { committed: true },
+        tool_activity: [{ type: 'tool_result', name: 'git_commit', result: { committed: true } }],
+        text: 'Added and committed file.txt.',
+        request_id: 'req-1',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    await screen.findByText('Added and committed file.txt.');
+  });
+});
+
 describe('allowed_paths from project selection', () => {
   afterEach(() => {
     try {

@@ -61,6 +61,10 @@ function getActiveProvider(): Provider {
  * that the runtime configuration matches what the user selected through
  * /providers/select. Matches Python parity for provider/model restoration;
  * the env re-application step is what closes the Ollama-URL restoration gap.
+ *
+ * When the persisted provider is NOT Ollama, we must clear any stale
+ * OLLAMA_BASE_URL from the environment to prevent it from being picked up
+ * by a subsequent provider switch to Ollama without an explicit base URL.
  */
 export function restoreProviderFromConfig(): void {
   try {
@@ -76,6 +80,11 @@ export function restoreProviderFromConfig(): void {
         saved.ollama_base_url.trim()
       ) {
         applyOllamaBaseUrlToEnv(saved.ollama_base_url.trim());
+      } else {
+        // Saved provider is not Ollama - clear any stale OLLAMA_BASE_URL
+        // from the environment to avoid contaminating a future switch to
+        // Ollama that doesn't provide an explicit base URL.
+        delete process.env.OLLAMA_BASE_URL;
       }
 
       activeProvider = getProvider(
