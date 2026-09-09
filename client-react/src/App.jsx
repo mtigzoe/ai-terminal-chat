@@ -104,6 +104,7 @@ function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [confirmationResolving, setConfirmationResolving] = useState(false);
   const confirmingRef = useRef(false);
+  const awaitingConfirmationRef = useRef(false);
   const [pathForTerminal, setPathForTerminal] = useState(null);
   const [chatId, setChatId] = useState(() => {
     try { const saved = localStorage.getItem('ai-terminal-chat:current-chat-id'); if (saved) return saved; } catch { /* ignore */ }
@@ -177,9 +178,12 @@ function App() {
       const nextPending = resumed ? response.data.pending_confirmation || null : null;
       const finalText = resumed ? (response.data.text || '') : '';
 
-      // In streaming mode, the in-progress response is in `answer` state, not `data`.
-      // Append the confirmation results to the streaming buffer.
+      // Clear the awaiting confirmation flag since we're now processing the response
+      awaitingConfirmationRef.current = false;
+
       if (is_stream) {
+        // In streaming mode, the in-progress response is in `answer` state, not `data`.
+        // Append the confirmation results to the streaming buffer.
         setStreamToolActivity((current) => [...current, ...newActivityItems]);
         if (finalText) {
           setAnswer((currentAnswer) => currentAnswer ? `${currentAnswer}\n\n${finalText}` : finalText);
@@ -202,15 +206,20 @@ function App() {
       }
 
       if (nextPending) {
+        // Another confirmation is required - show the next dialog
         setPendingConfirmation(nextPending);
         setAgentStatus(statusFromPendingConfirmation(nextPending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false });
       } else {
+        // All confirmations resolved - commit the final response
         setPendingConfirmation(null);
-        // In streaming mode, move the completed response from the streaming buffer to data
         if (is_stream) {
+          // Move the completed response from the streaming buffer to data
           setData((current) => {
             const lastModelIndex = current.map((message) => message.role).lastIndexOf('model');
-            if (lastModelIndex === -1) return current;
+            if (lastModelIndex === -1) {
+              // No model message yet (shouldn't happen normally, but handle gracefully)
+              return [...current, { role: 'model', parts: [{ text: finalText || '' }], toolActivity: newActivityItems }];
+            }
             return current.map((message, index) => {
               if (index !== lastModelIndex) return message;
               const updated = { ...message, toolActivity: [...(message.toolActivity || []), ...newActivityItems] };
@@ -221,7 +230,7 @@ function App() {
               return updated;
             });
           });
-          setStreamdiv(false);
+          showStreamdiv(false);
           setAnswer('');
           setStreamToolActivity([]);
         }
@@ -242,6 +251,9 @@ function App() {
             assertive: false,
           });
         }
+        // Ensure waiting is cleared and focus restored
+        setWaiting(false);
+        window.setTimeout(() => inputRef.current?.focus(), 0);
       }
     } catch (error) {
       const message = getErrorMessage(error, 'Could not resolve confirmation.');
@@ -251,12 +263,12 @@ function App() {
       // leaving Allow wired to an id that can only ever return 404 from here on.
       if (error?.response) {
         setPendingConfirmation(null);
+        awaitingConfirmationRef.current = false;
         setStreamToolActivity((current) => [...current, { type: 'tool_result', name: action.name, result: { error: message } }]);
       }
     } finally {
       confirmingRef.current = false;
       setConfirmationResolving(false);
-      window.setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
 
@@ -269,7 +281,141 @@ function App() {
 
   const handleClick = (message) => { if (validationCheck(message)) return; if (!is_stream) handleNonStreamingChat(message); else handleStreamingChat(message); };
   const handleNonStreamingChat = async (message) => { const requestId = generateRequestId(); requestIdRef.current = requestId; const controller = new AbortController(); abortControllerRef.current = controller; const resolvedAllowedPaths = resolveAllowedPaths(); const userInstructions = resolveUserInstructions(); const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions }; const ndata = [...data, { role: "user", parts: [{ text: message }] }]; flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); }); executeScroll(); const headerConfig = { headers: { 'Content-Type': 'application/json;charset=UTF-8' }, signal: controller.signal }; const fetchData = async () => { let modelResponse = ""; let toolActivity = []; let cancelled = false; try { const response = await axios.post(url, chatData, headerConfig); modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled); const pending = toolActivity.find((item) => item.type === 'pending_confirmation'); if (pending) { setPendingConfirmation(pending); setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false }); } else if (cancelled) { if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false }); } else { const status = statusFromToolActivity(toolActivity); if (status) setAgentStatus(status); else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } } catch (error) { if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") { cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); } } finally { if (abortControllerRef.current === controller) abortControllerRef.current = null; requestIdRef.current = null; const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }]; flushSync(() => { setData(updatedData); setWaiting(false); }); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0); } }; fetchData(); };
-  const handleStreamingChat = async (message) => { const resolvedAllowedPaths = resolveAllowedPaths(); const userInstructions = resolveUserInstructions(); const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions }; const ndata = [...data, { role: "user", parts: [{ text: message }] }]; flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); }); executeScroll(); const headerConfig = { Accept: "application/x-ndjson, text/plain", "Content-Type": "application/json" }; const fetchStreamData = async () => { let modelResponse = ""; let toolActivity = []; let cancelled = false; const requestId = generateRequestId(); requestIdRef.current = requestId; chatData.request_id = requestId; const controller = new AbortController(); abortControllerRef.current = controller; const handleEvent = (event) => { if (!event || typeof event !== "object") return; if (event.type === "progress") { const status = statusFromProgressEvent(event); if (status) setAgentStatus(status); toolActivity.push({ type: "progress", phase: event.phase, message: event.message }); setStreamToolActivity([...toolActivity]); return; } if (event.type === "pending_confirmation") { const status = statusFromPendingConfirmation(event); if (status) setAgentStatus(status); toolActivity.push(event); setStreamToolActivity([...toolActivity]); setPendingConfirmation(event); return; } if (event.type === "text" || event.type === "final") { const text = event.text || ""; modelResponse += text; setAnswer((currentAnswer) => currentAnswer + text); if (event.type === "final") setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } else if (event.type === "tool_call" || event.type === "tool_result") { const activity = { type: event.type, name: event.name }; if (event.type === "tool_call") activity.args = event.args || {}; else activity.result = event.result || {}; toolActivity.push(activity); setStreamToolActivity([...toolActivity]); } else if (event.type === "error") { const status = statusFromErrorEvent(event); if (status) setAgentStatus(status); const message = event.message || "Streaming request failed."; modelResponse += `\n[Error: ${message}]`; setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`); } else if (event.type === "cancelled") { cancelled = true; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } }; const handlePlainLine = (line) => { if (isAgentStatusStreamLine(line)) { const status = statusFromStreamLine(line); if (status) { setAgentStatus(status); if (status.phase === 'cancelled') cancelled = true; toolActivity.push({ type: "progress", phase: status.phase, message: status.message }); setStreamToolActivity([...toolActivity]); } return; } modelResponse += line; setAnswer((currentAnswer) => currentAnswer + line); }; try { setAnswer(""); setStreamToolActivity([]); showStreamdiv(true); const response = await fetch(streamUrl, { method: "POST", headers: headerConfig, body: JSON.stringify(chatData), signal: controller.signal }); if (!response.ok || !response.body) { let message = response.statusText || `HTTP ${response.status}`; try { const errorData = await response.json(); message = errorData.error || message; } catch {} throw new Error(message); } const reader = response.body.getReader(); const txtdecoder = new TextDecoder(); let buffer = ""; while (true) { const { value, done } = await reader.read(); if (done) break; buffer += txtdecoder.decode(value, { stream: true }); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ""; for (const line of lines) { const trimmed = line.trim(); if (!trimmed) continue; try { handleEvent(JSON.parse(trimmed)); } catch { handlePlainLine(line); } } executeScroll(); } buffer += txtdecoder.decode(); if (buffer.trim()) { try { handleEvent(JSON.parse(buffer.trim())); } catch { handlePlainLine(buffer); } } } catch (err) { if (err?.name === "AbortError") { cancelled = true; modelResponse += modelResponse.trim() ? "\n[Streaming stopped by user.]" : "[Streaming stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } else { const errorMessage = getErrorMessage(err, "Streaming request failed."); modelResponse = modelResponse ? `${modelResponse}\n[Error: ${errorMessage}]` : `Error: ${errorMessage}`; setAgentStatus({ phase: 'error', message: errorMessage, assertive: true }); } } finally { if (abortControllerRef.current === controller) abortControllerRef.current = null; if (requestIdRef.current === requestId) requestIdRef.current = null; setAnswer(""); const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }]; flushSync(() => { setData(updatedData); setWaiting(false); }); showStreamdiv(false); setStreamToolActivity([]); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0); } }; fetchStreamData(); };
+  const handleStreamingChat = async (message) => {
+    const resolvedAllowedPaths = resolveAllowedPaths();
+    const userInstructions = resolveUserInstructions();
+    const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions };
+    const ndata = [...data, { role: "user", parts: [{ text: message }] }];
+    flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
+    executeScroll();
+    const headerConfig = { Accept: "application/x-ndjson, text/plain", "Content-Type": "application/json" };
+    const fetchStreamData = async () => {
+      let modelResponse = "";
+      let toolActivity = [];
+      let cancelled = false;
+      const requestId = generateRequestId();
+      requestIdRef.current = requestId;
+      chatData.request_id = requestId;
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const handleEvent = (event) => {
+        if (!event || typeof event !== "object") return;
+        if (event.type === "progress") {
+          const status = statusFromProgressEvent(event);
+          if (status) setAgentStatus(status);
+          toolActivity.push({ type: "progress", phase: event.phase, message: event.message });
+          setStreamToolActivity([...toolActivity]);
+          return;
+        }
+        if (event.type === "pending_confirmation") {
+          const status = statusFromPendingConfirmation(event);
+          if (status) setAgentStatus(status);
+          toolActivity.push(event);
+          setStreamToolActivity([...toolActivity]);
+          setPendingConfirmation(event);
+          // Mark that we're awaiting user confirmation; the stream will end here.
+          awaitingConfirmationRef.current = true;
+          return;
+        }
+        if (event.type === "text" || event.type === "final") {
+          const text = event.text || "";
+          modelResponse += text;
+          setAnswer((currentAnswer) => currentAnswer + text);
+          if (event.type === "final") setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false });
+        } else if (event.type === "tool_call" || event.type === "tool_result") {
+          const activity = { type: event.type, name: event.name };
+          if (event.type === "tool_call") activity.args = event.args || {};
+          else activity.result = event.result || {};
+          toolActivity.push(activity);
+          setStreamToolActivity([...toolActivity]);
+        } else if (event.type === "error") {
+          const status = statusFromErrorEvent(event);
+          if (status) setAgentStatus(status);
+          const message = event.message || "Streaming request failed.";
+          modelResponse += `\n[Error: ${message}]`;
+          setAnswer((currentAnswer) => currentAnswer + `\n[Error: ${message}]`);
+        } else if (event.type === "cancelled") {
+          cancelled = true;
+          setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false });
+        }
+      };
+      const handlePlainLine = (line) => {
+        if (isAgentStatusStreamLine(line)) {
+          const status = statusFromStreamLine(line);
+          if (status) {
+            setAgentStatus(status);
+            if (status.phase === 'cancelled') cancelled = true;
+            toolActivity.push({ type: "progress", phase: status.phase, message: status.message });
+            setStreamToolActivity([...toolActivity]);
+          }
+          return;
+        }
+        modelResponse += line;
+        setAnswer((currentAnswer) => currentAnswer + line);
+      };
+      try {
+        setAnswer("");
+        setStreamToolActivity([]);
+        showStreamdiv(true);
+        const response = await fetch(streamUrl, {
+          method: "POST",
+          headers: headerConfig,
+          body: JSON.stringify(chatData),
+          signal: controller.signal
+        });
+        if (!response.ok || !response.body) {
+          let message = response.statusText || `HTTP ${response.status}`;
+          try { const errorData = await response.json(); message = errorData.error || message; } catch {}
+          throw new Error(message);
+        }
+        const reader = response.body.getReader();
+        const txtdecoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += txtdecoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try { handleEvent(JSON.parse(trimmed)); } catch { handlePlainLine(line); }
+          }
+          executeScroll();
+        }
+        buffer += txtdecoder.decode();
+        if (buffer.trim()) {
+          try { handleEvent(JSON.parse(buffer.trim())); } catch { handlePlainLine(buffer); }
+        }
+      } catch (err) {
+        if (err?.name === "AbortError") {
+          cancelled = true;
+          modelResponse += modelResponse.trim() ? "\n[Streaming stopped by user.]" : "[Streaming stopped by user.]";
+          setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false });
+        } else {
+          const errorMessage = getErrorMessage(err, "Streaming request failed.");
+          modelResponse = modelResponse ? `${modelResponse}\n[Error: ${errorMessage}]` : `Error: ${errorMessage}`;
+          setAgentStatus({ phase: 'error', message: errorMessage, assertive: true });
+        }
+      } finally {
+        if (abortControllerRef.current === controller) abortControllerRef.current = null;
+        if (requestIdRef.current === requestId) requestIdRef.current = null;
+        // If we're awaiting confirmation, the stream ended at pending_confirmation.
+        // Do NOT commit to data or clear streaming state - the confirmation flow will handle it.
+        if (!awaitingConfirmationRef.current) {
+          setAnswer("");
+          const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }];
+          flushSync(() => { setData(updatedData); setWaiting(false); });
+          showStreamdiv(false);
+          setStreamToolActivity([]);
+          executeScroll();
+          window.setTimeout(() => inputRef.current?.focus(), 0);
+        }
+      }
+    };
+    fetchStreamData();
+  };
 
   useEffect(() => { let pendingFiles = null; let pendingPath = null; let restoreChatId = null; try { const rawFiles = localStorage.getItem('ai-terminal-chat:pending-files'); if (rawFiles) { pendingFiles = JSON.parse(rawFiles); localStorage.removeItem('ai-terminal-chat:pending-files'); } const rawPath = localStorage.getItem('ai-terminal-chat:pending-terminal-path'); if (rawPath) { pendingPath = rawPath; localStorage.removeItem('ai-terminal-chat:pending-terminal-path'); } const rawRestore = localStorage.getItem('ai-terminal-chat:restore-chat-id'); if (rawRestore) { restoreChatId = rawRestore; localStorage.removeItem('ai-terminal-chat:restore-chat-id'); } } catch {} if (restoreChatId) { try { const rawChats = localStorage.getItem(CHAT_STORAGE_KEY); const chats = rawChats ? JSON.parse(rawChats) : []; const chat = Array.isArray(chats) ? chats.find((c) => c.id === restoreChatId) : null; if (chat && Array.isArray(chat.messages)) { setChatId(chat.id); try { localStorage.setItem('ai-terminal-chat:current-chat-id', chat.id); } catch {} setData(chat.messages); setNewChatAvailable(true); } } catch {} } if (Array.isArray(pendingFiles)) { const paths = pendingFiles.map(({ path }) => path).filter(Boolean); setAllowedPaths(paths); try { localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths)); } catch {} if (pendingFiles.length > 0) { const fileContext = pendingFiles.map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`).join('\n'); const message = `I explicitly selected these project files for you to inspect. Use the supplied contents as context for your next response.\n${fileContext}`; window.setTimeout(() => handleClick(message), 0); } } if (pendingPath) setPathForTerminal(pendingPath); }, []);
 
