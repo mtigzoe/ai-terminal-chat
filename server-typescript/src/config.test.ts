@@ -272,16 +272,15 @@ describe("persistAppConfig concurrency", () => {
       `
         import { persistAppConfig } from "${distUrl}";
         const configPath = process.argv[2];
-        const maxLockWaitMs = 200;
         
         try {
-          // This will use the production locking implementation with the short timeout
-          await persistAppConfig({ value: 2 }, configPath);
+          // Invoke the production locking implementation with its real timeout.
+          persistAppConfig({ value: 2 }, configPath);
           // If we get here, we acquired the lock (shouldn't happen in this test)
           process.exit(0);
         } catch (err) {
           if (err.message?.includes("Could not acquire config lock")) {
-            process.exit(1); // timeout - expected
+            process.exit(1); // production lock timeout - expected
           }
           throw err;
         }
@@ -292,37 +291,43 @@ describe("persistAppConfig concurrency", () => {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let timedOut = false;
     let exited = false;
+    let childExitCode: number | null = null;
+    let childError: Error | null = null;
 
-    // Capture stderr to detect any errors
+    // Capture stderr to aid diagnosis if the worker fails unexpectedly.
     child.stderr?.on("data", (data) => {
       console.error("Worker stderr:", data.toString());
     });
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       child.on("exit", (code) => {
         exited = true;
-        timedOut = code === 1; // Exit code 1 = timeout
+        childExitCode = code;
         resolve();
       });
-      child.on("error", () => {
+      child.on("error", (error) => {
         exited = true;
-        resolve();
+        childError = error;
+        reject(error);
       });
-      // Safety timeout
+      // Safety timeout well beyond the production 5-second lock timeout.
       setTimeout(() => {
         if (!exited) {
           child.kill();
-          timedOut = true;
-          resolve();
+          reject(new Error("Lock contention worker did not exit within 10 seconds"));
         }
-      }, 2000);
+      }, 10000);
     });
+
+    assert.equal(childError, null);
+    assert.equal(childExitCode, 1, "Writer B should fail at the production lock timeout");
 
     // Verify: Writer A's lock was NOT deleted by Writer B
     assert.ok(fs.existsSync(lockPath), "Writer A's lock must still exist");
-    assert.ok(timedOut, "Writer B should have timed out waiting for lock");
+
+    // Verify: Writer B did not modify the config while it was locked.
+    assert.equal(loadAppConfig(configPath).value, 1);
 
     // Release Writer A's lock
     fs.closeSync(lockFdA);
