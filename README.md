@@ -537,8 +537,6 @@ Main endpoints implemented by the Flask backend:
 
 * **Cross-platform startup and developer tooling:** Continue improving the development and startup scripts for Windows PowerShell and Linux/macOS shell environments. Keep the commands and script organization consistent across platforms while preserving compatibility with the existing Python and TypeScript backends, React web application, and Electron development workflow.
 
-* **Accessibility regression coverage:** Expand automated accessibility tests and manual screen-reader testing guidance to help prevent regressions. Testing should continue to consider keyboard-only use and screen-reader workflows, including JAWS, NVDA, and other supported accessibility environments.
-
 ## Testing
 
 ### Frontend tests
