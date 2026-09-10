@@ -208,68 +208,26 @@ function loadConfig(): Record<string, unknown> {
  * operation fails rather than performing an unsafe unlocked write. This
  * ensures mutual exclusion is never silently bypassed.
  */
-function persistConfig(payload: Record<string, unknown>): void {
-  const targetFile = configFilePath();
-  // Write the temp file into the *same* directory as the actual target
-  // (which, under setConfigFileForTests(), may differ from configDir()).
-  // Renaming across directories/volumes is not guaranteed atomic and can
-  // fail outright on Windows (EPERM/EXDEV), and - worse - if the temp file
-  // were written under the real configDir() while the target was
-  // overridden to a temp test file elsewhere, a mismatched tempPath/target
-  // pairing could end up touching the user's real config.json. Deriving
-  // both from the same resolved target file keeps them consistent.
-  const dir = dirname(targetFile);
-  mkdirSync(dir, { recursive: true });
+/**
+ * Synchronous sleep using Atomics.wait on a SharedArrayBuffer.
+ * This provides real sleep without busy-spinning the CPU.
+ */
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const view = new Int32Array(buffer);
+  Atomics.wait(view, 0, 0, ms);
+}
 
-  // Deterministic lock path for the config file - all concurrent writers
-  // for the same config file must use the same lock path to ensure
-  // mutual exclusion.
-  const configFileName = basename(targetFile).replace(/\.[^.]+$/, "");
-  const lockPath = join(dir, `.config.${configFileName}.lock`);
-  const maxLockWaitMs = 5000;
-  const lockWaitStart = Date.now();
-  let lockFd: number | null = null;
-  let lockAcquired = false;
-
-  // Synchronous sleep using Atomics.wait on a SharedArrayBuffer.
-  // This provides real sleep without busy-spinning the CPU.
-  function sleepSync(ms: number): void {
-    if (ms <= 0) return;
-    const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    const view = new Int32Array(buffer);
-    // Atomics.wait returns "ok", "not-equal", or "timed-out"
-    // We wait on a value that will never change, so it times out after ms.
-    Atomics.wait(view, 0, 0, ms);
-  }
-
-  // Try to acquire the lock with exponential backoff and real sleep
-  while (Date.now() - lockWaitStart < maxLockWaitMs) {
-    try {
-      // Use 'wx' flag for exclusive creation (fails if file exists)
-      lockFd = openSync(lockPath, "wx");
-      lockAcquired = true;
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        // Lock held by another process (or another call in same process), wait and retry
-        const elapsed = Date.now() - lockWaitStart;
-        const backoff = Math.min(10 + elapsed * 0.1, 100);
-        // Real sleep, not busy-wait
-        sleepSync(backoff);
-        continue;
-      }
-      // On EPERM or other errors, fail rather than proceeding without locking
-      // This ensures mutual exclusion is never silently bypassed.
-      throw err;
-    }
-  }
-
-  if (!lockAcquired) {
-    // Timeout - could not acquire lock
-    throw new Error(`Could not acquire config lock for ${configFileName} after ${maxLockWaitMs}ms`);
-  }
-
+/**
+ * Write the config payload to the target file atomically.
+ *
+ * This function does NOT acquire any locks - the caller must hold the lock.
+ * Mirrors the write logic from persistConfig().
+ */
+function writeConfigFile(targetFile: string, payload: Record<string, unknown>): void {
   const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+  const dir = dirname(targetFile);
   const tempPath = join(
     dir,
     `config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`,
@@ -302,23 +260,63 @@ function persistConfig(payload: Record<string, unknown>): void {
       // Best-effort cleanup; the original error is what matters.
     }
     throw err;
-  } finally {
-    // Release the lock if we acquired it
-    if (lockAcquired && lockFd !== null) {
-      try {
-        closeSync(lockFd);
-      } catch {
-        // Ignore
+  }
+}
+
+/**
+ * Acquire the config file lock.
+ *
+ * Returns an object with the lock file descriptor and lock path, or throws
+ * if the lock cannot be acquired within the timeout.
+ */
+function acquireConfigLock(targetFile: string): { lockFd: number; lockPath: string } {
+  const dir = dirname(targetFile);
+  mkdirSync(dir, { recursive: true });
+
+  const configFileName = basename(targetFile).replace(/\.[^.]+$/, "");
+  const lockPath = join(dir, `.config.${configFileName}.lock`);
+  const maxLockWaitMs = 5000;
+  const lockWaitStart = Date.now();
+  let lockFd: number | null = null;
+  let lockAcquired = false;
+
+  // Try to acquire the lock with exponential backoff and real sleep
+  while (Date.now() - lockWaitStart < maxLockWaitMs) {
+    try {
+      lockFd = openSync(lockPath, "wx");
+      lockAcquired = true;
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        const elapsed = Date.now() - lockWaitStart;
+        const backoff = Math.min(10 + elapsed * 0.1, 100);
+        sleepSync(backoff);
+        continue;
       }
+      throw err;
     }
-    // Clean up our lock file (only if we created it)
-    if (lockAcquired) {
-      try {
-        rmSync(lockPath, { force: true });
-      } catch {
-        // Ignore lock cleanup errors
-      }
-    }
+  }
+
+  if (!lockAcquired) {
+    throw new Error(`Could not acquire config lock for ${configFileName} after ${maxLockWaitMs}ms`);
+  }
+
+  return { lockFd: lockFd!, lockPath };
+}
+
+/**
+ * Release the config file lock.
+ */
+function releaseConfigLock(lockFd: number, lockPath: string): void {
+  try {
+    closeSync(lockFd);
+  } catch {
+    // Ignore
+  }
+  try {
+    rmSync(lockPath, { force: true });
+  } catch {
+    // Ignore lock cleanup errors
   }
 }
 
@@ -374,9 +372,10 @@ export function getProjectRoot(): string {
  * which would have silently dropped any other key already saved there.
  */
 function persistProjectRoot(root: string): void {
-  const payload = loadConfig();
-  payload.project_root = root;
-  persistConfig(payload);
+  const targetFile = configFilePath();
+  const currentConfig = loadConfig();
+  currentConfig.project_root = root;
+  writeConfigFile(targetFile, currentConfig);
 }
 
 /**
@@ -617,6 +616,57 @@ export function persistProviderSelection(
 
   persistConfig(payload);
 }
+
+/**
+ * Persist the full configuration payload to the config file.
+ *
+ * Uses a simple file-based lock to prevent concurrent writes from losing
+ * updates. The lock is a temporary file created with exclusive creation
+ * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
+ * with exponential backoff and actual sleep.
+ *
+ * If the lock cannot be acquired (timeout, EPERM, or other error), the
+ * operation fails rather than performing an unsafe unlocked write. This
+ * ensures mutual exclusion is never silently bypassed.
+ */
+function persistConfig(payload: Record<string, unknown>): void {
+  const targetFile = configFilePath();
+  const { lockFd, lockPath } = acquireConfigLock(targetFile);
+  try {
+    writeConfigFile(targetFile, payload);
+  } finally {
+    releaseConfigLock(lockFd, lockPath);
+  }
+}
+
+/**
+ * Execute a configuration mutation atomically under the config file lock.
+ *
+ * This ensures that the entire read-modify-write sequence is protected by
+ * the same file lock used by persistConfig(), preventing race conditions
+ * where concurrent operations could see stale state or overwrite each other.
+ *
+ * @param mutation A function that receives the current config and returns the modified config
+ * @returns The modified config that was persisted
+ */
+export function withConfigLock<T>(
+  mutation: (config: Record<string, unknown>) => T
+): T {
+  const targetFile = configFilePath();
+  const { lockFd, lockPath } = acquireConfigLock(targetFile);
+  try {
+    // Load current config, apply mutation, persist result
+    const currentConfig = loadConfig();
+    const result = mutation(currentConfig);
+    writeConfigFile(targetFile, currentConfig);
+    return result;
+  } finally {
+    releaseConfigLock(lockFd, lockPath);
+  }
+}
+
+// Export lock functions for testing/debugging
+export { acquireConfigLock, releaseConfigLock, writeConfigFile };
 
 /**
  * Agent read permissions are request-scoped.

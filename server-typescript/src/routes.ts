@@ -9,6 +9,7 @@ import {
   loadProviderSelection,
   persistProviderSelection,
   runWithAllowedReadPaths,
+  withConfigLock,
 } from "./security.ts";
 import { isOllamaCliInstalled, launchOllamaRun } from "./ollama-cli.ts";
 import fs from "node:fs";
@@ -39,6 +40,7 @@ import {
   delete_file,
   git_add,
 } from "./write-tools.ts";
+import { loadAuthConfig } from "./config.ts";
 
 type Env = Record<string, never>;
 
@@ -201,7 +203,6 @@ app.post("/providers/select", async (c) => {
   if (name === "ollama" && hasOllamaBaseUrl) {
     try {
       normalizedOllamaUrl = normalizeOllamaBaseUrlForPersist(ollamaBaseUrlRaw ?? "");
-      applyOllamaBaseUrlToEnv(normalizedOllamaUrl);
     } catch (exc) {
       return c.json(
         { error: `Could not switch to '${name}': ${exc instanceof Error ? exc.message : String(exc)}` },
@@ -210,76 +211,76 @@ app.post("/providers/select", async (c) => {
     }
   }
 
-  // Switching away from Ollama: only remove OLLAMA_BASE_URL from the process
-  // environment if it was previously set by the application (i.e., there's a
-  // persisted ollama_base_url in the config). If it was a system environment
-  // variable, leave it alone so it can serve as a fallback when the user
-  // later selects Ollama without providing an explicit base URL.
-  if (name !== "ollama") {
-    const saved = loadProviderSelection();
-    const hadPersistedOllamaUrl = saved.provider === "ollama" &&
-      saved.ollama_base_url &&
-      saved.ollama_base_url.trim();
-    if (hadPersistedOllamaUrl) {
-      delete process.env.OLLAMA_BASE_URL;
-    }
-  }
-
-  const envApiKeyMap: Record<string, string | undefined> = {
-    gemini: "GOOGLE_API_KEY",
-    kilo: "KILO_API_KEY",
-    openai: "OPENAI_API_KEY",
-    xai: "XAI_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    anthropic: "ANTHROPIC_API_KEY",
-  };
-  const envName = envApiKeyMap[name];
-  const previousApiKey = envName ? process.env[envName] : undefined;
-
-  if (hasApiKey && envName) {
-    if (apiKey) {
-      process.env[envName] = apiKey;
-    } else {
-      delete process.env[envName];
-    }
-  }
-
+  // Use atomic config lock for the synchronous part of provider selection:
+  // load config -> modify process.env -> create provider -> update config object -> persist config
+  // This prevents race conditions where concurrent requests could cause
+  // mismatched state between persisted config, process.env, and activeProvider.
+  // The async provider probe (buildProviderStatus) is done outside the lock.
+  let candidate: Provider;
   try {
-    const candidate = getProvider(name, model ? { model } : undefined);
-    activeProvider = candidate;
-
-    if (pendingProjectPath !== null) {
-      setProjectRoot(pendingProjectPath);
-    }
-
-    try {
-      persistProviderSelection(
-        name,
-        model,
-        name === "ollama" && hasOllamaBaseUrl
-          ? normalizedOllamaUrl
-          : name === "ollama"
-            ? undefined
-            : null
-      );
-    } catch (persistExc) {
-      console.warn(
-        `[Warning] Could not persist provider selection: ${persistExc}`
-      );
-    }
-
-    const status = await buildProviderStatus(candidate, true);
-    return c.json(status);
-  } catch (exc) {
-    if (hasApiKey && envName) {
-      if (previousApiKey === undefined) {
-        delete process.env[envName];
-      } else {
-        process.env[envName] = previousApiKey;
+    withConfigLock((config) => {
+      // Apply Ollama URL to env if provided
+      if (name === "ollama" && hasOllamaBaseUrl && normalizedOllamaUrl) {
+        applyOllamaBaseUrlToEnv(normalizedOllamaUrl);
       }
-    }
+
+      // Switching away from Ollama: only remove OLLAMA_BASE_URL from the process
+      // environment if it was previously set by the application (i.e., there's a
+      // persisted ollama_base_url in the config). If it was a system environment
+      // variable, leave it alone so it can serve as a fallback when the user
+      // later selects Ollama without providing an explicit base URL.
+      if (name !== "ollama") {
+        const hadPersistedOllamaUrl = config.provider === "ollama" &&
+          config.ollama_base_url &&
+          String(config.ollama_base_url).trim();
+        if (hadPersistedOllamaUrl) {
+          delete process.env.OLLAMA_BASE_URL;
+        }
+      }
+
+      // Update API key in process.env
+      const envApiKeyMap: Record<string, string | undefined> = {
+        gemini: "GOOGLE_API_KEY",
+        kilo: "KILO_API_KEY",
+        openai: "OPENAI_API_KEY",
+        xai: "XAI_API_KEY",
+        openrouter: "OPENROUTER_API_KEY",
+        anthropic: "ANTHROPIC_API_KEY",
+      };
+      const envName = envApiKeyMap[name];
+      if (hasApiKey && envName) {
+        if (apiKey) {
+          process.env[envName] = apiKey;
+        } else {
+          delete process.env[envName];
+        }
+      }
+
+      // Create provider instance and update activeProvider
+      candidate = getProvider(name, model ? { model } : undefined);
+      activeProvider = candidate;
+
+      // Update config in memory (will be persisted by withConfigLock)
+      config.provider = name;
+      if (model) config.model = model;
+      if (name === "ollama" && hasOllamaBaseUrl) {
+        config.ollama_base_url = normalizedOllamaUrl;
+      } else if (name !== "ollama") {
+        delete config.ollama_base_url;
+      }
+
+      // Set project root if provided
+      if (pendingProjectPath !== null) {
+        setProjectRoot(pendingProjectPath);
+      }
+    });
+  } catch (exc) {
     return c.json({ error: `Could not switch to '${name}': ${exc}` }, 400 as any);
   }
+
+  // Probe the provider and build status (async, outside the lock)
+  const status = await buildProviderStatus(candidate, true);
+  return c.json(status);
 });
 
 app.get("/providers/:name/models", async (c) => {
