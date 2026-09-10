@@ -25,6 +25,7 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "git log",
   "git diff",
   "git show",
+  "git remote -v",
   "pwd",
   "dir",
   "ls",
@@ -86,9 +87,13 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git branch -M",
   "git branch -c",
   "git branch -C",
+  // Destructive git remote options (read-only "git remote -v" is safe)
   // Remote URLs may contain embedded credentials (for example, HTTPS tokens).
-  // Do not permit git remote inspection through the general terminal surface.
-  "git remote",
+  "git remote add",
+  "git remote set-url",
+  "git remote remove",
+  "git remote rename",
+  "git remote set-head",
   // Broad execution prefixes that enable arbitrary code execution
   "wsl",
   "uv run",
