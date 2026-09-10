@@ -29,7 +29,6 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "pwd",
   "dir",
   "ls",
-  "wsl",
   "python --version",
   "python3 --version",
   "node --version",
@@ -52,7 +51,6 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "black --check",
   "ruff check",
   "uv --version",
-  "uv run",
 ] as const;
 
 export const DANGEROUS_COMMAND_CHARACTERS = [
@@ -89,6 +87,9 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git branch -M",
   "git branch -c",
   "git branch -C",
+  // Broad execution prefixes that enable arbitrary code execution
+  "wsl",
+  "uv run",
 ] as const;
 
 const COMMAND_TIMEOUT_MS = 60_000;

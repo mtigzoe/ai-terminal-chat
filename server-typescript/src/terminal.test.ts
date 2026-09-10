@@ -407,3 +407,64 @@ test("read-only git branch --show-current is allowed", async () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Command allowlist bypass regression tests
+// ---------------------------------------------------------------------------
+//
+// The DEFAULT_ALLOWED_COMMAND_PREFIXES includes "wsl" and "uv run" as
+// broad prefixes. These are general-purpose code execution mechanisms and
+// must not be permitted as prefixes because they allow arbitrary command
+// execution. These tests verify that such bypass attempts are rejected.
+
+test("isCommandAllowed: 'wsl' prefix rejects arbitrary WSL commands", () => {
+  // The default allowlist includes "wsl" as a prefix, which would allow
+  // "wsl whoami", "wsl bash -c 'rm -rf /'", etc. This must be rejected.
+  __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
+  assert.equal(isCommandAllowed("wsl whoami"), false);
+  assert.equal(isCommandAllowed("wsl ls"), false);
+  assert.equal(isCommandAllowed("wsl bash -c 'echo hi'"), false);
+  assert.equal(isCommandAllowed("wsl python -c 'import os; os.system(\"ls\")'"), false);
+});
+
+test("isCommandAllowed: 'uv run' prefix rejects arbitrary code execution", () => {
+  // The default allowlist includes "uv run" as a prefix, which would allow
+  // "uv run python -c '...'", "uv run node -e '...'", etc. This must be rejected.
+  __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
+  assert.equal(isCommandAllowed("uv run python -c 'print(1)'"), false);
+  assert.equal(isCommandAllowed("uv run node -e 'console.log(1)'"), false);
+  assert.equal(isCommandAllowed("uv run bash -c 'echo hi'"), false);
+  assert.equal(isCommandAllowed("uv run -- python -c 'print(1)'"), false);
+});
+
+test("runCommand: 'wsl' arbitrary commands are rejected at execution", async () => {
+  // Even if isCommandAllowed somehow returns true, runCommand must reject
+  // these as they are not in the default allowlist after the fix.
+  const result = await runCommand("wsl whoami");
+  assert.ok(isToolError(result), "wsl arbitrary command must be rejected");
+  assert.ok(result.error.includes("not allowed"), "error must mention not allowed");
+});
+
+test("runCommand: 'uv run python -c' arbitrary code is rejected at execution", async () => {
+  const result = await runCommand("uv run python -c 'print(1)'");
+  assert.ok(isToolError(result), "uv run python -c arbitrary code must be rejected");
+  assert.ok(result.error.includes("not allowed"), "error must mention not allowed");
+});
+
+test("isForbiddenPrefix: 'wsl' is rejected as a forbidden prefix", () => {
+  // After the fix, adding "wsl" as a user prefix must be rejected
+  assert.ok(isForbiddenPrefix("wsl"), "wsl must be a forbidden prefix");
+});
+
+test("isForbiddenPrefix: 'uv run' is rejected as a forbidden prefix", () => {
+  // After the fix, adding "uv run" as a user prefix must be rejected
+  assert.ok(isForbiddenPrefix("uv run"), "uv run must be a forbidden prefix");
+});
+
+test("DEFAULT_ALLOWED_COMMAND_PREFIXES: does not contain broad execution prefixes", () => {
+  // The default allowlist must not contain "wsl" or "uv run" as broad prefixes
+  assert.ok(!DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("wsl"), "wsl must not be in default allowlist");
+  assert.ok(!DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("uv run"), "uv run must not be in default allowlist");
+  // But specific safe variants may be allowed, e.g., "uv --version"
+  assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("uv --version"), "uv --version should be allowed");
+});
+

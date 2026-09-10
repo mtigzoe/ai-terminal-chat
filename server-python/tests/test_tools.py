@@ -116,6 +116,8 @@ def test_is_forbidden_prefix_blocks_broad_git_prefix():
 
     assert _is_forbidden_prefix("git") is True
     assert _is_forbidden_prefix("rm") is True
+    assert _is_forbidden_prefix("wsl") is True
+    assert _is_forbidden_prefix("uv run") is True
     # Safe prefixes that happen to start with a forbidden word plus a
     # space must still be accepted.
     assert _is_forbidden_prefix("git status") is False
@@ -429,16 +431,32 @@ def test_run_command_allowlist_has_no_mutating_git_commands():
         assert not any(prefix.startswith(m) for m in mutating), prefix
 
 
-def test_wsl_is_allowed_by_default():
-    assert tools.is_command_allowed("wsl ls")
-    assert tools.is_command_allowed("wsl pwd")
-    assert tools.is_command_allowed("wsl git status")
+def test_wsl_is_rejected_as_broad_execution_prefix():
+    """wsl is a general-purpose code execution mechanism and must not be
+    allowed as a broad prefix. Arbitrary WSL commands like 'wsl whoami',
+    'wsl bash -c ...' must be rejected."""
+    assert not tools.is_command_allowed("wsl ls")
+    assert not tools.is_command_allowed("wsl pwd")
+    assert not tools.is_command_allowed("wsl git status")
+    assert not tools.is_command_allowed("wsl whoami")
+    assert not tools.is_command_allowed("wsl bash -c 'echo hi'")
+
+
+def test_uv_run_is_rejected_as_broad_execution_prefix():
+    """uv run is a general-purpose code execution mechanism and must not be
+    allowed as a broad prefix. Arbitrary code like 'uv run python -c ...',
+    'uv run node -e ...' must be rejected."""
+    assert not tools.is_command_allowed("uv run pytest")
+    assert not tools.is_command_allowed("uv run python -c 'print(1)'")
+    assert not tools.is_command_allowed("uv run node -e 'console.log(1)'")
+    assert not tools.is_command_allowed("uv run bash -c 'echo hi'")
 
 
 def test_existing_allowed_commands_still_work():
     for command in (
         "git status",
-        "git branch",
+        "git branch --list",
+        "git branch --show-current",
         "ls",
         "pwd",
         "pytest",
@@ -448,7 +466,6 @@ def test_existing_allowed_commands_still_work():
         "black --check",
         "ruff check",
         "uv --version",
-        "uv run pytest",
     ):
         assert tools.is_command_allowed(command), command
 
@@ -498,7 +515,7 @@ def test_dangerous_commands_cannot_be_added_via_api(tmp_path, monkeypatch):
 
     tools.ALLOWED_COMMAND_PREFIXES[:] = list(tools.DEFAULT_ALLOWED_COMMAND_PREFIXES)
 
-    for bad in ("rm", "sudo", "git push", "git reset", "shutdown", "rm -rf"):
+    for bad in ("rm", "sudo", "git push", "git reset", "shutdown", "rm -rf", "wsl", "uv run"):
         with pytest.raises(ValueError):
             tools.add_allowed_command(bad)
         assert not tools.is_command_allowed(bad)
