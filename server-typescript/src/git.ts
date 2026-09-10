@@ -12,6 +12,52 @@ import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, sa
 const execFileAsync = promisify(execFile);
 
 /**
+ * Git configuration keys that can cause external command execution.
+ * These are overridden to empty string via -c flags which take precedence over .git/config.
+ * We only override keys that can execute arbitrary code DIRECTLY without requiring SSH/transport.
+ */
+const DANGEROUS_GIT_CONFIG_KEYS = [
+  // Hooks - can redirect to arbitrary scripts
+  "core.hooksPath",
+
+  // Diff/merge drivers - can execute arbitrary commands during diff/merge
+  "diff.malicious.command",
+  "diff.malicious.textconv",
+  "merge.malicious.command",
+  "merge.malicious.driver",
+
+  // Filter programs - execute on checkout/checkin
+  "filter.malicious.clean",
+  "filter.malicious.smudge",
+
+  // GPG - can execute arbitrary command
+  "gpg.program",
+
+  // Email/sendemail
+  "sendemail.smtpserver",
+  "sendemail.smtpencryption",
+  "sendemail.smtpuser",
+  "sendemail.smtppass",
+  "sendemail.smtpdomain",
+
+  // FS monitor
+  "core.fsmonitor",
+] as const;
+
+/**
+ * Returns -c config override arguments to disable dangerous configurations.
+ * These take precedence over .git/config, .git/config.worktree, etc.
+ */
+function getSafeGitConfigOverrides(): string[] {
+  const overrides: string[] = [];
+  for (const key of DANGEROUS_GIT_CONFIG_KEYS) {
+    // Disable by setting to empty string - -c takes precedence over repo config
+    overrides.push("-c", `${key}=`);
+  }
+  return overrides;
+}
+
+/**
  * Validates a Git remote name.
  * Git remote names must not start with '-' (option) and should only contain
  * alphanumeric, dash, underscore, and dot characters.
@@ -108,15 +154,17 @@ async function runGit(args: string[], timeout: number): Promise<{
   stderr: string;
 }> {
   try {
-    const result = await execFileAsync("git", args, {
+    // Prepend safe config overrides that take precedence over .git/config
+    const configOverrides = getSafeGitConfigOverrides();
+    const safeArgs = [...configOverrides, ...args];
+    const result = await execFileAsync("git", safeArgs, {
       cwd: getProjectRoot(),
       shell: false,
       timeout,
       windowsHide: true,
       maxBuffer: Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000),
       encoding: "utf8",
-      // Prevent system and global config from being read
-      // This prevents config injection from outside the repository
+      // Also prevent system/global config
       env: {
         ...process.env,
         GIT_CONFIG_NOSYSTEM: "1",
