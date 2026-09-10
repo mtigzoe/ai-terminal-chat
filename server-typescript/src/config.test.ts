@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
 
 import {
   getConfiguredProviderName,
@@ -263,32 +263,36 @@ describe("persistAppConfig concurrency", () => {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = dirname(__filename);
     const distPath = join(__dirname, "..", "dist", "config.js");
-    // Convert to file:// URL for ESM import on Windows
-    const distUrl = "file:///" + distPath.replace(/\\/g, "/");
+    // Convert to proper file:// URL for ESM import on Windows
+    const distUrl = pathToFileURL(join(__dirname, "..", "dist", "config.js")).href;
     const { spawn } = await import("node:child_process");
     const child = spawn(process.execPath, [
       "--experimental-vm-modules",
       "-e",
       `
         import { persistAppConfig } from "${distUrl}";
-        const configPath = process.argv[2];
+        const configPath = process.env.CONFIG_PATH;
+
+        console.error("Worker starting, configPath:", configPath);
         
         try {
           // Invoke the production locking implementation with its real timeout.
           persistAppConfig({ value: 2 }, configPath);
+          console.error("Worker: persistAppConfig returned (lock acquired)");
           // If we get here, we acquired the lock (shouldn't happen in this test)
           process.exit(0);
         } catch (err) {
+          console.error("Worker error:", err?.message);
           if (err.message?.includes("Could not acquire config lock")) {
             process.exit(1); // production lock timeout - expected
           }
           throw err;
         }
       `,
-      configPath,
     ], {
       cwd: dir,
       stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, CONFIG_PATH: configPath },
     });
 
     let exited = false;
