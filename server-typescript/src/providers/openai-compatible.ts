@@ -1,6 +1,7 @@
 import { Provider, ProviderCapabilities, ProviderResponse, ToolCall } from "./base.ts";
 import { CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION } from "../prompts.ts";
 import { buildToolSchemas } from "../tools.ts";
+import { validateProviderBaseUrl } from "../url-validation.ts";
 
 export class OpenAICompatibleProvider extends Provider {
   readonly baseUrl: string;
@@ -25,6 +26,14 @@ export class OpenAICompatibleProvider extends Provider {
       throw new Error(
         `${config.display_name || "Provider"} base URL is not set.`
       );
+    }
+
+    // Validate the base URL for SSRF protection
+    const validation = validateProviderBaseUrl(config.base_url, {
+      allowedPorts: [80, 443, 11434, 8080, 8000, 3000, 9000, 4433],
+    });
+    if (!validation.valid) {
+      throw new Error(`Invalid base URL: ${validation.error}`);
     }
 
     this.baseUrl = config.base_url.replace(/\/$/, "");
