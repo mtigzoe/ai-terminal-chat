@@ -243,12 +243,21 @@ test("isCommandAllowed: broad prefix that would enable forbidden commands is den
     () => addAllowedCommand("rm"),
     /not permitted for safety reasons/
   );
-  // "npm" is intentionally not a forbidden prefix (safe subcommands
-  // include "npm test", "npm run build", "npm install" etc.).
+  // Bare "npm" is a general-purpose execution prefix and must be rejected.
+  // Specific npm subcommands remain valid allowlist entries.
+  assert.throws(
+    () => addAllowedCommand("npm"),
+    /not permitted for safety reasons/
+  );
   assert.equal(
-    isForbiddenPrefix("npm"),
+    isForbiddenPrefix("npm test"),
     false,
-    "npm must not be a forbidden prefix"
+    "specific npm subcommands must not be forbidden"
+  );
+  assert.equal(
+    isForbiddenPrefix("npm run build"),
+    false,
+    "specific npm subcommands must not be forbidden"
   );
 });
 
