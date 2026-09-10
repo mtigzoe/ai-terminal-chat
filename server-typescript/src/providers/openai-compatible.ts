@@ -1,7 +1,7 @@
 import { Provider, ProviderCapabilities, ProviderResponse, ToolCall } from "./base.ts";
 import { CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION } from "../prompts.ts";
 import { buildToolSchemas } from "../tools.ts";
-import { validateProviderBaseUrl, validateUrlAtRequestTime, createSafeRequestInit } from "../url-validation.ts";
+import { validateProviderBaseUrl, validateUrlAtRequestTime, createSafeRequestInit, validateRedirectUrl } from "../url-validation.ts";
 
 export class OpenAICompatibleProvider extends Provider {
   readonly baseUrl: string;
