@@ -1,8 +1,8 @@
 // Git inspection and confirmation-required Git operations.
-//
-// Mirrors the Git portion of server-python/tools.py. Read-only operations
-// never mutate repository state. gitAdd() uses an explicit preview/confirm
-// flag and stages exactly one non-sensitive file.
+ //
+ // Mirrors the Git portion of server-python/tools.py. Read-only operations
+ // never mutate repository state. gitAdd() uses an explicit preview/confirm
+ // flag and stages exactly one non-sensitive file.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -10,6 +10,63 @@ import { promisify } from "node:util";
 import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath } from "./security.ts";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Validates a Git remote name.
+ * Git remote names must not start with '-' (option) and should only contain
+ * alphanumeric, dash, underscore, and dot characters.
+ * Returns validated name or throws Error for invalid input.
+ */
+function validateGitRemote(remote: string): string {
+  if (!remote || !remote.trim()) {
+    throw new Error("Remote name is required");
+  }
+  const trimmed = remote.trim();
+  if (trimmed.startsWith("-")) {
+    throw new Error("Remote name cannot start with '-' (reserved for Git options)");
+  }
+  // Git remote names: alphanumeric, dash, underscore, dot
+  if (!/^[\w.-]+$/.test(trimmed)) {
+    throw new Error(`Invalid remote name: '${trimmed}'. Use alphanumeric, dash, underscore, or dot.`);
+  }
+  return trimmed;
+}
+
+/**
+ * Validates a Git branch name.
+ * Git branch names have restrictions but primarily must not start with '-'.
+ * We allow a reasonable subset that covers normal branch names.
+ * Returns validated name or throws Error for invalid input.
+ */
+function validateGitBranch(branch: string): string {
+  if (!branch || !branch.trim()) {
+    throw new Error("Branch name is required");
+  }
+  const trimmed = branch.trim();
+  if (trimmed.startsWith("-")) {
+    throw new Error("Branch name cannot start with '-' (reserved for Git options)");
+  }
+  // Basic validation - reject obviously dangerous patterns
+  // Git branch names can't contain spaces, ~, ^, :, ?, *, [, \, or control chars
+  if (/[\s~^:?*[\\]/.test(trimmed)) {
+    throw new Error(`Invalid branch name: '${trimmed}'. Contains disallowed characters.`);
+  }
+  if (trimmed.includes("..") || trimmed.startsWith("/") || trimmed.endsWith("/") || trimmed.endsWith(".lock")) {
+    throw new Error(`Invalid branch name: '${trimmed}'.`);
+  }
+  return trimmed;
+}
+
+/**
+ * Wraps a validation function to return an object with either { error } or { value }.
+ */
+function safeValidate<T>(validator: (input: string) => T, input: string): { error: string } | { value: T } {
+  try {
+    return { value: validator(input) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 const GIT_STATUS_TIMEOUT_MS = 10_000;
 const GIT_DIFF_TIMEOUT_MS = 10_000;
@@ -58,6 +115,13 @@ async function runGit(args: string[], timeout: number): Promise<{
       windowsHide: true,
       maxBuffer: Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000),
       encoding: "utf8",
+      // Prevent system and global config from being read
+      // This prevents config injection from outside the repository
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_NOGLOBAL: "1",
+      },
     });
     return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
   } catch (error) {
@@ -272,8 +336,13 @@ export async function gitAdd(path: string, confirm = false): Promise<Record<stri
 const PREVIEW_CHAR_LIMIT = 2000;
 
 export async function gitFetch(remote = ""): Promise<Record<string, unknown>> {
-  const args = ["fetch"];
-  if (remote) args.push(remote);
+  const args = ["fetch", "--no-recurse-submodules"];
+  if (remote) {
+    // Validate remote name to prevent option injection
+    const validation = safeValidate(validateGitRemote, remote);
+    if ("error" in validation) return validation;
+    args.push("--", validation.value);
+  }
 
   try {
     const result = await runGit(args, GIT_FETCH_TIMEOUT_MS);
@@ -301,9 +370,17 @@ export async function gitPull(remote = "", branch = "", confirm = false): Promis
     };
   }
 
-  const args = ["pull"];
-  if (remote) args.push(remote);
-  if (branch) args.push(branch);
+  const args = ["pull", "--no-recurse-submodules"];
+  if (remote) {
+    const validation = safeValidate(validateGitRemote, remote);
+    if ("error" in validation) return validation;
+    args.push("--", validation.value);
+  }
+  if (branch) {
+    const validation = safeValidate(validateGitBranch, branch);
+    if ("error" in validation) return validation;
+    args.push(validation.value);
+  }
 
   try {
     const result = await runGit(args, GIT_PULL_TIMEOUT_MS);
@@ -419,9 +496,17 @@ export async function gitPush(remote = "", branch = "", confirm = false): Promis
     };
   }
 
-  const args = ["push"];
-  if (remote) args.push(remote);
-  if (branch) args.push(branch);
+  const args = ["push", "--no-recurse-submodules"];
+  if (remote) {
+    const validation = safeValidate(validateGitRemote, remote);
+    if ("error" in validation) return validation;
+    args.push("--", validation.value);
+  }
+  if (branch) {
+    const validation = safeValidate(validateGitBranch, branch);
+    if ("error" in validation) return validation;
+    args.push(validation.value);
+  }
 
   try {
     const result = await runGit(args, GIT_PUSH_TIMEOUT_MS);

@@ -373,6 +373,40 @@ describe("gitFetch", () => {
       fs.rmSync(bareRemote, { recursive: true, force: true });
     }
   });
+
+  it("rejects remote names starting with '-' (option injection)", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-fetch-injection-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      const result = await gitFetch("--upload-pack=evil");
+      expect(result.error).toBeDefined();
+      expect(String(result.error)).toMatch(/cannot start with '-'|option injection/i);
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects remote names with disallowed characters", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-fetch-invalid-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+
+    try {
+      const result = await gitFetch("origin@evil");
+      expect(result.error).toBeDefined();
+      expect(String(result.error)).toContain("Invalid remote name");
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("gitPull", () => {
@@ -385,6 +419,24 @@ describe("gitPull", () => {
     const result = await gitPull();
     expect((result as { remote?: string }).remote).toBe("default");
     expect((result as { branch?: string }).branch).toBe("current");
+  });
+
+  it("rejects remote names starting with '-' (option injection)", async () => {
+    const result = await gitPull("--upload-pack=evil", "main", true);
+    expect(result.error).toBeDefined();
+    expect(String(result.error)).toMatch(/cannot start with '-'|option injection/i);
+  });
+
+  it("rejects branch names starting with '-' (option injection)", async () => {
+    const result = await gitPull("origin", "--exec=evil", true);
+    expect(result.error).toBeDefined();
+    expect(String(result.error)).toMatch(/cannot start with '-'|option injection/i);
+  });
+
+  it("rejects branch names with disallowed characters", async () => {
+    const result = await gitPull("origin", "branch with spaces", true);
+    expect(result.error).toBeDefined();
+    expect(String(result.error)).toContain("Invalid branch name");
   });
 });
 
@@ -469,6 +521,24 @@ describe("gitPush", () => {
     expect((result as { requires_confirmation?: boolean }).requires_confirmation).toBe(true);
     expect((result as { remote?: string }).remote).toBe("default");
     expect((result as { branch?: string }).branch).toBe("current");
+  });
+
+  it("rejects remote names starting with '-' (option injection)", async () => {
+    const result = await gitPush("--upload-pack=evil", "main", true);
+    expect(result.error).toBeDefined();
+    expect(String(result.error)).toMatch(/cannot start with '-'|option injection/i);
+  });
+
+  it("rejects branch names starting with '-' (option injection)", async () => {
+    const result = await gitPush("origin", "--exec=evil", true);
+    expect(result.error).toBeDefined();
+    expect(String(result.error)).toMatch(/cannot start with '-'|option injection/i);
+  });
+
+  it("rejects branch names with disallowed characters", async () => {
+    const result = await gitPush("origin", "branch with spaces", true);
+    expect(result.error).toBeDefined();
+    expect(String(result.error)).toContain("Invalid branch name");
   });
 });
 
