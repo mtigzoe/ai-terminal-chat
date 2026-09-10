@@ -12,6 +12,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
+const { handleEditorOpen, getAvailableEditors } = require('./editor-handler.cjs');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -19,9 +21,13 @@ let mainWindow = null;
 let backendProcess = null;
 let backendExit = null;
 let backendStderr = '';
+let projectRoot = null; // Store the selected project root for path validation
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = 9000;
+
+// Generate a random health token at startup for backend verification
+const HEALTH_TOKEN = crypto.randomUUID();
 
 const KNOWN_EDITORS = [
   { id: 'code', name: 'VS Code', bin: process.platform === 'win32' ? 'code.cmd' : 'code' },
@@ -29,6 +35,68 @@ const KNOWN_EDITORS = [
   { id: 'windsurf', name: 'Windsurf', bin: process.platform === 'win32' ? 'windsurf.cmd' : 'windsurf' },
   { id: 'sublime', name: 'Sublime Text', bin: 'subl' },
 ];
+
+/**
+ * Validates that a path is within the project root.
+ * Resolves symlinks/junctions to prevent bypass via filesystem links.
+ * Returns the resolved absolute path if valid, throws if not.
+ */
+function validateProjectPath(requestedPath, projectRootDir) {
+  if (!projectRootDir) {
+    throw new Error('No project root configured');
+  }
+
+  // Resolve both paths to absolute, normalized forms with symlink resolution
+  // This prevents bypass via symlinks/junctions
+  const resolvedRoot = fs.realpathSync.native(projectRootDir);
+  let resolvedRequested;
+  try {
+    resolvedRequested = fs.realpathSync.native(requestedPath);
+  } catch {
+    // Path doesn't exist - still validate the resolved parent directory
+    const parentDir = path.dirname(requestedPath);
+    try {
+      const resolvedParent = fs.realpathSync.native(parentDir);
+      // Check if parent is within project root
+      const relativeParent = path.relative(resolvedRoot, resolvedParent);
+      if (relativeParent.startsWith('..') || path.isAbsolute(relativeParent)) {
+        throw new Error(`Path is outside project root: ${requestedPath}`);
+      }
+      // Parent is valid, but path itself doesn't exist
+      throw new Error(`Path does not exist: ${requestedPath}`);
+    } catch (e) {
+      if (e.message.includes('outside project root') || e.message.includes('does not exist')) {
+        throw e;
+      }
+      // Couldn't resolve parent either
+      throw new Error(`Cannot resolve path: ${requestedPath}`);
+    }
+  }
+
+  // Check if requested path is within project root
+  const relative = path.relative(resolvedRoot, resolvedRequested);
+  const isWithinRoot = !relative.startsWith('..') && !path.isAbsolute(relative);
+
+  if (!isWithinRoot) {
+    throw new Error(`Path is outside project root: ${requestedPath}`);
+  }
+
+  return resolvedRequested;
+}
+
+/**
+ * Timing-safe string comparison to prevent timing attacks.
+ */
+function timingSafeEqual(a, b) {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Still do the comparison to avoid early return timing leak
+    crypto.timingSafeEqual(bufA, Buffer.from('x'.repeat(bufA.length)));
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 function getRendererEntry() {
   const production = app.isPackaged || process.argv.includes('--production');
@@ -62,12 +130,28 @@ function checkBackend() {
       {
         hostname: BACKEND_HOST,
         port: BACKEND_PORT,
-        path: '/providers?probe=0',
+        path: '/health',
         timeout: 1000,
+        headers: {
+          'Authorization': `Bearer ${HEALTH_TOKEN}`,
+        },
       },
       (response) => {
-        response.resume();
-        resolve(true);
+        let data = '';
+        response.on('data', (chunk) => { data += chunk; });
+        response.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            // Verify the health check returns the expected app identifier
+            if (parsed.status === 'ok' && parsed.app === 'ai-terminal-chat') {
+              resolve(true);
+            } else {
+              resolve(false);
+            }
+          } catch {
+            resolve(false);
+          }
+        });
       }
     );
 
@@ -131,6 +215,7 @@ async function startBundledBackend() {
       ...process.env,
       HOST: BACKEND_HOST,
       PORT: String(BACKEND_PORT),
+      AI_TERMINAL_CHAT_HEALTH_TOKEN: HEALTH_TOKEN,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     serviceName: 'AI Terminal Chat TypeScript Backend',
@@ -226,38 +311,37 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
   if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
     return null;
   }
-  return result.filePaths[0];
+  const selectedPath = result.filePaths[0];
+  projectRoot = selectedPath; // Store for path validation
+  return selectedPath;
 });
 
 ipcMain.handle('editor:open', async (event, { filePath, editorId }) => {
   if (!filePath) return false;
-  if (!editorId || editorId === 'system') {
-    await shell.openPath(filePath);
-    return true;
-  }
-  const targetEditor = KNOWN_EDITORS.find((item) => item.id === editorId);
-  if (!targetEditor) {
-    console.error(`Refusing to launch unknown editor: ${editorId}`);
-    return false;
-  }
   try {
-    spawn(targetEditor.bin, [filePath], { detached: true, stdio: 'ignore' }).unref();
-    return true;
+    // Validate path against project root before any editor operation
+    const validatedPath = validateProjectPath(filePath, projectRoot);
+    return handleEditorOpen({ spawn, openPath: shell.openPath }, validatedPath, editorId);
   } catch (err) {
-    console.error('Failed to spawn editor:', err);
-    await shell.openPath(filePath);
+    console.error('editor:open validation failed:', err instanceof Error ? err.message : String(err));
     return false;
   }
 });
 
 ipcMain.handle('shell:reveal', async (event, filePath) => {
   if (!filePath) return false;
-  shell.showItemInFolder(filePath);
-  return true;
+  try {
+    const validatedPath = validateProjectPath(filePath, projectRoot);
+    shell.showItemInFolder(validatedPath);
+    return true;
+  } catch (err) {
+    console.error('shell:reveal validation failed:', err instanceof Error ? err.message : String(err));
+    return false;
+  }
 });
 
 ipcMain.handle('editor:getAvailable', async () => {
-  return [{ id: 'system', name: 'System Default' }, ...KNOWN_EDITORS];
+  return getAvailableEditors();
 });
 
 app.whenReady().then(async () => {
