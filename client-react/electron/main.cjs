@@ -236,9 +236,12 @@ ipcMain.handle('editor:open', async (event, { filePath, editorId }) => {
     return true;
   }
   const targetEditor = KNOWN_EDITORS.find((item) => item.id === editorId);
-  const bin = targetEditor ? targetEditor.bin : editorId;
+  if (!targetEditor) {
+    console.error(`Refusing to launch unknown editor: ${editorId}`);
+    return false;
+  }
   try {
-    spawn(bin, [filePath], { detached: true, stdio: 'ignore' }).unref();
+    spawn(targetEditor.bin, [filePath], { detached: true, stdio: 'ignore' }).unref();
     return true;
   } catch (err) {
     console.error('Failed to spawn editor:', err);
