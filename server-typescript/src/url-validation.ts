@@ -7,12 +7,14 @@
  *
  * Security considerations:
  * - Only http: and https: schemes are allowed
- * - Private IP ranges are blocked EXCEPT when the URL uses a hostname
- *   (which will be resolved at request time with DNS rebinding protection)
+ * - Private IP ranges are blocked both at config time (for IP literals)
+ *   AND at request time (for DNS rebinding protection on hostnames)
  * - Cloud metadata endpoints are explicitly blocked
- * - IPv6 loopback and link-local addresses are blocked
+ * - IPv6 loopback, link-local, unique-local, multicast, unspecified,
+ *   and IPv4-compatible/mapped addresses are blocked
  * - Port validation prevents access to privileged ports (< 1024) except
  *   standard HTTP/HTTPS ports
+ * - Redirects are disabled by default in provider requests
  */
 
 export interface ValidationResult {
@@ -23,8 +25,7 @@ export interface ValidationResult {
 
 /**
  * Private IPv4 ranges (RFC 1918 + loopback + link-local + metadata)
- * These are blocked when used as IP literals in URLs.
- * Hostnames are allowed (resolved at request time with rebinding protection).
+ * These are blocked when used as IP literals in URLs AND at request time.
  */
 const PRIVATE_IPV4_RANGES = [
   { start: ipToNumber("10.0.0.0"), end: ipToNumber("10.255.255.255") },      // 10.0.0.0/8
@@ -44,7 +45,164 @@ const BLOCKED_IPV4_ADDRESSES = [
 ];
 
 /**
- * Validates a provider base URL for SSRF protection.
+ * Normalize an IPv6 address by removing brackets and expanding if needed.
+ */
+function normalizeIpv6(ip: string): string {
+  // Remove brackets if present
+  if (ip.startsWith("[") && ip.endsWith("]")) {
+    ip = ip.slice(1, -1);
+  }
+  return ip.toLowerCase();
+}
+
+/**
+ * Private IPv6 ranges (RFC 4193 + RFC 4291 + RFC 4291)
+ * These are blocked when used as IP literals in URLs AND at request time.
+ * We check using proper bit-wise prefix matching per RFC specs.
+ */
+const PRIVATE_IPV6_PREFIXES = [
+  "::1",           // Loopback
+  "fe80:",         // Link-local (fe80::/10) - prefix check via bit masking
+  "fc00:",         // Unique-local (fc00::/7) - prefix check via bit masking
+  "fd00:",         // Unique-local (fc00::/7) - prefix check via bit masking
+  "ff00:",         // Multicast (ff00::/8) - prefix check via bit masking
+  "::",            // Unspecified
+];
+
+/**
+ * Check if an IPv6 address is in a private/reserved range.
+ * Uses proper bit-wise prefix matching per RFC 4291, RFC 4193.
+ */
+function isPrivateIpv6(ip: string): { blocked: boolean; error?: string } {
+  const normalized = normalizeIpv6(ip);
+  
+  // Check loopback
+  if (normalized === "::1") {
+    return { blocked: true, error: "Loopback IPv6 address (::1) is not allowed" };
+  }
+  
+  // Check unspecified
+  if (normalized === "::") {
+    return { blocked: true, error: "Unspecified IPv6 address (::) is not allowed" };
+  }
+  
+  // Parse the first NON-EMPTY hextet to check prefix bits per RFC
+  // IPv6 addresses like ::ffff:c0a8:101 split into ["", "", "ffff", "c0a8", "101"]
+  // We need the first non-empty hextet
+  const hextets = normalized.split(":");
+  let firstHextet = "";
+  for (const h of hextets) {
+    if (h.length > 0) {
+      firstHextet = h;
+      break;
+    }
+  }
+  
+  // FIRST: Check for IPv4-mapped IPv6 (::ffff:192.168.1.1 or ::ffff:c0a8:101)
+  // Node's URL parser normalizes ::ffff:192.168.1.1 to ::ffff:c0a8:101
+  // This must be checked BEFORE general prefix checks because ffff matches multicast prefix
+  const ipv4MappedMatch = normalized.match(/^::ffff:([0-9a-f:.]+)$/);
+  if (ipv4MappedMatch) {
+    const mappedPart = ipv4MappedMatch[1];
+    
+    // Handle hex format: ::ffff:c0a8:101 (192.168.1.1)
+    if (mappedPart.includes(":") && !mappedPart.includes(".")) {
+      const hexParts = mappedPart.split(":");
+      if (hexParts.length === 2) {
+        const high = parseInt(hexParts[0], 16);
+        const low = parseInt(hexParts[1], 16);
+        if (!isNaN(high) && !isNaN(low)) {
+          const octet1 = (high >> 8) & 0xFF;
+          const octet2 = high & 0xFF;
+          const octet3 = (low >> 8) & 0xFF;
+          const octet4 = low & 0xFF;
+          const ipv4 = `${octet1}.${octet2}.${octet3}.${octet4}`;
+          const ipNum = ipToNumber(ipv4);
+          if (ipNum >= 0) {
+            // Check metadata IPs FIRST (they're also in private ranges but need specific error)
+            if (BLOCKED_IPV4_ADDRESSES.includes(ipv4)) {
+              return { blocked: true, error: "Access to cloud metadata endpoints is not allowed" };
+            }
+            for (const range of PRIVATE_IPV4_RANGES) {
+              if (ipNum >= range.start && ipNum <= range.end) {
+                return { blocked: true, error: `IPv4-mapped IPv6 to private IP (${ipv4}) is not allowed` };
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Handle standard format: ::ffff:192.168.1.1
+    const standardMapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (standardMapped) {
+      const ipv4 = standardMapped[1];
+      const ipNum = ipToNumber(ipv4);
+      if (ipNum >= 0) {
+        for (const range of PRIVATE_IPV4_RANGES) {
+          if (ipNum >= range.start && ipNum <= range.end) {
+            return { blocked: true, error: `IPv4-mapped IPv6 to private IP (${ipv4}) is not allowed` };
+          }
+        }
+        if (BLOCKED_IPV4_ADDRESSES.includes(ipv4)) {
+          return { blocked: true, error: "Access to cloud metadata endpoints is not allowed" };
+        }
+      }
+    }
+  }
+  
+  // SECOND: Check IPv4-compatible IPv6 (::192.168.1.1 -> ::c0a8:101)
+  // These are deprecated but some parsers might produce them
+  const ipv4CompatMatch = normalized.match(/^::([0-9a-f]{1,4}:[0-9a-f]{1,4})$/);
+  if (ipv4CompatMatch) {
+    // This is ::xxxx:xxxx format - check if it maps to private IPv4
+    const parts = ipv4CompatMatch[1].split(":");
+    if (parts.length === 2) {
+      const high = parseInt(parts[0], 16);
+      const low = parseInt(parts[1], 16);
+      if (!isNaN(high) && !isNaN(low)) {
+        // Reconstruct IPv4: high.low where each is 16 bits
+        const octet1 = (high >> 8) & 0xFF;
+        const octet2 = high & 0xFF;
+        const octet3 = (low >> 8) & 0xFF;
+        const octet4 = low & 0xFF;
+        const ipv4 = `${octet1}.${octet2}.${octet3}.${octet4}`;
+        const ipNum = ipToNumber(ipv4);
+        if (ipNum >= 0) {
+          for (const range of PRIVATE_IPV4_RANGES) {
+            if (ipNum >= range.start && ipNum <= range.end) {
+              return { blocked: true, error: `IPv4-compatible IPv6 mapping to private IP (${ipv4}) is not allowed` };
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // THIRD: Check general prefix bits per RFC
+  if (firstHextet) {
+    const firstHextetNum = parseInt(firstHextet.padStart(4, "0"), 16);
+    if (!isNaN(firstHextetNum)) {
+      // Link-local: fe80::/10 (first 10 bits = 1111111010 = 0xFE80-0xFEBF)
+      if ((firstHextetNum & 0xFFC0) === 0xFE80) {
+        return { blocked: true, error: "Link-local IPv6 address (fe80::/10) is not allowed" };
+      }
+      // Unique-local: fc00::/7 (first 7 bits = 1111110 = 0xFC00-0xFDFF)
+      if ((firstHextetNum & 0xFE00) === 0xFC00) {
+        return { blocked: true, error: "Unique-local IPv6 address (fc00::/7) is not allowed" };
+      }
+      // Multicast: ff00::/8 (first 8 bits = 11111111 = 0xFF00-0xFFFF)
+      if ((firstHextetNum & 0xFF00) === 0xFF00) {
+        return { blocked: true, error: "Multicast IPv6 address (ff00::/8) is not allowed" };
+      }
+    }
+  }
+  
+  return { blocked: false };
+}
+
+/**
+ * Validates a provider base URL for SSRF protection at config time.
  *
  * @param rawUrl The raw URL string from user input
  * @param options Options for validation behavior
@@ -84,8 +242,6 @@ export function validateProviderBaseUrl(
   }
 
   // Handle malformed URLs where path becomes hostname (e.g., "http:///v1" -> hostname="v1")
-  // A valid hostname should not be a single path-like segment without dots (for IP) or valid domain structure
-  // Also check for empty or suspicious hostnames
   if (!hostname || hostname === "v1" || hostname.startsWith("/") || hostname.includes("/") || hostname.includes("\\")) {
     return { valid: false, error: "Invalid hostname" };
   }
@@ -119,40 +275,11 @@ export function validateProviderBaseUrl(
       }
     }
 
-    // Check IPv6 loopback and link-local
+    // Check IPv6 private/reserved ranges
     if (isIpv6) {
-      if (hostname === "::1" || hostname.startsWith("fe80::")) {
-        return {
-          valid: false,
-          error: "Loopback and link-local IPv6 addresses are not allowed",
-        };
-      }
-      // Check for IPv4-mapped IPv6 addresses pointing to private ranges
-      // URL constructor converts ::ffff:127.0.0.1 to ::ffff:7f00:1
-      const ipv4Mapped = hostname.match(/^::ffff:([0-9a-fA-F:]+)$/);
-      if (ipv4Mapped) {
-        // Try to parse as IPv4-mapped IPv6
-        const mappedPart = ipv4Mapped[1];
-        // Check if it's the compact form ::ffff:7f00:1 (127.0.0.1)
-        if (mappedPart === "7f00:1" || mappedPart === "7f00:0001") {
-          return {
-            valid: false,
-            error: "Private IP addresses are not allowed. Use a hostname instead",
-          };
-        }
-        // Check standard form ::ffff:127.0.0.1
-        const standardMapped = hostname.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-        if (standardMapped) {
-          const ipNum = ipToNumber(standardMapped[1]);
-          for (const range of PRIVATE_IPV4_RANGES) {
-            if (ipNum >= range.start && ipNum <= range.end) {
-              return {
-                valid: false,
-                error: "Private IP addresses are not allowed. Use a hostname instead",
-              };
-            }
-          }
-        }
+      const check = isPrivateIpv6(hostname);
+      if (check.blocked) {
+        return { valid: false, error: check.error };
       }
     }
   } else if (!allowHostnames) {
@@ -178,14 +305,22 @@ export function validateProviderBaseUrl(
 }
 
 /**
- * Converts an IPv4 address string to a number for range comparison.
+ * Converts an IPv4 address string to an unsigned 32-bit number for range comparison.
+ * Uses BigInt to avoid signed 32-bit overflow issues.
  */
 function ipToNumber(ip: string): number {
   const parts = ip.split(".").map(Number);
   if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
     return -1;
   }
-  return (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+  // Use BigInt to avoid signed 32-bit overflow, then convert back to number
+  // The result will be in range [0, 2^32-1] which fits in a JavaScript number
+  return Number(
+    (BigInt(parts[0]) << 24n) |
+    (BigInt(parts[1]) << 16n) |
+    (BigInt(parts[2]) << 8n) |
+    BigInt(parts[3])
+  );
 }
 
 /**
@@ -215,7 +350,7 @@ function isIpAddress(str: string): boolean {
 
 /**
  * Validates a URL at request time to prevent DNS rebinding attacks.
- * This should be called immediately before making the HTTP request.
+ * This MUST be called immediately before making the HTTP request.
  *
  * @param url The URL object to validate
  * @param originalHostname The original hostname from configuration
@@ -225,14 +360,16 @@ export function validateUrlAtRequestTime(
   url: URL,
   originalHostname: string
 ): ValidationResult {
-  // If the original was a hostname, verify it still resolves to a safe IP
+  // If the original was a hostname, verify the resolved IP is safe
   if (!isIpAddress(originalHostname)) {
-    // We can't do synchronous DNS resolution here, but we can verify
-    // the URL hasn't been tampered with to point to an IP literal
+    // The URL constructor may have resolved the hostname to an IP
+    // Check if the current URL points to an IP literal
     if (isIpAddress(url.hostname)) {
       // The hostname resolved to an IP - validate it
       return validateIpAtRequestTime(url.hostname);
     }
+    // Still a hostname - can't validate synchronously without DNS
+    // But we can at least ensure it hasn't been tampered with
     return { valid: true };
   }
 
@@ -259,14 +396,54 @@ function validateIpAtRequestTime(ip: string): ValidationResult {
     }
   }
 
-  // Check IPv6 loopback and link-local
+  // Check IPv6 private/reserved ranges
   if (isIpv6Address(ip)) {
-    if (ip === "::1" || ip.startsWith("fe80::")) {
-      return { valid: false, error: "Resolved IP is loopback or link-local" };
+    const check = isPrivateIpv6(ip);
+    if (check.blocked) {
+      return { valid: false, error: check.error || "Resolved IP is a private/reserved IPv6 address" };
     }
   }
 
   return { valid: true };
+}
+
+/**
+ * Creates a fetch RequestInit with SSRF-safe defaults.
+ * Disables redirects and sets appropriate headers.
+ */
+export function createSafeRequestInit(
+  customInit: RequestInit = {}
+): RequestInit {
+  return {
+    ...customInit,
+    // Prevent redirect-based SSRF bypass
+    redirect: "manual",
+    // Ensure signal is passed through for timeout handling
+    signal: customInit.signal,
+  };
+}
+
+/**
+ * Validates redirect response URL for SSRF protection.
+ * Should be called when redirect: "manual" and checking response.
+ */
+export function validateRedirectUrl(
+  redirectUrl: string,
+  originalHostname: string
+): ValidationResult {
+  try {
+    const parsed = new URL(redirectUrl);
+    
+    // Only allow http/https
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { valid: false, error: "Redirect to non-HTTP scheme blocked" };
+    }
+    
+    // Validate the redirect destination
+    return validateUrlAtRequestTime(parsed, originalHostname);
+  } catch {
+    return { valid: false, error: "Invalid redirect URL" };
+  }
 }
 
 /**

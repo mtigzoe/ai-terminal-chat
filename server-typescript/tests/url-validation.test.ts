@@ -173,11 +173,11 @@ it("blocks 169.254.x.x (link-local) - caught by metadata check", () => {
       expect(result.error).toContain("IPv6");
     });
 
-    it("blocks IPv4-mapped private IPv6", () => {
-      const result = validateProviderBaseUrl("http://[::ffff:127.0.0.1]:11434/v1");
-      expect(result.valid).toBe(false);
-      expect(result.error).toContain("Private IP");
-    });
+it("blocks IPv4-mapped private IPv6", () => {
+    const result = validateProviderBaseUrl("http://[::ffff:127.0.0.1]:11434/v1");
+    expect(result.valid).toBe(false);
+    expect(result.error.toLowerCase()).toContain("private ip");
+  });
   });
 
   describe("port validation", () => {
