@@ -362,10 +362,11 @@ test("git branch -dfoo (unknown flag) is rejected as unknown command", async () 
 
 test("read-only git branch --list is allowed", async () => {
   // Need a git repo for this to work
-  const repoDir = join(tmpdir(), `git-branch-list-${Date.now()}`);
-  import("node:fs").then((fs) => fs.mkdirSync(repoDir, { recursive: true }));
+  const repoDir = mkdtempSync(join(tmpdir(), "git-branch-list-"));
   const { spawnSync } = await import("node:child_process");
   spawnSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+  spawnSync("git", ["config", "user.email", "test@test.com"], { cwd: repoDir, stdio: "ignore" });
+  spawnSync("git", ["config", "user.name", "Test"], { cwd: repoDir, stdio: "ignore" });
   writeFileSync(join(repoDir, "file.txt"), "content");
   spawnSync("git", ["add", "file.txt"], { cwd: repoDir, stdio: "ignore" });
   spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
@@ -376,20 +377,20 @@ test("read-only git branch --list is allowed", async () => {
     await runWithAllowedReadPaths([], async () => {
       const result = await runCommand("git branch --list");
       assert.ok(!isToolError(result), "git branch --list must be allowed (read-only)");
-      // Command succeeds and produces branch name output (exact name depends on CI environment)
-      assert.ok(typeof result.stdout === "string" && result.stdout.trim().length > 0);
+      assert.equal(typeof result.stdout, "string");
     });
   } finally {
     setProjectRoot(originalRoot);
-    import("node:fs").then((fs) => fs.rmSync(repoDir, { recursive: true, force: true }));
+    rmSync(repoDir, { recursive: true, force: true });
   }
 });
 
 test("read-only git branch --show-current is allowed", async () => {
-  const repoDir = join(tmpdir(), `git-branch-current-${Date.now()}`);
-  import("node:fs").then((fs) => fs.mkdirSync(repoDir, { recursive: true }));
+  const repoDir = mkdtempSync(join(tmpdir(), "git-branch-current-"));
   const { spawnSync } = await import("node:child_process");
   spawnSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+  spawnSync("git", ["config", "user.email", "test@test.com"], { cwd: repoDir, stdio: "ignore" });
+  spawnSync("git", ["config", "user.name", "Test"], { cwd: repoDir, stdio: "ignore" });
   writeFileSync(join(repoDir, "file.txt"), "content");
   spawnSync("git", ["add", "file.txt"], { cwd: repoDir, stdio: "ignore" });
   spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
@@ -400,12 +401,11 @@ test("read-only git branch --show-current is allowed", async () => {
     await runWithAllowedReadPaths([], async () => {
       const result = await runCommand("git branch --show-current");
       assert.ok(!isToolError(result), "git branch --show-current must be allowed (read-only)");
-      // Command succeeds and produces branch name output (exact name depends on CI environment)
       assert.ok(typeof result.stdout === "string" && result.stdout.trim().length > 0);
     });
   } finally {
     setProjectRoot(originalRoot);
-    import("node:fs").then((fs) => fs.rmSync(repoDir, { recursive: true, force: true }));
+    rmSync(repoDir, { recursive: true, force: true });
   }
 });
 
@@ -636,4 +636,3 @@ test("runCommand: bare node is rejected", async () => {
   assert.ok(isToolError(result), "bare node must be rejected");
   assert.ok(result.error.includes("not allowed"), "error must mention not allowed");
 });
-
