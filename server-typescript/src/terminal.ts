@@ -20,7 +20,8 @@ const execFileAsync = promisify(execFile);
 
 export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "git status",
-  "git branch",
+  "git branch --list",
+  "git branch --show-current",
   "git log",
   "git diff",
   "git show",
@@ -81,6 +82,13 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git commit",
   "git pull",
   "git add",
+  // Destructive git branch options (read-only "git branch --list" is safe)
+  "git branch -d",
+  "git branch -D",
+  "git branch -m",
+  "git branch -M",
+  "git branch -c",
+  "git branch -C",
 ] as const;
 
 const COMMAND_TIMEOUT_MS = 60_000;

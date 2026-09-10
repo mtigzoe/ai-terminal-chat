@@ -251,7 +251,7 @@ describe("searchFiles", () => {
     }
   });
 
-  test("reads through a symlink to a file (matches Python's read_text() following it)", () => {
+  test("reads through a symlink to a file inside project, blocks symlink escape outside project", () => {
     const outside = mkdtempSync(join(tmpdir(), "ai-terminal-chat-outside-"));
     try {
       writeFileSync(join(outside, "target.txt"), "findme-via-symlink");
@@ -260,10 +260,27 @@ describe("searchFiles", () => {
       const result = searchFiles("findme-via-symlink", ".");
       assert.ok(!isToolError(result));
       if (isToolError(result)) return;
-      assert.equal(result.matches.length, 1);
-      assert.equal(result.matches[0]?.path, "link.txt");
+      // Symlink pointing outside project root should be blocked for security
+      assert.equal(result.matches.length, 0);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  test("reads through a symlink to a file inside project root", () => {
+    const inside = join(projectRoot, "subdir");
+    mkdirSync(inside, { recursive: true });
+    writeFileSync(join(inside, "target.txt"), "findme-via-symlink");
+    symlinkSync(join(inside, "target.txt"), join(projectRoot, "link.txt"));
+
+    const result = searchFiles("findme-via-symlink", ".");
+    assert.ok(!isToolError(result));
+    if (isToolError(result)) return;
+    // Both the original file and the symlink are inside project root,
+    // so both should be found (2 matches)
+    assert.equal(result.matches.length, 2);
+    // Verify the symlink path is in results (normalize path separators for cross-platform)
+    const paths = result.matches.map((m) => m.path.split("\\").join("/")).sort();
+    assert.deepEqual(paths, ["link.txt", "subdir/target.txt"]);
   });
 });

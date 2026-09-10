@@ -26,6 +26,8 @@ import {
   isSensitivePath,
   requireReadAllowed,
   safePath,
+  resolveFollowingSymlinks,
+  isPathWithinRoot,
 } from "./security.js";
 import type {
   FileEntry,
@@ -259,6 +261,18 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
 
       const filePath = join(dir, filename);
       if (!isListedPathAllowed(filePath, false)) continue;
+
+      // Resolve symlinks and ensure the real path is within the project root
+      // to prevent symlink escapes (e.g., link-to-secret -> /etc/passwd)
+      let resolvedFilePath: string;
+      try {
+        resolvedFilePath = resolveFollowingSymlinks(filePath);
+      } catch {
+        continue;
+      }
+      if (!isPathWithinRoot(root, resolvedFilePath)) {
+        continue;
+      }
 
       let size: number;
       try {

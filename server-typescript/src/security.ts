@@ -202,13 +202,11 @@ function loadConfig(): Record<string, unknown> {
  * Uses a simple file-based lock to prevent concurrent writes from losing
  * updates. The lock is a temporary file created with exclusive creation
  * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
- * with exponential backoff.
+ * with exponential backoff and actual sleep.
  *
- * On Windows, atomic rename can fail with EPERM when another process (antivirus,
- * indexer, or a lingering handle from a concurrent write) briefly locks the
- * target file. In that case we fall back to a direct write so config saves
- * still succeed for this local development tool - atomicity is a durability
- * optimization, not a correctness requirement here.
+ * If the lock cannot be acquired (timeout, EPERM, or other error), the
+ * operation fails rather than performing an unsafe unlocked write. This
+ * ensures mutual exclusion is never silently bypassed.
  */
 function persistConfig(payload: Record<string, unknown>): void {
   const targetFile = configFilePath();
@@ -223,46 +221,54 @@ function persistConfig(payload: Record<string, unknown>): void {
   const dir = dirname(targetFile);
   mkdirSync(dir, { recursive: true });
 
-  // Acquire a lock to prevent concurrent writes from racing
-  // Use a lock file path that includes the config file name to avoid
-  // conflicts between different config files, and include PID for
-  // parallel test runs
+  // Deterministic lock path for the config file - all concurrent writers
+  // for the same config file must use the same lock path to ensure
+  // mutual exclusion.
   const configFileName = basename(targetFile).replace(/\.[^.]+$/, "");
-  const lockPath = join(dir, `.config.${configFileName}.${process.pid}.lock`);
+  const lockPath = join(dir, `.config.${configFileName}.lock`);
   const maxLockWaitMs = 5000;
   const lockWaitStart = Date.now();
   let lockFd: number | null = null;
+  let lockAcquired = false;
 
-  // Clean up any stale lock file from a previous crashed run
-  try {
-    rmSync(lockPath, { force: true });
-  } catch {
-    // Ignore
+  // Synchronous sleep using Atomics.wait on a SharedArrayBuffer.
+  // This provides real sleep without busy-spinning the CPU.
+  function sleepSync(ms: number): void {
+    if (ms <= 0) return;
+    const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const view = new Int32Array(buffer);
+    // Atomics.wait returns "ok", "not-equal", or "timed-out"
+    // We wait on a value that will never change, so it times out after ms.
+    Atomics.wait(view, 0, 0, ms);
   }
 
+  // Try to acquire the lock with exponential backoff and real sleep
   while (Date.now() - lockWaitStart < maxLockWaitMs) {
     try {
       // Use 'wx' flag for exclusive creation (fails if file exists)
       lockFd = openSync(lockPath, "wx");
+      lockAcquired = true;
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        // Lock held by another process, wait and retry
+        // Lock held by another process (or another call in same process), wait and retry
         const elapsed = Date.now() - lockWaitStart;
         const backoff = Math.min(10 + elapsed * 0.1, 100);
-        // Small busy wait
+        // Real sleep, not busy-wait
+        sleepSync(backoff);
         continue;
       }
-      // On EPERM or other errors, fall back to direct write without locking
-      if ((err as NodeJS.ErrnoException).code === "EPERM") {
-        break;
-      }
+      // On EPERM or other errors, fail rather than proceeding without locking
+      // This ensures mutual exclusion is never silently bypassed.
       throw err;
     }
   }
 
-  // If we couldn't acquire the lock (EPERM or timeout), proceed without locking
-  // This handles Windows where locking may not work in some environments
+  if (!lockAcquired) {
+    // Timeout - could not acquire lock
+    throw new Error(`Could not acquire config lock for ${configFileName} after ${maxLockWaitMs}ms`);
+  }
+
   const serialized = `${JSON.stringify(payload, null, 2)}\n`;
   const tempPath = join(
     dir,
@@ -271,35 +277,47 @@ function persistConfig(payload: Record<string, unknown>): void {
 
   try {
     writeFileSync(tempPath, serialized, "utf8");
-    // Atomic on both POSIX (rename(2)) and Windows (MoveFileExW with
-    // MOVEFILE_REPLACE_EXISTING), matching Python's os.replace().
-    renameSync(tempPath, targetFile);
+    // On Windows, renameSync can fail with EPERM if the target is locked
+    // by another process (e.g., antivirus). Retry multiple times with
+    // increasing delays.
+    let renameAttempts = 0;
+    const maxRenameAttempts = 5;
+    while (true) {
+      try {
+        renameSync(tempPath, targetFile);
+        break;
+      } catch (renameErr) {
+        if ((renameErr as NodeJS.ErrnoException).code === "EPERM" && renameAttempts < maxRenameAttempts - 1) {
+          renameAttempts++;
+          sleepSync(50 * renameAttempts); // 50ms, 100ms, 150ms, 200ms
+          continue;
+        }
+        throw renameErr;
+      }
+    }
   } catch (err) {
     try {
       rmSync(tempPath, { force: true });
     } catch {
       // Best-effort cleanup; the original error is what matters.
     }
-
-    try {
-      writeFileSync(targetFile, serialized, "utf8");
-      return;
-    } catch (writeErr) {
-      throw writeErr;
-    }
+    throw err;
   } finally {
     // Release the lock if we acquired it
-    if (lockFd !== null) {
+    if (lockAcquired && lockFd !== null) {
       try {
         closeSync(lockFd);
       } catch {
         // Ignore
       }
     }
-    try {
-      rmSync(lockPath, { force: true });
-    } catch {
-      // Ignore lock cleanup errors
+    // Clean up our lock file (only if we created it)
+    if (lockAcquired) {
+      try {
+        rmSync(lockPath, { force: true });
+      } catch {
+        // Ignore lock cleanup errors
+      }
     }
   }
 }
