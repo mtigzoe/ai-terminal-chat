@@ -375,8 +375,9 @@ test("read-only git branch --list is allowed", async () => {
   try {
     await runWithAllowedReadPaths([], async () => {
       const result = await runCommand("git branch --list");
-      assert.ok(!isToolError(result));
-      assert.ok(String(result.stdout).includes("main") || String(result.stdout).includes("master"));
+      assert.ok(!isToolError(result), "git branch --list must be allowed (read-only)");
+      // Command succeeds and produces branch name output (exact name depends on CI environment)
+      assert.ok(typeof result.stdout === "string" && result.stdout.trim().length > 0);
     });
   } finally {
     setProjectRoot(originalRoot);
@@ -398,9 +399,9 @@ test("read-only git branch --show-current is allowed", async () => {
   try {
     await runWithAllowedReadPaths([], async () => {
       const result = await runCommand("git branch --show-current");
-      assert.ok(!isToolError(result));
-      const out = String(result.stdout).trim();
-      assert.ok(out === "main" || out === "master");
+      assert.ok(!isToolError(result), "git branch --show-current must be allowed (read-only)");
+      // Command succeeds and produces branch name output (exact name depends on CI environment)
+      assert.ok(typeof result.stdout === "string" && result.stdout.trim().length > 0);
     });
   } finally {
     setProjectRoot(originalRoot);
