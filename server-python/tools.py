@@ -266,7 +266,8 @@ def search_files(query: str, path: str = ".") -> dict:
 # ~/.ai-terminal-chat/config.json configuration file.
 DEFAULT_ALLOWED_COMMAND_PREFIXES = (
     "git status",
-    "git branch",
+    "git branch --list",
+    "git branch --show-current",
     "git log",
     "git diff",
     "git show",
@@ -274,7 +275,6 @@ DEFAULT_ALLOWED_COMMAND_PREFIXES = (
     "pwd",
     "dir",
     "ls",
-    "wsl",
     "python --version",
     "python3 --version",
     "node --version",
@@ -297,7 +297,6 @@ DEFAULT_ALLOWED_COMMAND_PREFIXES = (
     "black --check",
     "ruff check",
     "uv --version",
-    "uv run",
 )
 
 # Runtime allowlist. Starts as the defaults and is updated from the
@@ -355,6 +354,9 @@ FORBIDDEN_ALLOWED_COMMAND_PREFIXES = (
     "git commit",
     "git pull",
     "git add",
+    # Broad execution prefixes that enable arbitrary code execution
+    "wsl",
+    "uv run",
 )
 
 

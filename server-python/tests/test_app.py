@@ -443,8 +443,12 @@ def test_allowed_commands_get_returns_list(client):
     data = response.get_json()
     assert "commands" in data
     assert isinstance(data["commands"], list)
-    assert "wsl" in data["commands"]
+    # "wsl" and "uv run" are no longer in the default allowlist as they are
+    # broad execution prefixes that enable arbitrary code execution.
     assert "git status" in data["commands"]
+    assert "uv --version" in data["commands"]
+    assert "wsl" not in data["commands"]
+    assert "uv run" not in data["commands"]
 
 
 def test_allowed_commands_add_and_remove(client, tmp_path, monkeypatch):
