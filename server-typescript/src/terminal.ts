@@ -25,7 +25,6 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "git log",
   "git diff",
   "git show",
-  "git remote -v",
   "pwd",
   "dir",
   "ls",
@@ -87,6 +86,9 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git branch -M",
   "git branch -c",
   "git branch -C",
+  // Remote URLs may contain embedded credentials (for example, HTTPS tokens).
+  // Do not permit git remote inspection through the general terminal surface.
+  "git remote",
   // Broad execution prefixes that enable arbitrary code execution
   "wsl",
   "uv run",
@@ -274,7 +276,7 @@ export function tokenizeCommand(command: string): string[] {
           foundClosingQuote = true;
           break;
         }
-        // Inside double quotes, backslash escapes only " and \
+        // Inside double quotes, backslash escapes only " and \\
         if (c === "\\" && i + 1 < command.length) {
           const next = command[i + 1];
           if (next === '"' || next === "\\") {
@@ -413,19 +415,17 @@ function runCommandRespectsReadPermissions(
     // Content-producing flags that must be denied. These either enable
     // patch output explicitly or use a format that includes patch output
     // by default.
-    const hasContentFlag = argsAfterShow.some((arg, idx) => {
+    const hasContentFlag = argsAfterShow.some((arg) => {
       if (arg === "--patch" || arg === "-p" || arg === "--oneline") {
         return true;
       }
       if (arg === "--unified") {
-        // --unified without =value still enables patch output (default 3 lines)
         return true;
       }
       if (arg.startsWith("--unified=")) {
         return true;
       }
       if (arg === "--format" || arg === "--pretty") {
-        // Space-separated form: --format %H or --pretty %H
         return true;
       }
       if (arg.startsWith("--format=") || arg.startsWith("--pretty=")) {
@@ -535,7 +535,7 @@ function commandBlocked(command: string): string | null {
     "sudo",
     "shutdown",
     "reboot",
-    "format",  // Windows format command, not git --format flag
+    "format",
     "diskpart",
     "mkfs",
     "dd",
