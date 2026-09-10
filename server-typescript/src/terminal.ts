@@ -99,6 +99,38 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "uv run",
 ] as const;
 
+// These executables are intentionally allowed only through narrowly scoped
+// prefixes in DEFAULT_ALLOWED_COMMAND_PREFIXES. A user must not be able to
+// add the bare executable because arguments such as `-e`, `-c`, or arbitrary
+// package/script names can turn the terminal allowlist into arbitrary code
+// execution.
+const FORBIDDEN_BROAD_EXECUTABLE_PREFIXES = new Set([
+  "node",
+  "nodejs",
+  "python",
+  "python3",
+  "python.exe",
+  "python3.exe",
+  "py",
+  "perl",
+  "ruby",
+  "php",
+  "pwsh",
+  "powershell",
+  "bash",
+  "sh",
+  "zsh",
+  "cmd",
+  "cmd.exe",
+  "npx",
+  "npm",
+  "pip",
+  "pip3",
+  "pipx",
+  "pytest",
+  "uv",
+]);
+
 const COMMAND_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_CHARS = 20_000;
 
@@ -113,6 +145,10 @@ export function isForbiddenPrefix(prefix: string): boolean {
   const normalized = normalizePrefix(prefix).toLowerCase();
 
   if (!normalized) return true;
+
+  if (FORBIDDEN_BROAD_EXECUTABLE_PREFIXES.has(normalized)) {
+    return true;
+  }
 
   // Reject exact matches and prefixes that would expand to a forbidden
   // command. Both directions must be checked so that a broad prefix such
@@ -395,9 +431,6 @@ function runCommandRespectsReadPermissions(
   const lower = command.toLowerCase();
 
   if (lower.startsWith("git show ")) {
-    // Use the full tokenized args (not contentPathArguments, which strips
-    // flags and the command name) so we can inspect flags and handle
-    // commit:path / -- path syntax correctly.
     let fullArgs: string[];
     try {
       fullArgs = tokenizeCommand(command);
@@ -407,8 +440,6 @@ function runCommandRespectsReadPermissions(
 
     const argsAfterShow = fullArgs.slice(2);
 
-    // --name-only and --name-status suppress patch output even when
-    // combined with --patch, so they are always safe.
     if (
       argsAfterShow.some(
         (arg) => arg === "--name-only" || arg === "--name-status"
@@ -417,9 +448,6 @@ function runCommandRespectsReadPermissions(
       return null;
     }
 
-    // Content-producing flags that must be denied. These either enable
-    // patch output explicitly or use a format that includes patch output
-    // by default.
     const hasContentFlag = argsAfterShow.some((arg) => {
       if (arg === "--patch" || arg === "-p" || arg === "--oneline") {
         return true;
@@ -446,7 +474,6 @@ function runCommandRespectsReadPermissions(
       );
     }
 
-    // Content-suppressing flags that are safe.
     const noContentFlags = new Set(["--no-patch", "--quiet", "--stat"]);
     if (argsAfterShow.some((arg) => noContentFlags.has(arg))) {
       return null;
@@ -516,8 +543,6 @@ function runCommandRespectsReadPermissions(
 }
 
 function commandBlocked(command: string): string | null {
-  // Tokenize to get the command name (first token) and avoid false positives
-  // from matching flag names like --format, --pretty, etc.
   let tokens: string[];
   try {
     tokens = tokenizeCommand(command);
@@ -531,7 +556,6 @@ function commandBlocked(command: string): string | null {
 
   const cmd = tokens[0].toLowerCase();
 
-  // Blocked command names (exact match on first token)
   const blockedCommands = new Set([
     "rm",
     "del",
@@ -550,17 +574,12 @@ function commandBlocked(command: string): string | null {
   ]);
 
   if (blockedCommands.has(cmd)) {
-    // Special case: "rm -rf" is particularly dangerous
     if (cmd === "rm" && tokens.length >= 2 && tokens[1] === "-rf") {
       return `This command is blocked for safety: ${command}`;
     }
-    // For other blocked commands, block regardless of arguments
     return `This command is blocked for safety: ${command}`;
   }
 
-  // Blocked command prefixes that would enable dangerous operations
-  // These are checked against the allowlist via isForbiddenPrefix, but
-  // we also block them here as defense in depth.
   const blockedPrefixes = [
     "git reset",
     "git clean",
@@ -577,10 +596,6 @@ function commandBlocked(command: string): string | null {
     }
   }
 
-  // Sensitive file patterns - check if command references sensitive files
-  // These are also caught by the allowlist (isForbiddenPrefix rejects prefixes
-  // that would allow these), but check here as defense in depth for commands
-  // that might slip through.
   if (/\.env\b/i.test(command)) {
     return `This command is blocked for safety: ${command}`;
   }
@@ -591,7 +606,6 @@ function commandBlocked(command: string): string | null {
     return `This command is blocked for safety: ${command}`;
   }
 
-  // Dangerous metacharacters that indicate shell injection attempts
   if (
     DANGEROUS_COMMAND_CHARACTERS.some((character) =>
       command.includes(character),
@@ -613,8 +627,6 @@ function executableForCommand(args: string[]): {
   if (process.platform === "win32" && args.length > 0) {
     const command = args[0].toLowerCase();
 
-    // Windows has no standalone `pwd` executable. `cd` with no argument
-    // prints the current directory when executed through cmd.exe.
     if (command === "pwd") {
       return {
         file: "cmd",
@@ -622,8 +634,6 @@ function executableForCommand(args: string[]): {
       };
     }
 
-    // `dir` and `ls` are both supported as directory-listing commands.
-    // `ls` is translated to Windows `dir`.
     if (command === "dir" || command === "ls") {
       return {
         file: "cmd",
