@@ -40,7 +40,6 @@ import {
   delete_file,
   git_add,
 } from "./write-tools.ts";
-import { loadAuthConfig } from "./config.ts";
 
 type Env = Record<string, never>;
 
@@ -218,7 +217,7 @@ app.post("/providers/select", async (c) => {
   // The async provider probe (buildProviderStatus) is done outside the lock.
   let candidate: Provider;
   try {
-    withConfigLock((config) => {
+    candidate = withConfigLock((config) => {
       // Apply Ollama URL to env if provided
       if (name === "ollama" && hasOllamaBaseUrl && normalizedOllamaUrl) {
         applyOllamaBaseUrlToEnv(normalizedOllamaUrl);
@@ -257,8 +256,8 @@ app.post("/providers/select", async (c) => {
       }
 
       // Create provider instance and update activeProvider
-      candidate = getProvider(name, model ? { model } : undefined);
-      activeProvider = candidate;
+      const newProvider = getProvider(name, model ? { model } : undefined);
+      activeProvider = newProvider;
 
       // Update config in memory (will be persisted by withConfigLock)
       config.provider = name;
@@ -273,6 +272,8 @@ app.post("/providers/select", async (c) => {
       if (pendingProjectPath !== null) {
         setProjectRoot(pendingProjectPath);
       }
+
+      return newProvider;
     });
   } catch (exc) {
     return c.json({ error: `Could not switch to '${name}': ${exc}` }, 400 as any);

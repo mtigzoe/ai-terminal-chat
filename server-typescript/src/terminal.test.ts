@@ -463,8 +463,11 @@ test("isForbiddenPrefix: 'uv run' is rejected as a forbidden prefix", () => {
 
 test("DEFAULT_ALLOWED_COMMAND_PREFIXES: does not contain broad execution prefixes", () => {
   // The default allowlist must not contain "wsl" or "uv run" as broad prefixes
-  assert.ok(!DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("wsl"), "wsl must not be in default allowlist");
-  assert.ok(!DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("uv run"), "uv run must not be in default allowlist");
+  // Cast to readonly string[] because the readonly tuple type narrows .includes() to only
+  // accept known allowlist values, but we are explicitly testing ABSENCE.
+  const allowlist = DEFAULT_ALLOWED_COMMAND_PREFIXES as readonly string[];
+  assert.ok(!allowlist.includes("wsl"), "wsl must not be in default allowlist");
+  assert.ok(!allowlist.includes("uv run"), "uv run must not be in default allowlist");
   // But specific safe variants may be allowed, e.g., "uv --version"
   assert.ok(DEFAULT_ALLOWED_COMMAND_PREFIXES.includes("uv --version"), "uv --version should be allowed");
 });
