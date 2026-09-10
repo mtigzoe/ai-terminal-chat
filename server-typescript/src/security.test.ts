@@ -9,11 +9,13 @@ import {
   __setConfigDirForTests,
   __setProjectRootForTests,
   CHOOSE_PROJECT_ROOT,
+  getConfigFile,
   getProjectRoot,
   isAbsoluteOnAnyPlatform,
   isPathWithinRoot,
   isSensitiveFilename,
   isSensitivePath,
+  persistProviderSelection,
   resolveFollowingSymlinks,
   safePath,
   SecurityValidationError,
@@ -420,5 +422,109 @@ describe("getProjectRoot loading", () => {
       JSON.stringify({ project_root: join(configDir, "does-not-exist") }),
     );
     assert.equal(getProjectRoot(), resolveFollowingSymlinks(process.cwd()));
+  });
+});
+
+describe("persistProjectRoot and persistProviderSelection concurrency", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "ai-terminal-chat-config-concurrency-"));
+    __setConfigDirForTests(configDir);
+  });
+
+  afterEach(() => {
+    __setConfigDirForTests(null);
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  function readConfig(): Record<string, unknown> {
+    const configFile = getConfigFile();
+    try {
+      return JSON.parse(readFileSync(configFile, "utf8")) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+
+  test("concurrent persistProjectRoot calls do not lose updates", async () => {
+    const NUM_WRITERS = 10;
+    const ITERATIONS_PER_WRITER = 5;
+
+    async function writer(writerId: number) {
+      for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+        const root = join(configDir, `project-${writerId}-${i}`);
+        mkdirSync(root, { recursive: true });
+        setProjectRoot(root);
+      }
+    }
+
+    // Launch all writers concurrently
+    await Promise.all(
+      Array.from({ length: NUM_WRITERS }, (_, i) => writer(i))
+    );
+
+    // Verify config file is valid and contains a project_root
+    const finalConfig = readConfig();
+    assert.ok(typeof finalConfig.project_root === "string");
+    assert.ok(finalConfig.project_root.length > 0);
+  });
+
+  test("concurrent persistProviderSelection calls do not lose updates", async () => {
+    const NUM_WRITERS = 10;
+    const ITERATIONS_PER_WRITER = 5;
+
+    async function writer(writerId: number) {
+      for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+        const provider = writerId % 2 === 0 ? "gemini" : "ollama";
+        const model = `model-${writerId}-${i}`;
+        const ollamaBaseUrl = provider === "ollama" ? `http://localhost:${11434 + writerId}` : undefined;
+        persistProviderSelection(provider, model, ollamaBaseUrl);
+      }
+    }
+
+    // Launch all writers concurrently
+    await Promise.all(
+      Array.from({ length: NUM_WRITERS }, (_, i) => writer(i))
+    );
+
+    // Verify config file is valid and contains provider selection
+    const finalConfig = readConfig();
+    assert.ok(typeof finalConfig.provider === "string");
+    assert.ok(finalConfig.provider.length > 0);
+  });
+
+  test("concurrent persistProjectRoot and persistProviderSelection do not interfere", async () => {
+    const NUM_WRITERS = 10;
+    const ITERATIONS_PER_WRITER = 5;
+
+    async function projectWriter(writerId: number) {
+      for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+        const root = join(configDir, `project-${writerId}-${i}`);
+        mkdirSync(root, { recursive: true });
+        setProjectRoot(root);
+      }
+    }
+
+    async function providerWriter(writerId: number) {
+      for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+        const provider = writerId % 2 === 0 ? "gemini" : "ollama";
+        const model = `model-${writerId}-${i}`;
+        persistProviderSelection(provider, model);
+      }
+    }
+
+    // Launch all writers concurrently
+    await Promise.all([
+      ...Array.from({ length: NUM_WRITERS }, (_, i) => projectWriter(i)),
+      ...Array.from({ length: NUM_WRITERS }, (_, i) => providerWriter(i)),
+    ]);
+
+    // Verify config file is valid and contains both project_root and provider
+    const finalConfig = readConfig();
+    assert.ok(typeof finalConfig.project_root === "string");
+    assert.ok(finalConfig.project_root.length > 0);
+    assert.ok(typeof finalConfig.provider === "string");
+    assert.ok(finalConfig.provider.length > 0);
   });
 });

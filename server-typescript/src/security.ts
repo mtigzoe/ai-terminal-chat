@@ -223,7 +223,7 @@ function sleepSync(ms: number): void {
  * Write the config payload to the target file atomically.
  *
  * This function does NOT acquire any locks - the caller must hold the lock.
- * Mirrors the write logic from persistConfig().
+ * Mirrors the write logic from the internal config persistence functions.
  */
 function writeConfigFile(targetFile: string, payload: Record<string, unknown>): void {
   const serialized = `${JSON.stringify(payload, null, 2)}\n`;
@@ -372,10 +372,9 @@ export function getProjectRoot(): string {
  * which would have silently dropped any other key already saved there.
  */
 function persistProjectRoot(root: string): void {
-  const targetFile = configFilePath();
-  const currentConfig = loadConfig();
-  currentConfig.project_root = root;
-  writeConfigFile(targetFile, currentConfig);
+  withConfigLock((config) => {
+    config.project_root = root;
+  });
 }
 
 /**
@@ -469,7 +468,7 @@ export function __setConfigDirForTests(dir: string | null): void {
 
 /**
  * Test-only: override the exact config *file* path used by
- * loadConfig()/persistConfig() (and therefore
+ * loadConfig() (and therefore
  * loadProviderSelection()/persistProviderSelection()/getConfigFile()), so
  * tests can redirect config storage to a throwaway temp file instead of the
  * real `~/.ai-terminal-chat/config.json`. Pass `null` to restore the
@@ -601,66 +600,43 @@ export function persistProviderSelection(
   model?: string | null,
   ollamaBaseUrl?: string | null,
 ): void {
-  const payload = loadConfig();
-  const normalizedProvider = String(provider).trim().toLowerCase();
+  withConfigLock((config) => {
+    const normalizedProvider = String(provider).trim().toLowerCase();
 
-  payload.provider = normalizedProvider;
+    config.provider = normalizedProvider;
 
-  if (model !== undefined && model !== null) {
-    const modelS = String(model).trim();
-    if (modelS) {
-      payload.model = modelS;
-    } else {
-      delete payload.model;
-    }
-  }
-
-  if (ollamaBaseUrl !== undefined && ollamaBaseUrl !== null) {
-    let url = String(ollamaBaseUrl).trim();
-
-    if (url) {
-      if (!url.includes("://")) {
-        url = `http://${url}`;
+    if (model !== undefined && model !== null) {
+      const modelS = String(model).trim();
+      if (modelS) {
+        config.model = modelS;
+      } else {
+        delete config.model;
       }
-      payload.ollama_base_url = url;
-    } else {
-      delete payload.ollama_base_url;
     }
-  } else if (normalizedProvider !== "ollama") {
-    delete payload.ollama_base_url;
-  }
 
-  persistConfig(payload);
+    if (ollamaBaseUrl !== undefined && ollamaBaseUrl !== null) {
+      let url = String(ollamaBaseUrl).trim();
+
+      if (url) {
+        if (!url.includes("://")) {
+          url = `http://${url}`;
+        }
+        config.ollama_base_url = url;
+      } else {
+        delete config.ollama_base_url;
+      }
+    } else if (normalizedProvider !== "ollama") {
+      delete config.ollama_base_url;
+    }
+  });
 }
-
-/**
- * Persist the full configuration payload to the config file.
- *
- * Uses a simple file-based lock to prevent concurrent writes from losing
- * updates. The lock is a temporary file created with exclusive creation
- * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
- * with exponential backoff and actual sleep.
- *
- * If the lock cannot be acquired (timeout, EPERM, or other error), the
- * operation fails rather than performing an unsafe unlocked write. This
- * ensures mutual exclusion is never silently bypassed.
- */
-function persistConfig(payload: Record<string, unknown>): void {
-  const targetFile = configFilePath();
-  const { lockFd, lockPath } = acquireConfigLock(targetFile);
-  try {
-    writeConfigFile(targetFile, payload);
-  } finally {
-    releaseConfigLock(lockFd, lockPath);
-  }
-}
-
 /**
  * Execute a configuration mutation atomically under the config file lock.
  *
  * This ensures that the entire read-modify-write sequence is protected by
- * the same file lock used by persistConfig(), preventing race conditions
- * where concurrent operations could see stale state or overwrite each other.
+ * the same file lock used by the internal persistence functions, preventing
+ * race conditions where concurrent operations could see stale state or
+ * overwrite each other.
  *
  * @param mutation A function that receives the current config and returns the modified config
  * @returns The modified config that was persisted
