@@ -379,6 +379,22 @@ function persistProjectRoot(root: string): void {
 }
 
 /**
+ * Internal helper to update project_root in a config object without persisting.
+ * Used by withConfigLock mutations to avoid double-persistence races.
+ */
+function setProjectRootInConfig(config: Record<string, unknown>, root: string): void {
+  config.project_root = root;
+}
+
+/**
+ * Internal helper to update the in-memory project root without validation or persistence.
+ * Used by withConfigLock mutations after config object has been updated.
+ */
+export function __setProjectRootInMemory(root: string): void {
+  currentProjectRoot = root;
+}
+
+/**
  * Validate, persist, and activate a new project root.
  *
  * The configuration file lives under the user's home directory, outside
@@ -666,7 +682,7 @@ export function withConfigLock<T>(
 }
 
 // Export lock functions for testing/debugging
-export { acquireConfigLock, releaseConfigLock, writeConfigFile };
+export { acquireConfigLock, releaseConfigLock, writeConfigFile, setProjectRootInConfig };
 
 /**
  * Agent read permissions are request-scoped.

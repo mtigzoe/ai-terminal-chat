@@ -6,6 +6,8 @@ import { SUPPORTED_PROVIDERS } from "./providers/config.ts";
 import {
   getProjectRoot,
   setProjectRoot,
+  setProjectRootInConfig,
+  __setProjectRootInMemory,
   loadProviderSelection,
   persistProviderSelection,
   runWithAllowedReadPaths,
@@ -261,7 +263,11 @@ app.post("/providers/select", async (c) => {
 
       // Update config in memory (will be persisted by withConfigLock)
       config.provider = name;
-      if (model) config.model = model;
+      if (model) {
+        config.model = model;
+      } else {
+        delete config.model;
+      }
       if (name === "ollama" && hasOllamaBaseUrl) {
         config.ollama_base_url = normalizedOllamaUrl;
       } else if (name !== "ollama") {
@@ -270,7 +276,8 @@ app.post("/providers/select", async (c) => {
 
       // Set project root if provided
       if (pendingProjectPath !== null) {
-        setProjectRoot(pendingProjectPath);
+        setProjectRootInConfig(config, pendingProjectPath);
+        __setProjectRootInMemory(pendingProjectPath);
       }
 
       return newProvider;
