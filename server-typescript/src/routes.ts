@@ -14,6 +14,10 @@ import {
   withConfigLock,
 } from "./security.ts";
 import { isOllamaCliInstalled, launchOllamaRun } from "./ollama-cli.ts";
+import {
+  validateProviderBaseUrl,
+  normalizeOllamaUrlForStorage,
+} from "./url-validation.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
@@ -83,7 +87,16 @@ export function restoreProviderFromConfig(): void {
         saved.ollama_base_url &&
         saved.ollama_base_url.trim()
       ) {
-        applyOllamaBaseUrlToEnv(saved.ollama_base_url.trim());
+        // Validate the stored URL at startup for SSRF protection
+        const validation = validateProviderBaseUrl(saved.ollama_base_url.trim(), {
+          allowedPorts: [80, 443, 11434, 8080, 8000, 3000, 9000, 4433],
+        });
+        if (!validation.valid) {
+          console.error(`Invalid persisted Ollama URL rejected: ${validation.error}`);
+          // Fall through to default provider
+        } else {
+          applyOllamaBaseUrlToEnv(validation.url!.toString());
+        }
       }
       // If saved provider is not Ollama, leave OLLAMA_BASE_URL untouched
       // so system env vars can serve as fallback when user later selects Ollama.
@@ -99,18 +112,6 @@ export function restoreProviderFromConfig(): void {
 }
 
 restoreProviderFromConfig();
-
-/** Scheme-normalise an Ollama host/URL for config persistence (matches Python). */
-function normalizeOllamaBaseUrlForPersist(raw: string): string {
-  let url = raw.trim();
-  if (!url) {
-    throw new Error("An Ollama hostname is required.");
-  }
-  if (!url.includes("://")) {
-    url = `http://${url}`;
-  }
-  return url;
-}
 
 /**
  * Apply Ollama base URL to process env for provider construction.
@@ -203,7 +204,8 @@ app.post("/providers/select", async (c) => {
   let normalizedOllamaUrl: string | null = null;
   if (name === "ollama" && hasOllamaBaseUrl) {
     try {
-      normalizedOllamaUrl = normalizeOllamaBaseUrlForPersist(ollamaBaseUrlRaw ?? "");
+      // Validate and normalize the Ollama URL with SSRF protection
+      normalizedOllamaUrl = normalizeOllamaUrlForStorage(ollamaBaseUrlRaw ?? "");
     } catch (exc) {
       return c.json(
         { error: `Could not switch to '${name}': ${exc instanceof Error ? exc.message : String(exc)}` },

@@ -106,17 +106,17 @@ describe("OpenAICompatibleProvider construction", () => {
   });
 
   it("defaults displayName to 'OpenAI-compatible'", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     expect(provider.displayName).toBe("OpenAI-compatible");
   });
 
   it("defaults timeout to 120 seconds", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     expect(provider.timeout).toBe(120);
   });
 
   it("defaults capabilities to tools/streaming/model_listing enabled, no key required, not local", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     expect(provider.capabilities).toEqual({
       tools: true,
       streaming: true,
@@ -129,7 +129,7 @@ describe("OpenAICompatibleProvider construction", () => {
 
   it("honors requires_api_key and local overrides", () => {
     const provider = new OpenAICompatibleProvider({
-      base_url: "http://x",
+      base_url: "http://localhost:8080",
       model: "m",
       requires_api_key: true,
       local: true,
@@ -145,14 +145,14 @@ describe("OpenAICompatibleProvider construction", () => {
 
 describe("OpenAICompatibleProvider.buildContents", () => {
   it("leads with SYSTEM_INSTRUCTION when tools are supported", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.buildContents("hi", []) as { role: string; content: string }[];
     expect(contents[0]).toEqual({ role: "system", content: SYSTEM_INSTRUCTION });
   });
 
   it("leads with CHAT_ONLY_INSTRUCTION when tools are unsupported", () => {
     const provider = new OpenAICompatibleProvider({
-      base_url: "http://x",
+      base_url: "http://localhost:8080",
       model: "m",
       capabilities: { tools: false },
     });
@@ -161,13 +161,13 @@ describe("OpenAICompatibleProvider.buildContents", () => {
   });
 
   it("appends the user message last", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.buildContents("hello there", []) as { role: string; content: string }[];
     expect(contents.at(-1)).toEqual({ role: "user", content: "hello there" });
   });
 
   it("maps Gemini-style 'model' role history entries to 'assistant'", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.buildContents("next", [
       { role: "model", parts: [{ text: "prior reply" }] },
     ]) as { role: string; content: string }[];
@@ -175,7 +175,7 @@ describe("OpenAICompatibleProvider.buildContents", () => {
   });
 
   it("preserves the 'user' role for user history entries", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.buildContents("next", [
       { role: "user", parts: [{ text: "earlier question" }] },
     ]) as { role: string; content: string }[];
@@ -183,7 +183,7 @@ describe("OpenAICompatibleProvider.buildContents", () => {
   });
 
   it("joins multiple parts into a single content string", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.buildContents("next", [
       { role: "model", parts: [{ text: "part one " }, { text: "part two" }] },
     ]) as { role: string; content: string }[];
@@ -191,7 +191,7 @@ describe("OpenAICompatibleProvider.buildContents", () => {
   });
 
   it("skips history entries that resolve to empty text", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.buildContents("next", [
       { role: "model", parts: [] },
       { role: "model", parts: [{ text: "" }] },
@@ -201,7 +201,7 @@ describe("OpenAICompatibleProvider.buildContents", () => {
   });
 
   it("skips malformed history entries that are not objects", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.buildContents("next", [null, "garbage", 42]) as unknown[];
     expect(contents).toHaveLength(2);
   });
@@ -214,25 +214,25 @@ describe("OpenAICompatibleProvider.buildContents", () => {
 describe("OpenAICompatibleProvider.probe", () => {
   it("is available on HTTP 200", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: [] })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.probe()).resolves.toEqual({ available: true, error: null });
   });
 
   it("treats HTTP 404 from /models as available (endpoint just doesn't exist)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse("not found", 404)));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.probe()).resolves.toEqual({ available: true, error: null });
   });
 
   it("treats HTTP 405 from /models as available", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse("method not allowed", 405)));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.probe()).resolves.toEqual({ available: true, error: null });
   });
 
   it("is unavailable with a descriptive error on other HTTP error statuses", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse("boom", 500)));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m", display_name: "Kilo" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m", display_name: "Kilo" });
     const result = await provider.probe();
     expect(result.available).toBe(false);
     expect(result.error).toContain("Kilo");
@@ -241,7 +241,7 @@ describe("OpenAICompatibleProvider.probe", () => {
 
   it("is unavailable with an unreachable message on network failure", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m", display_name: "Ollama" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m", display_name: "Ollama" });
     const result = await provider.probe();
     expect(result.available).toBe(false);
     expect(result.error).toContain("Could not reach Ollama");
@@ -251,7 +251,7 @@ describe("OpenAICompatibleProvider.probe", () => {
     const abortError = new Error("The operation was aborted");
     abortError.name = "AbortError";
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abortError));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const result = await provider.probe();
     expect(result.available).toBe(false);
     expect(result.error).toContain("timed out");
@@ -260,10 +260,10 @@ describe("OpenAICompatibleProvider.probe", () => {
   it("hits GET {base_url}/models", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:9/v1", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080/v1", model: "m" });
     await provider.probe();
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:9/v1/models",
+      "http://localhost:8080/v1/models",
       expect.objectContaining({ method: "GET" })
     );
   });
@@ -277,7 +277,7 @@ describe("OpenAICompatibleProvider request headers", () => {
   it("omits Authorization when no api_key is configured", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await provider.probe();
     const [, options] = fetchMock.mock.calls[0];
     expect(options.headers.Authorization).toBeUndefined();
@@ -286,7 +286,7 @@ describe("OpenAICompatibleProvider request headers", () => {
   it("sends a Bearer Authorization header when an api_key is configured", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m", api_key: "secret-key" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m", api_key: "secret-key" });
     await provider.probe();
     const [, options] = fetchMock.mock.calls[0];
     expect(options.headers.Authorization).toBe("Bearer secret-key");
@@ -295,7 +295,7 @@ describe("OpenAICompatibleProvider request headers", () => {
   it("always sends a JSON content type", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await provider.probe();
     const [, options] = fetchMock.mock.calls[0];
     expect(options.headers["Content-Type"]).toBe("application/json");
@@ -309,49 +309,49 @@ describe("OpenAICompatibleProvider request headers", () => {
 describe("OpenAICompatibleProvider.listModels", () => {
   it("parses OpenAI-style {data: [{id}]} responses", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: "gpt-4o-mini" }, { id: "gpt-4o" }] })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([{ id: "gpt-4o-mini" }, { id: "gpt-4o" }]);
   });
 
   it("parses Ollama-style {models: [{name}]} responses", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ models: [{ name: "llama3.1" }] })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([{ id: "llama3.1" }]);
   });
 
   it("parses raw string entries", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: ["model-a", "model-b"] })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([{ id: "model-a" }, { id: "model-b" }]);
   });
 
   it("falls back to a 'model' field when id/name are absent", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: [{ model: "custom-model" }] })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([{ id: "custom-model" }]);
   });
 
   it("drops entries without any usable id field", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: [{ foo: "bar" }, { id: "keep-me" }] })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([{ id: "keep-me" }]);
   });
 
   it("returns an empty array on a non-ok response", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse("nope", 500)));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([]);
   });
 
   it("returns an empty array when the request throws", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([]);
   });
 
   it("returns an empty array when neither data nor models keys are present", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ unrelated: true })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.listModels()).resolves.toEqual([]);
   });
 });
@@ -368,7 +368,7 @@ describe("OpenAICompatibleProvider.generate", () => {
         jsonResponse({ choices: [{ message: { role: "assistant", content: "hello!" } }] })
       )
     );
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const result = await provider.generate([]);
     expect(result.text).toBe("hello!");
     expect(result.tool_calls).toEqual([]);
@@ -393,7 +393,7 @@ describe("OpenAICompatibleProvider.generate", () => {
         })
       )
     );
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const result = await provider.generate([]);
     expect(result.tool_calls).toEqual([{ name: "list_files", args: { path: "." }, id: "call_1" }]);
   });
@@ -413,7 +413,7 @@ describe("OpenAICompatibleProvider.generate", () => {
         })
       )
     );
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const result = await provider.generate([]);
     expect(result.tool_calls[0].args).toEqual({ path: "a.txt" });
   });
@@ -427,7 +427,7 @@ describe("OpenAICompatibleProvider.generate", () => {
         })
       )
     );
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const result = await provider.generate([]);
     expect(result.tool_calls[0].args).toEqual({});
   });
@@ -441,7 +441,7 @@ describe("OpenAICompatibleProvider.generate", () => {
         })
       )
     );
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const result = await provider.generate([]);
     expect(result.tool_calls[0].id).toBeUndefined();
   });
@@ -449,7 +449,7 @@ describe("OpenAICompatibleProvider.generate", () => {
   it("preserves the raw assistant message on the response", async () => {
     const message = { role: "assistant", content: "hi", extra_field: 123 };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ choices: [{ message }] })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const result = await provider.generate([]);
     expect(result.raw).toEqual(message);
   });
@@ -457,7 +457,7 @@ describe("OpenAICompatibleProvider.generate", () => {
   it("includes tool schemas in the request body when tools are supported and present", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ choices: [{ message: { content: "ok" } }] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await provider.generate([]);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(Array.isArray(body.tools)).toBe(true);
@@ -468,7 +468,7 @@ describe("OpenAICompatibleProvider.generate", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ choices: [{ message: { content: "ok" } }] }));
     vi.stubGlobal("fetch", fetchMock);
     const provider = new OpenAICompatibleProvider({
-      base_url: "http://x",
+      base_url: "http://localhost:8080",
       model: "m",
       capabilities: { tools: false },
     });
@@ -480,7 +480,7 @@ describe("OpenAICompatibleProvider.generate", () => {
   it("omits tools from the request body when setTools([]) is used", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ choices: [{ message: { content: "ok" } }] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     provider.setTools([]);
     await provider.generate([]);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -490,11 +490,11 @@ describe("OpenAICompatibleProvider.generate", () => {
   it("posts to {base_url}/chat/completions with the model and messages", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ choices: [{ message: { content: "ok" } }] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "my-model" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "my-model" });
     const contents = [{ role: "user", content: "hi" }];
     await provider.generate(contents);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://x/chat/completions",
+      "http://localhost:8080/chat/completions",
       expect.objectContaining({ method: "POST" })
     );
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -504,13 +504,13 @@ describe("OpenAICompatibleProvider.generate", () => {
 
   it("throws with the HTTP status and body on a non-ok response", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse("bad request details", 400)));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m", display_name: "Kilo" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m", display_name: "Kilo" });
     await expect(provider.generate([])).rejects.toThrow(/Kilo request failed \(HTTP 400\): bad request details/);
   });
 
   it("throws on an unexpected response shape (missing choices)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ unexpected: true })));
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     await expect(provider.generate([])).rejects.toThrow(/Unexpected response shape/);
   });
 
@@ -520,7 +520,7 @@ describe("OpenAICompatibleProvider.generate", () => {
       .mockResolvedValueOnce(textResponse("Error: 400 this model does not support tools", 400))
       .mockResolvedValueOnce(jsonResponse({ choices: [{ message: { content: "chat-only reply" } }] }));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
 
     const result = await provider.generate([]);
 
@@ -535,7 +535,7 @@ describe("OpenAICompatibleProvider.generate", () => {
   it("does not retry, and rethrows, when the failure is unrelated to tool support", async () => {
     const fetchMock = vi.fn().mockResolvedValue(textResponse("internal server error", 500));
     vi.stubGlobal("fetch", fetchMock);
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
 
     await expect(provider.generate([])).rejects.toThrow(/HTTP 500/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -546,7 +546,7 @@ describe("OpenAICompatibleProvider.generate", () => {
     const fetchMock = vi.fn().mockResolvedValue(textResponse("does not support tool calling", 400));
     vi.stubGlobal("fetch", fetchMock);
     const provider = new OpenAICompatibleProvider({
-      base_url: "http://x",
+      base_url: "http://localhost:8080",
       model: "m",
       capabilities: { tools: false },
     });
@@ -562,7 +562,7 @@ describe("OpenAICompatibleProvider.generate", () => {
 
 describe("OpenAICompatibleProvider.appendModelTurn", () => {
   it("preserves the raw message and forces role to assistant", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.appendModelTurn([{ role: "user", content: "hi" }], {
       text: "hello",
       tool_calls: [],
@@ -572,13 +572,13 @@ describe("OpenAICompatibleProvider.appendModelTurn", () => {
   });
 
   it("falls back to a plain assistant message when raw is not an object", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.appendModelTurn([], { text: "hello", tool_calls: [], raw: null });
     expect(contents.at(-1)).toEqual({ role: "assistant", content: "hello" });
   });
 
   it("falls back to empty content when both raw and text are absent", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = provider.appendModelTurn([], { text: null, tool_calls: [], raw: null });
     expect(contents.at(-1)).toEqual({ role: "assistant", content: "" });
   });
@@ -587,7 +587,7 @@ describe("OpenAICompatibleProvider.appendModelTurn", () => {
     // Direct git commands (agent.directGitCommand) have no raw payload. Without
     // rebuilt tool_calls the assistant turn has no ids, so appendToolResults
     // drops every result and the model asks to commit again after each Allow.
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     let contents = provider.appendModelTurn([{ role: "user", content: "git commit -m test" }], {
       text: null,
       tool_calls: [{ name: "git_commit", args: { message: "test" } }],
@@ -657,7 +657,7 @@ describe("appendModelTurn rebuilds raw-less tool calls for native providers", ()
 
 describe("OpenAICompatibleProvider.appendToolResults", () => {
   it("synthesizes call ids when the assistant turn's tool_calls lack them", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = [
       { role: "assistant", content: null, tool_calls: [{ function: { name: "list_files" } }] },
     ];
@@ -670,7 +670,7 @@ describe("OpenAICompatibleProvider.appendToolResults", () => {
   });
 
   it("preserves existing call ids", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = [
       { role: "assistant", tool_calls: [{ id: "abc123", function: { name: "list_files" } }] },
     ];
@@ -679,7 +679,7 @@ describe("OpenAICompatibleProvider.appendToolResults", () => {
   });
 
   it("keeps result order aligned with call order across multiple tool calls", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = [
       {
         role: "assistant",
@@ -697,7 +697,7 @@ describe("OpenAICompatibleProvider.appendToolResults", () => {
   });
 
   it("serializes a null result as JSON null", () => {
-    const provider = new OpenAICompatibleProvider({ base_url: "http://x", model: "m" });
+    const provider = new OpenAICompatibleProvider({ base_url: "http://localhost:8080", model: "m" });
     const contents = [{ role: "assistant", tool_calls: [{ id: "id-a", function: { name: "a" } }] }];
     const updated = provider.appendToolResults(contents, [{ name: "a", result: null }]);
     expect((updated.at(-1) as { content: string }).content).toBe("null");

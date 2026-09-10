@@ -1,12 +1,14 @@
 import { Provider, ProviderCapabilities, ProviderResponse, ToolCall } from "./base.ts";
 import { CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION } from "../prompts.ts";
 import { buildToolSchemas } from "../tools.ts";
+import { validateProviderBaseUrl, validateUrlAtRequestTime, createSafeRequestInit, validateRedirectUrl } from "../url-validation.ts";
 
 export class OpenAICompatibleProvider extends Provider {
   readonly baseUrl: string;
   readonly apiKey: string | undefined;
   readonly timeout: number;
   readonly displayName: string;
+  private readonly originalHostname: string;
   protected _capabilities: ProviderCapabilities;
   private tools: unknown[];
 
@@ -26,6 +28,17 @@ export class OpenAICompatibleProvider extends Provider {
         `${config.display_name || "Provider"} base URL is not set.`
       );
     }
+
+    // Validate the base URL for SSRF protection
+    const validation = validateProviderBaseUrl(config.base_url, {
+      allowedPorts: [80, 443, 11434, 8080, 8000, 3000, 9000, 4433],
+    });
+    if (!validation.valid) {
+      throw new Error(`Invalid base URL: ${validation.error}`);
+    }
+
+    // Store original hostname for DNS rebinding protection at request time
+    this.originalHostname = new URL(config.base_url).hostname;
 
     this.baseUrl = config.base_url.replace(/\/$/, "");
     this.model = config.model;
@@ -79,9 +92,16 @@ export class OpenAICompatibleProvider extends Provider {
       seconds * 1000
     );
 
+    // DNS rebinding protection: validate the resolved URL at request time
+    const urlObj = new URL(url);
+    const requestValidation = validateUrlAtRequestTime(urlObj, this.originalHostname);
+    if (!requestValidation.valid) {
+      throw new Error(`SSRF protection: ${requestValidation.error}`);
+    }
+
     try {
       const response = await fetch(url, {
-        ...options,
+        ...createSafeRequestInit(options),
         method,
         headers: {
           ...this.headers(),
@@ -89,6 +109,18 @@ export class OpenAICompatibleProvider extends Provider {
         },
         signal: controller.signal,
       });
+
+      // Handle redirects manually (redirect: "manual")
+      if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400 && response.headers.has("location"))) {
+        const location = response.headers.get("location");
+        if (location) {
+          const redirectValidation = validateRedirectUrl(location, this.originalHostname);
+          if (!redirectValidation.valid) {
+            throw new Error(`SSRF protection: Redirect blocked - ${redirectValidation.error}`);
+          }
+        }
+      }
+
       return response;
     } catch (exc) {
       if (exc instanceof Error && exc.name === "AbortError") {
