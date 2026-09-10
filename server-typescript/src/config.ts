@@ -50,13 +50,6 @@ function defaultConfigFilePath(): string {
   return join(homedir(), ".ai-terminal-chat", "config.json");
 }
 
-/**
- * Load the shared application configuration object.
- *
- * Invalid, missing, or non-object JSON is treated as an empty configuration,
- * matching the Python security/config behavior. Callers can provide a custom
- * path in tests without changing process-global state.
- */
 export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConfig {
   try {
     const raw = readFileSync(configFilePath, "utf8");
@@ -70,33 +63,24 @@ export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConf
   return {};
 }
 
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const view = new Int32Array(buffer);
+  Atomics.wait(view, 0, 0, ms);
+}
+
 /**
- * Persist the shared application configuration atomically with file locking.
- *
- * The destination directory is created as needed and the temporary file is
- * replaced atomically, preserving other configuration keys when callers use
- * loadAppConfig() -> mutate -> persistAppConfig().
- *
- * Uses a simple file-based lock to prevent concurrent writes from losing
- * updates. The lock is a temporary file created with `O_EXCL` equivalent
- * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
- * with exponential backoff and actual sleep.
- *
- * If the lock cannot be acquired (timeout, EPERM, or other error), the
- * operation fails rather than performing an unsafe unlocked write. This
- * ensures mutual exclusion is never silently bypassed.
+ * Execute a config write while holding the config lock. The callback is
+ * invoked only after the lock is acquired, so read-modify-write callers can
+ * load the latest on-disk config without a stale-read window.
  */
-export function persistAppConfig(
-  payload: AppConfig,
-  configFilePath = defaultConfigFilePath(),
-):
-  void {
+function withConfigLock<T>(
+  configFilePath: string,
+  operation: (directory: string, configFileName: string) => T,
+): T {
   const directory = dirname(configFilePath);
   mkdirSync(directory, { recursive: true });
-
-  // Deterministic lock path for the config file - all concurrent writers
-  // for the same config file must use the same lock path to ensure
-  // mutual exclusion.
   const configFileName = basename(configFilePath).replace(/\.[^.]+$/, "");
   const lockPath = join(directory, `.config.${configFileName}.lock`);
   const maxLockWaitMs = 5000;
@@ -104,44 +88,48 @@ export function persistAppConfig(
   let lockFd: number | null = null;
   let lockAcquired = false;
 
-  // Synchronous sleep using Atomics.wait on a SharedArrayBuffer.
-  // This provides real sleep without busy-spinning the CPU.
-  function sleepSync(ms: number): void {
-    if (ms <= 0) return;
-    const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    const view = new Int32Array(buffer);
-    // Atomics.wait returns "ok", "not-equal", or "timed-out"
-    // We wait on a value that will never change, so it times out after ms.
-    Atomics.wait(view, 0, 0, ms);
-  }
-
-  // Try to acquire the lock with exponential backoff and real sleep
   while (Date.now() - lockWaitStart < maxLockWaitMs) {
     try {
-      // Use 'wx' flag for exclusive creation (fails if file exists)
       lockFd = fs.openSync(lockPath, "wx");
       lockAcquired = true;
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        // Lock held by another process (or another call in same process), wait and retry
         const elapsed = Date.now() - lockWaitStart;
-        const backoff = Math.min(10 + elapsed * 0.1, 100);
-        // Real sleep, not busy-wait
-        sleepSync(backoff);
+        sleepSync(Math.min(10 + elapsed * 0.1, 100));
         continue;
       }
-      // On EPERM or other errors, fail rather than proceeding without locking
-      // This ensures mutual exclusion is never silently bypassed.
       throw err;
     }
   }
 
   if (!lockAcquired) {
-    // Timeout - could not acquire lock
     throw new Error(`Could not acquire config lock for ${configFileName} after ${maxLockWaitMs}ms`);
   }
 
+  try {
+    return operation(directory, configFileName);
+  } finally {
+    if (lockFd !== null) {
+      try {
+        fs.closeSync(lockFd);
+      } catch {
+        // Ignore cleanup errors.
+      }
+    }
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      // Ignore cleanup errors.
+    }
+  }
+}
+
+function writeConfigWhileLocked(
+  payload: AppConfig,
+  configFilePath: string,
+  directory: string,
+): void {
   const tempPath = join(
     directory,
     `config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`,
@@ -149,9 +137,6 @@ export function persistAppConfig(
 
   try {
     writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    // On Windows, renameSync can fail with EPERM if the target is locked
-    // by another process (e.g., antivirus). Retry multiple times with
-    // increasing delays.
     let renameAttempts = 0;
     const maxRenameAttempts = 5;
     while (true) {
@@ -159,9 +144,12 @@ export function persistAppConfig(
         renameSync(tempPath, configFilePath);
         break;
       } catch (renameErr) {
-        if ((renameErr as NodeJS.ErrnoException).code === "EPERM" && renameAttempts < maxRenameAttempts - 1) {
+        if (
+          (renameErr as NodeJS.ErrnoException).code === "EPERM" &&
+          renameAttempts < maxRenameAttempts - 1
+        ) {
           renameAttempts++;
-          sleepSync(50 * renameAttempts); // 50ms, 100ms, 150ms, 200ms
+          sleepSync(50 * renameAttempts);
           continue;
         }
         throw renameErr;
@@ -174,30 +162,26 @@ export function persistAppConfig(
       // Preserve the original persistence error.
     }
     throw err;
-  } finally {
-    // Release the lock if we acquired it
-    if (lockAcquired && lockFd !== null) {
-      try {
-        fs.closeSync(lockFd);
-      } catch {
-        // Ignore
-      }
-    }
-    // Clean up our lock file (only if we created it)
-    if (lockAcquired) {
-      try {
-        rmSync(lockPath, { force: true });
-      } catch {
-        // Ignore lock cleanup errors
-      }
-    }
   }
 }
-// ---------------------------------------------------------------------------
-// Typed environment accessors
-// ---------------------------------------------------------------------------
 
-/** Read a string environment variable, falling back to `defaultValue` if unset or blank. */
+/**
+ * Persist the shared application configuration atomically with file locking.
+ * Existing keys are merged while the lock is held so callers that perform a
+ * load-modify-persist sequence cannot overwrite unrelated updates made by a
+ * concurrent writer between their initial load and this write.
+ */
+export function persistAppConfig(
+  payload: AppConfig,
+  configFilePath = defaultConfigFilePath(),
+): void {
+  withConfigLock(configFilePath, (directory) => {
+    const current = loadAppConfig(configFilePath);
+    const merged = { ...current, ...payload };
+    writeConfigWhileLocked(merged, configFilePath, directory);
+  });
+}
+
 export function getEnvString(name: string, defaultValue: string): string;
 export function getEnvString(name: string, defaultValue?: undefined): string | undefined;
 export function getEnvString(name: string, defaultValue?: string): string | undefined {
@@ -209,19 +193,10 @@ export function getEnvString(name: string, defaultValue?: string): string | unde
 }
 
 export interface GetEnvIntOptions {
-  /**
-   * Throw instead of silently falling back when the variable is set but
-   * not a valid integer. Off by default to match call sites such as
-   * `int(os.getenv("PORT", "9000"))`, which would raise in Python too -
-   * callers that want that strictness should opt in explicitly.
-   */
+  /** Throw instead of silently falling back when the variable is invalid. */
   strict?: boolean;
 }
 
-/** Read an integer environment variable, falling back to `defaultValue` if unset or invalid.
- *  Matches Python's `int()` behavior: only accepts strings matching /^[+-]?\d+$/.
- *  Rejects: "9000abc", "9000.5", " 9000 ", "", "abc", "1.5", etc.
- */
 export function getEnvInt(
   name: string,
   defaultValue: number,
@@ -232,7 +207,6 @@ export function getEnvInt(
     return defaultValue;
   }
 
-  // Match Python's int() behavior: only allow optional sign followed by digits
   if (!/^[+-]?\d+$/.test(raw)) {
     if (options.strict) {
       throw new Error(`Environment variable ${name} must be an integer, got: ${raw}`);
@@ -240,29 +214,19 @@ export function getEnvInt(
     return defaultValue;
   }
 
-  const parsed = Number.parseInt(raw, 10);
-  // Additional safety: check for overflow (Python int has no max, but we might want bounds)
-  return parsed;
+  return Number.parseInt(raw, 10);
 }
 
-// ---------------------------------------------------------------------------
-// Server configuration (server-python/app.py: `__main__` block)
-// ---------------------------------------------------------------------------
-
 export interface ServerConfig {
-  /** TCP port the HTTP server listens on. `PORT` env var, default 9000 - matches client-react's default `VITE_API_URL` of http://localhost:9000. */
+  /** TCP port the HTTP server listens on. */
   port: number;
-  /**
-   * Host/interface the server binds to. Always loopback-only,
-   * matching server-python's hardcoded `app.run(host="127.0.0.1", ...)`.
-   */
+  /** Always loopback-only, matching server-python. */
   host: string;
 }
 
 const DEFAULT_PORT = 9000;
 export const SERVER_HOST = "127.0.0.1";
 
-/** Build the server configuration from the current environment. */
 export function loadServerConfig(): ServerConfig {
   return {
     port: getEnvInt("PORT", DEFAULT_PORT),
@@ -270,20 +234,8 @@ export function loadServerConfig(): ServerConfig {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Provider selection (server-python/providers.py, __init__.py: `PROVIDER` env var)
-// ---------------------------------------------------------------------------
-
 const DEFAULT_PROVIDER_NAME = "gemini";
 
-/**
- * Which AI provider is selected by default.
- *
- * Mirrors `os.getenv("PROVIDER", "gemini").lower()`, used both by the
- * legacy provider factory in __init__.py and by providers.py:get_provider.
- * Returns the raw lowercased name; validating it against
- * `SUPPORTED_PROVIDERS` (types.ts) is providers.ts's job (Phase 4).
- */
 export function getConfiguredProviderName(): string {
   return getEnvString("PROVIDER", DEFAULT_PROVIDER_NAME).toLowerCase();
 }
