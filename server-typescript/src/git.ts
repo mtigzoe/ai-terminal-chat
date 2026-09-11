@@ -28,16 +28,14 @@ const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "core.fsmonitorHook=",
 
   // Diff/merge drivers - can execute arbitrary commands
-  // NOTE: diff.*.command= and diff.*.textconv= cause Git parsing issues on Windows
-  // We keep them commented out and rely on GIT_CONFIG_NOSYSTEM/NOGLOBAL
+  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
   // "-c", "diff.*.command=",
   // "-c", "diff.*.textconv=",
   "-c", "merge.*.command=",
   "-c", "merge.*.driver=",
 
   // Filter programs - execute on checkout/checkin
-  // NOTE: filter.*.clean= and filter.*.smudge= cause Git parsing issues on Windows
-  // We keep them commented out and rely on GIT_CONFIG_NOSYSTEM/NOGLOBAL
+  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
   // "-c", "filter.*.clean=",
   // "-c", "filter.*.smudge=",
 
@@ -57,7 +55,7 @@ const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "http.postBuffer=",
 
   // Submodules
-  // NOTE: submodule.*.url= and submodule.*.fetch= cause Git parsing issues
+  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
   // "-c", "submodule.*.url=",
   // "-c", "submodule.*.fetch=",
 
@@ -77,7 +75,7 @@ const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "http.postBuffer=",
 
   // Submodules
-  // NOTE: submodule.*.url= and submodule.*.fetch= cause Git parsing issues
+  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
   // "-c", "submodule.*.url=",
   // "-c", "submodule.*.fetch=",
 
@@ -206,6 +204,10 @@ async function runGit(args: string[], timeout: number): Promise<{
       maxBuffer: Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000),
       encoding: "utf8",
       // Prevent system/global config and disable repo config via GIT_CONFIG_SYSTEM
+      // This also blocks repository-local .git/config, .git/config.worktree, and includes
+      // Repository attributes (.gitattributes, .git/info/attributes) are not config files
+      // but are mitigated because filter/merge/diff drivers are disabled via -c overrides
+      // and .git/config (where drivers are defined) is not read.
       env: {
         ...process.env,
         GIT_CONFIG_NOSYSTEM: "1",
