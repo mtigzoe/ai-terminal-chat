@@ -78,7 +78,7 @@ def test_launch_ollama_run_starts_detached_process_on_posix():
 
     assert result == {"started": True, "model": "llama3.1", "pid": 4321}
     args, kwargs = popen.call_args
-    assert args[0] == ["ollama", "run", "llama3.1"]
+    assert args[0] == ["/usr/local/bin/ollama", "run", "llama3.1"]
     assert kwargs["start_new_session"] is True
     assert "creationflags" not in kwargs
 
@@ -94,7 +94,7 @@ def test_launch_ollama_run_opens_console_on_windows():
 
     assert result == {"started": True, "model": "qwen3.5:9b", "pid": 1111}
     args, kwargs = popen.call_args
-    assert args[0] == ["ollama", "run", "qwen3.5:9b"]
+    assert args[0] == ["C:\\ollama\\ollama.exe", "run", "qwen3.5:9b"]
     assert kwargs.get("creationflags") == 0x00000010
 
 
@@ -116,7 +116,7 @@ def test_launch_ollama_run_accepts_namespaced_and_tagged_models():
         launch_ollama_run("myuser/mymodel:latest")
 
     args, _ = popen.call_args
-    assert args[0] == ["ollama", "run", "myuser/mymodel:latest"]
+    assert args[0] == ["/usr/local/bin/ollama", "run", "myuser/mymodel:latest"]
 
 
 @pytest.mark.parametrize(
@@ -143,7 +143,7 @@ def test_launch_ollama_run_accepts_cloud_model_names(model):
 
     assert result == {"started": True, "model": model, "pid": 1}
     args, _ = popen.call_args
-    assert args[0] == ["ollama", "run", model]
+    assert args[0] == ["/usr/local/bin/ollama", "run", model]
 
 
 # ---------------------------------------------------------------------
