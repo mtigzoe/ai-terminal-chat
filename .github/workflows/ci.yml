@@ -69,7 +69,7 @@ jobs:
       - name: Build test runtime
         run: npm run build
       - name: Run security and filesystem tests
-        run: npm run test:unit -- --test-name-pattern="^(?!documentation: GIT_CONFIG alone does not block local core.fsmonitor$).*"
+        run: 'npm run test:unit -- --test-name-pattern="^(?!documentation: GIT_CONFIG alone does not block local core.fsmonitor$).*"'
 
   client-react:
     name: client-react tests and build
