@@ -995,28 +995,90 @@ export function writeFileWithinProject(
 }
 
 /**
- * Unlink a project file. On POSIX, unlinking a symlink removes the link
- * itself (not the target). We still open+verify with O_NOFOLLOW first so we
- * only operate when the final component is not a symlink escape at open time.
- * If the path is a symlink, open fails with ELOOP and we refuse.
+ * Unlink a project file without the open→close→path-delete TOCTOU.
+ *
+ * Flow:
+ * 1. openWithinProject (O_NOFOLLOW + project-root check) pins an inode.
+ * 2. fstat the descriptor — refuse directories / non-files.
+ * 3. Confirm the directory entry still names the same (dev, ino).
+ * 4. On POSIX, unlink while the descriptor is still open.
+ * 5. On Windows, DeleteFile often cannot remove a path that still has an
+ *    open handle, so we close only after the inode check and delete
+ *    immediately (still stronger than the previous close-then-stat-then-rm).
+ *
+ * Final-component symlink escapes are refused by openWithinProject.
  */
 export function unlinkWithinProject(inputPath: string): { resolvedPath: string } {
-  const candidate = safePath(inputPath);
-  // Open for read with O_NOFOLLOW to pin the inode and refuse final symlinks.
+  const root = getProjectRoot();
   const { fd, resolvedPath } = openWithinProject(
     inputPath,
     fsConstants.O_RDONLY,
   );
-  closeSync(fd);
-  if (resolvedPath === getProjectRoot()) {
-    throw new SecurityValidationError("Refusing to delete the project root.");
+  let closed = false;
+  try {
+    if (resolvedPath === root) {
+      throw new SecurityValidationError("Refusing to delete the project root.");
+    }
+    if (!isPathWithinRoot(root, resolvedPath)) {
+      throw new SecurityValidationError(
+        "Access outside the project directory is not allowed.",
+      );
+    }
+
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) {
+      throw new SecurityValidationError(
+        "delete_file can only delete a single file, not a directory.",
+      );
+    }
+
+    // Directory-entry must still refer to the inode we opened.
+    let entry;
+    try {
+      entry = statSync(resolvedPath);
+    } catch {
+      throw new SecurityValidationError("File disappeared before deletion.");
+    }
+    if (entry.dev !== opened.dev || entry.ino !== opened.ino) {
+      throw new SecurityValidationError(
+        "File was replaced before deletion; refusing to delete.",
+      );
+    }
+    if (!entry.isFile()) {
+      throw new SecurityValidationError(
+        "delete_file can only delete a single file, not a directory.",
+      );
+    }
+
+    if (process.platform === "win32") {
+      // Windows: release the handle, re-check inode, then delete immediately.
+      closeSync(fd);
+      closed = true;
+      let entry2;
+      try {
+        entry2 = statSync(resolvedPath);
+      } catch {
+        throw new SecurityValidationError("File disappeared before deletion.");
+      }
+      if (entry2.dev !== opened.dev || entry2.ino !== opened.ino || !entry2.isFile()) {
+        throw new SecurityValidationError(
+          "File was replaced before deletion; refusing to delete.",
+        );
+      }
+      rmSync(resolvedPath);
+      return { resolvedPath };
+    }
+
+    // POSIX: delete while the verified descriptor is still held.
+    rmSync(resolvedPath);
+    return { resolvedPath };
+  } finally {
+    if (!closed) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore double-close / already-closed.
+      }
+    }
   }
-  const st = statSync(resolvedPath);
-  if (st.isDirectory()) {
-    throw new SecurityValidationError(
-      "delete_file can only delete a single file, not a directory.",
-    );
-  }
-  rmSync(resolvedPath);
-  return { resolvedPath };
 }
