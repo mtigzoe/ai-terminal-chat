@@ -102,20 +102,14 @@ const RESERVED_DOS_NAMES = new Set([
   "lpt9",
 ]);
 
-/**
- * Validate a single relative path component for NtCreateFile ObjectName.
- * Must be exactly one component — no separators, no traversal, no ADS, no
- * device names. Exported for unit tests.
- */
+/** Validate a single relative path component for NtCreateFile ObjectName. */
 export function assertSafeRelativeName(relativeName: string): void {
   if (typeof relativeName !== "string" || relativeName.length === 0) {
     throw new WindowsHandlePathError("Relative name is required.");
   }
-  // Reject embedded NULs (would truncate the NT UNICODE_STRING view).
   if (relativeName.includes("\0")) {
     throw new WindowsHandlePathError("Relative name contains a NUL byte.");
   }
-  // Exactly one path component.
   if (
     relativeName.includes("/") ||
     relativeName.includes("\\") ||
@@ -126,29 +120,24 @@ export function assertSafeRelativeName(relativeName: string): void {
       `Invalid relative name for handle-relative open: ${relativeName}`,
     );
   }
-  // Alternate data streams: "file:stream" must not be expressible.
   if (relativeName.includes(":")) {
     throw new WindowsHandlePathError(
       "Relative name must not contain ':' (ADS / device syntax).",
     );
   }
-  // Control characters.
   for (let i = 0; i < relativeName.length; i += 1) {
-    const code = relativeName.charCodeAt(i);
-    if (code < 0x20) {
+    if (relativeName.charCodeAt(i) < 0x20) {
       throw new WindowsHandlePathError(
         "Relative name contains a control character.",
       );
     }
   }
-  // Windows reserved device names (with or without extension).
   const base = relativeName.split(".")[0]?.toLowerCase() ?? "";
   if (RESERVED_DOS_NAMES.has(base)) {
     throw new WindowsHandlePathError(
       `Relative name uses a reserved Windows device name: ${relativeName}`,
     );
   }
-  // NT path component practical limit (255 UTF-16 code units is common).
   if (relativeName.length > 255) {
     throw new WindowsHandlePathError("Relative name is too long.");
   }
@@ -157,7 +146,6 @@ export function assertSafeRelativeName(relativeName: string): void {
 type KoffiModule = typeof import("koffi");
 
 type NativeApi = {
-  // koffi struct type handles are opaque; use any for encode/alloc typing.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   koffi: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -178,31 +166,28 @@ let api: NativeApi | null = null;
 let loadError: string | null = null;
 
 function toNumber(value: unknown): number {
+  if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
+  if (value && typeof value === "object" && "value" in value) {
+    return Number((value as { value: unknown }).value);
+  }
   return Number(value);
 }
 
 function ntstatusUnsigned(status: number): number {
-  // koffi may return signed 32-bit NTSTATUS; normalize to unsigned.
-  return status < 0 ? status + 0x1_0000_0000 : status >>> 0;
+  return status >>> 0;
 }
 
 function loadNative(): NativeApi {
-  if (api) return api;
   if (process.platform !== "win32") {
-    throw new WindowsHandlePathError(
-      "Windows handle-relative APIs require win32",
-    );
+    throw new WindowsHandlePathError("Windows handle-relative operations are unavailable on this platform.");
   }
-  if (loadError) {
-    throw new WindowsHandlePathError(loadError);
-  }
+  if (api) return api;
+  if (loadError) throw new WindowsHandlePathError(loadError);
 
   try {
     const require = createRequire(import.meta.url);
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const koffi = require("koffi");
-
+    const koffi = require("koffi") as KoffiModule;
     const ntdll = koffi.load("ntdll.dll");
     const kernel32 = koffi.load("kernel32.dll");
     let crt;
@@ -212,14 +197,12 @@ function loadNative(): NativeApi {
       crt = koffi.load("msvcrt.dll");
     }
 
-    // Struct layouts — koffi inserts natural alignment padding.
-    // IO_STATUS_BLOCK.Status is a union with PVOID → pointer-sized on x64/ARM64.
-    const UnicodeString = koffi.struct("ATC_UNICODE_STRING", {
+    const UnicodeString = koffi.struct("UNICODE_STRING", {
       Length: "uint16",
       MaximumLength: "uint16",
       Buffer: "void *",
     });
-    const ObjectAttributes = koffi.struct("ATC_OBJECT_ATTRIBUTES", {
+    const ObjectAttributes = koffi.struct("OBJECT_ATTRIBUTES", {
       Length: "uint32",
       RootDirectory: "void *",
       ObjectName: "void *",
@@ -227,53 +210,43 @@ function loadNative(): NativeApi {
       SecurityDescriptor: "void *",
       SecurityQualityOfService: "void *",
     });
-    const IoStatusBlock = koffi.struct("ATC_IO_STATUS_BLOCK", {
-      Status: "void *", // pointer-sized union { NTSTATUS Status; PVOID Pointer; }
+    const IoStatusBlock = koffi.struct("IO_STATUS_BLOCK", {
+      Status: "void *",
       Information: "uintptr",
     });
 
     const NtCreateFile = ntdll.func("NtCreateFile", "long", [
-      "void *", // PHANDLE FileHandle
-      "uint32", // ACCESS_MASK DesiredAccess
-      "void *", // POBJECT_ATTRIBUTES ObjectAttributes
-      "void *", // PIO_STATUS_BLOCK IoStatusBlock
-      "void *", // PLARGE_INTEGER AllocationSize
-      "uint32", // ULONG FileAttributes
-      "uint32", // ULONG ShareAccess
-      "uint32", // ULONG CreateDisposition
-      "uint32", // ULONG CreateOptions
-      "void *", // PVOID EaBuffer
-      "uint32", // ULONG EaLength
+      "void *",
+      "uint32",
+      "void *",
+      "void *",
+      "void *",
+      "uint32",
+      "uint32",
+      "uint32",
+      "uint32",
+      "void *",
+      "uint32",
     ]);
-
     const getOsFHandleRaw = crt.func("_get_osfhandle", "intptr", ["int"]);
-    const openOsFHandleRaw = crt.func("_open_osfhandle", "int", [
-      "intptr",
-      "int",
-    ]);
+    const openOsFHandleRaw = crt.func("_open_osfhandle", "int", ["intptr", "int"]);
     const CloseHandleRaw = kernel32.func("CloseHandle", "int", ["uintptr"]);
-    const RtlNtStatusToDosErrorRaw = ntdll.func("RtlNtStatusToDosError", "uint32", [
-      "long",
-    ]);
+    const RtlNtStatusToDosErrorRaw = ntdll.func("RtlNtStatusToDosError", "uint32", ["long"]);
 
     api = {
       koffi,
       NtCreateFile: NtCreateFile as NativeApi["NtCreateFile"],
       getOsFHandle: (fd: number) => toNumber(getOsFHandleRaw(fd)),
-      openOsFHandle: (osfhandle: number, flags: number) =>
-        toNumber(openOsFHandleRaw(osfhandle, flags)),
+      openOsFHandle: (osfhandle: number, flags: number) => toNumber(openOsFHandleRaw(osfhandle, flags)),
       CloseHandle: (h: number) => toNumber(CloseHandleRaw(h)),
-      RtlNtStatusToDosError: (status: number) =>
-        toNumber(RtlNtStatusToDosErrorRaw(status)),
+      RtlNtStatusToDosError: (status: number) => toNumber(RtlNtStatusToDosErrorRaw(status)),
       UnicodeString,
       ObjectAttributes,
       IoStatusBlock,
     };
     return api;
   } catch (err) {
-    loadError = `Windows NtCreateFile bridge unavailable: ${
-      err instanceof Error ? err.message : String(err)
-    }`;
+    loadError = `Windows NtCreateFile bridge unavailable: ${err instanceof Error ? err.message : String(err)}`;
     throw new WindowsHandlePathError(loadError);
   }
 }
@@ -294,33 +267,20 @@ type NtCreateRelativeOptions = {
   createOptions: number;
 };
 
-/**
- * Shared NtCreateFile relative to parentFd. Keeps UNICODE_STRING buffer alive
- * for the duration of the call. Returns a raw Windows HANDLE; caller must
- * either CloseHandle or transfer ownership via _open_osfhandle.
- */
-function ntCreateRelative(
-  parentFd: number,
-  relativeName: string,
-  opts: NtCreateRelativeOptions,
-): number {
+function ntCreateRelative(parentFd: number, relativeName: string, opts: NtCreateRelativeOptions): number {
   assertSafeRelativeName(relativeName);
   const native = loadNative();
   const parentHandle = handleFromFd(parentFd);
   const { koffi, UnicodeString, ObjectAttributes, IoStatusBlock } = native;
 
-  // UTF-16LE payload without a forced NUL: Length is byte length of the name.
-  // NT object-name parsing uses Length; a trailing NUL is not required.
   const nameU16 = Buffer.from(relativeName, "utf16le");
   const nameLen = nameU16.length;
-
   const usPtr = koffi.alloc(UnicodeString, 1);
   koffi.encode(usPtr, UnicodeString, {
     Length: nameLen,
     MaximumLength: nameLen,
     Buffer: nameU16,
   });
-
   const oaPtr = koffi.alloc(ObjectAttributes, 1);
   koffi.encode(oaPtr, ObjectAttributes, {
     Length: koffi.sizeof(ObjectAttributes),
@@ -330,16 +290,10 @@ function ntCreateRelative(
     SecurityDescriptor: null,
     SecurityQualityOfService: null,
   });
-
   const iosb = koffi.alloc(IoStatusBlock, 1);
-  koffi.encode(iosb, IoStatusBlock, {
-    Status: null,
-    Information: 0,
-  });
-
+  koffi.encode(iosb, IoStatusBlock, { Status: null, Information: 0 });
   const handleOut = koffi.alloc("void *", 1);
 
-  // nameU16, usPtr, oaPtr, iosb must remain reachable through the call.
   const status = native.NtCreateFile(
     handleOut,
     opts.desiredAccess,
@@ -354,35 +308,28 @@ function ntCreateRelative(
     0,
   ) as number;
 
-  // Touch nameU16 after the call so optimizers / GC cannot reclaim early.
-  if (nameU16.length < 0) {
-    throw new WindowsHandlePathError("unreachable");
-  }
+  if (nameU16.length < 0) throw new WindowsHandlePathError("unreachable");
 
   const statusU = ntstatusUnsigned(status);
   if (status !== 0) {
     if (statusU === NTSTATUS_OBJECT_NAME_COLLISION) {
-      const err = new Error(
-        `File already exists: ${relativeName}`,
-      ) as NodeJS.ErrnoException;
+      const err = new Error(`File already exists: ${relativeName}`) as NodeJS.ErrnoException;
       err.code = "EEXIST";
       throw err;
     }
-    if (
-      statusU === NTSTATUS_OBJECT_NAME_NOT_FOUND ||
-      statusU === NTSTATUS_OBJECT_PATH_NOT_FOUND
-    ) {
-      const err = new Error(
-        `File not found: ${relativeName}`,
-      ) as NodeJS.ErrnoException;
+    if (statusU === NTSTATUS_OBJECT_NAME_NOT_FOUND || statusU === NTSTATUS_OBJECT_PATH_NOT_FOUND) {
+      const err = new Error(`File not found: ${relativeName}`) as NodeJS.ErrnoException;
       err.code = "ENOENT";
       throw err;
     }
     if (statusU === NTSTATUS_REPARSE_POINT_ENCOUNTERED) {
-      const err = new Error(
-        `Reparse point encountered while opening '${relativeName}'.`,
-      ) as NodeJS.ErrnoException;
+      const err = new Error(`Reparse point encountered: ${relativeName}`) as NodeJS.ErrnoException;
       err.code = "ELOOP";
+      throw err;
+    }
+    if (statusU === NTSTATUS_ACCESS_DENIED || statusU === NTSTATUS_DELETE_PENDING) {
+      const err = new Error(`Access denied for: ${relativeName}`) as NodeJS.ErrnoException;
+      err.code = "EACCES";
       throw err;
     }
     const dos = native.RtlNtStatusToDosError(status);
@@ -396,8 +343,8 @@ function ntCreateRelative(
 }
 
 /**
- * Open or create a file relative to an open parent directory fd.
- * Returns a Node CRT file descriptor that owns the underlying HANDLE.
+ * Open or create a child relative to an open parent directory fd.
+ * `directory: true` requests FILE_DIRECTORY_FILE; otherwise a regular file is required.
  */
 export function openRelativeToDirFd(
   parentFd: number,
@@ -406,10 +353,10 @@ export function openRelativeToDirFd(
     create?: boolean;
     exclusive?: boolean;
     write?: boolean;
+    directory?: boolean;
   } = {},
 ): number {
   const native = loadNative();
-
   let disposition: number;
   if (options.create && options.exclusive) {
     disposition = FILE_CREATE;
@@ -419,14 +366,9 @@ export function openRelativeToDirFd(
     disposition = FILE_OPEN;
   }
 
-  // OBJ_DONT_REPARSE on OBJECT_ATTRIBUTES is the primary security boundary:
-  // it prevents both existing final-component reparses and reparses encountered
-  // while resolving the relative name. A reparse is rejected instead of being
-  // followed and checked only after the open has already occurred.
-  // FILE_OPEN_REPARSE_POINT is retained for existing-name opens as defense in
-  // depth, but it is not sufficient for create=true/FILE_OPEN_IF.
   let createOptions =
-    FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
+    (options.directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE) |
+    FILE_SYNCHRONOUS_IO_NONALERT;
   if (!options.create) {
     createOptions |= FILE_OPEN_REPARSE_POINT;
   }
@@ -434,36 +376,27 @@ export function openRelativeToDirFd(
   const access =
     (options.write || options.create
       ? GENERIC_READ | GENERIC_WRITE
-      : GENERIC_READ) | SYNCHRONIZE;
+      : options.directory
+        ? FILE_LIST_DIRECTORY
+        : GENERIC_READ) | SYNCHRONIZE;
 
   const fileHandle = ntCreateRelative(parentFd, relativeName, {
     desiredAccess: access,
-    fileAttributes: FILE_ATTRIBUTE_NORMAL,
+    fileAttributes: options.directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
     createDisposition: disposition,
     createOptions,
   });
 
-  // Transfer HANDLE ownership to the CRT. After success, do not CloseHandle.
   const fd = native.openOsFHandle(fileHandle, O_RDWR | O_BINARY);
   if (fd < 0) {
     native.CloseHandle(fileHandle);
-    throw new WindowsHandlePathError(
-      "_open_osfhandle failed after NtCreateFile",
-    );
+    throw new WindowsHandlePathError("_open_osfhandle failed after NtCreateFile");
   }
   return fd;
 }
 
-/**
- * Create a directory relative to an open parent directory fd (mkdirat).
- * Idempotent when the name already exists as a directory (EEXIST ignored).
- */
-export function mkdirRelativeToDirFd(
-  parentFd: number,
-  relativeName: string,
-): void {
+export function mkdirRelativeToDirFd(parentFd: number, relativeName: string): void {
   const native = loadNative();
-
   let fileHandle: number;
   try {
     fileHandle = ntCreateRelative(parentFd, relativeName, {
@@ -473,17 +406,12 @@ export function mkdirRelativeToDirFd(
       createOptions: FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
     });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      return;
-    }
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return;
     throw err;
   }
-
-  // Directory create only — release the handle immediately.
   native.CloseHandle(fileHandle);
 }
 
-/** True when the NtCreateFile bridge loaded successfully. */
 export function windowsHandleRelativeAvailable(): boolean {
   if (process.platform !== "win32") return false;
   try {
