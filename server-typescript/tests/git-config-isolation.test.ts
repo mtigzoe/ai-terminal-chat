@@ -23,6 +23,23 @@ function writeRepoConfig(dir: string, config: string) {
   writeFileSync(join(dir, ".git", "config"), config, "utf8");
 }
 
+function withoutCommitIdentityEnv<T>(callback: () => Promise<T>): Promise<T> {
+  const keys = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"] as const;
+  const saved = new Map<string, string | undefined>();
+  for (const key of keys) {
+    saved.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  return callback().finally(() => {
+    for (const key of keys) {
+      const value = saved.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+}
+
 describe("Git repository configuration isolation", () => {
   let originalRoot: string;
   let repoDir: string;
@@ -47,7 +64,7 @@ describe("Git repository configuration isolation", () => {
     expect(String(result.status)).toContain("No commits yet");
   });
 
-  it("does not execute a repository-controlled hook", async () => {
+  it("does not execute a repository-controlled hook while preserving local commit identity", async () => {
     const marker = join(repoDir, "hook-executed");
     const hooksDir = join(repoDir, "malicious-hooks");
     mkdirSync(hooksDir, { recursive: true });
@@ -67,7 +84,7 @@ describe("Git repository configuration isolation", () => {
     writeFileSync(join(repoDir, "test.txt"), "test\n", "utf8");
 
     expect((await gitAdd("test.txt", true)).error).toBeUndefined();
-    const result = await gitCommit("test commit", true);
+    const result = await withoutCommitIdentityEnv(() => gitCommit("test commit", true));
 
     expect(result.error).toBeUndefined();
     expect(existsSync(marker)).toBe(false);
