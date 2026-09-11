@@ -44,6 +44,8 @@ jobs:
               raise SystemExit('TypeScript git_add block not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           PY
+      - name: Install TypeScript dependencies
+        run: npm ci --ignore-scripts
       - name: Verify TypeScript
         run: npx tsc --noEmit -p server-typescript/tsconfig.json
       - name: Verify Python syntax
