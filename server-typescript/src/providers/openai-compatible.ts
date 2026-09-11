@@ -1,7 +1,8 @@
 import { Provider, ProviderCapabilities, ProviderResponse, ToolCall } from "./base.ts";
 import { CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION } from "../prompts.ts";
 import { buildToolSchemas } from "../tools.ts";
-import { validateProviderBaseUrl, validateUrlAtRequestTime, createSafeRequestInit, validateRedirectUrl } from "../url-validation.ts";
+import { validateProviderBaseUrl } from "../url-validation.ts";
+import { safeFetch } from "../safe-fetch.ts";
 
 export class OpenAICompatibleProvider extends Provider {
   readonly baseUrl: string;
@@ -92,34 +93,22 @@ export class OpenAICompatibleProvider extends Provider {
       seconds * 1000
     );
 
-    // DNS rebinding protection: validate the resolved URL at request time
-    const urlObj = new URL(url);
-    const requestValidation = validateUrlAtRequestTime(urlObj, this.originalHostname);
-    if (!requestValidation.valid) {
-      throw new Error(`SSRF protection: ${requestValidation.error}`);
-    }
-
+    // DNS-pinning fetch: resolve + validate addresses, then connect only to
+    // the pinned IP (prevents DNS rebinding between check and connect).
     try {
-      const response = await fetch(url, {
-        ...createSafeRequestInit(options),
-        method,
-        headers: {
-          ...this.headers(),
-          ...(options.headers as Record<string, string>),
+      const response = await safeFetch(
+        url,
+        {
+          method,
+          headers: {
+            ...this.headers(),
+            ...(options.headers as Record<string, string>),
+          },
+          body: options.body,
+          signal: controller.signal,
         },
-        signal: controller.signal,
-      });
-
-      // Handle redirects manually (redirect: "manual")
-      if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400 && response.headers.has("location"))) {
-        const location = response.headers.get("location");
-        if (location) {
-          const redirectValidation = validateRedirectUrl(location, this.originalHostname);
-          if (!redirectValidation.valid) {
-            throw new Error(`SSRF protection: Redirect blocked - ${redirectValidation.error}`);
-          }
-        }
-      }
+        { originalHostname: this.originalHostname },
+      );
 
       return response;
     } catch (exc) {

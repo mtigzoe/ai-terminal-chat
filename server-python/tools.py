@@ -367,16 +367,68 @@ def _normalize_command_prefix(prefix: str) -> str:
     return (prefix or "").strip()
 
 
+# Interpreters / package managers that must not be elevated via Settings.
+_FORBIDDEN_BROAD_EXECUTABLES = frozenset(
+    {
+        "node",
+        "nodejs",
+        "python",
+        "python3",
+        "python.exe",
+        "python3.exe",
+        "py",
+        "perl",
+        "ruby",
+        "php",
+        "pwsh",
+        "powershell",
+        "bash",
+        "sh",
+        "zsh",
+        "cmd",
+        "cmd.exe",
+        "npx",
+        "npm",
+        "pip",
+        "pip3",
+        "pipx",
+        "pytest",
+        "uv",
+    }
+)
+
+_DANGEROUS_INTERPRETER_FLAG = re.compile(
+    r"^(-e|--eval|-p|--print|-c|-r|--run|/c|/k|-command|-encodedcommand)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_forbidden_prefix(prefix: str) -> bool:
-    """True if the prefix is explicitly blocked from the allowlist."""
+    """True if the prefix is explicitly blocked from the allowlist.
+
+    Mirrors server-typescript isForbiddenPrefix: path-qualified names, shell
+    metacharacters, explicit denylist prefixes, and broad interpreters with
+    code-execution flags (node -e, python -c, npm exec) cannot be added.
+    Intentional DEFAULT_ALLOWED_COMMAND_PREFIXES remain allowed.
+    """
 
     normalized = _normalize_command_prefix(prefix).lower()
     if not normalized:
         return True
-    # Reject exact matches and prefixes that would expand to a forbidden
-    # command. Both directions must be checked so that a broad prefix such
-    # as "git" is rejected (it would permit "git push", "git reset", etc.)
-    # while a safe prefix such as "git status" is still accepted.
+
+    if (
+        "/" in normalized
+        or "\\" in normalized
+        or ".." in normalized
+        or re.match(r"^[a-z]:[\\/]", normalized) is not None
+        or normalized.startswith("\\\\")
+    ):
+        return True
+
+    for char in DANGEROUS_COMMAND_CHARACTERS:
+        if char in normalized:
+            return True
+
     for forbidden in FORBIDDEN_ALLOWED_COMMAND_PREFIXES:
         forbidden_lower = forbidden.lower()
         if (
@@ -385,11 +437,40 @@ def _is_forbidden_prefix(prefix: str) -> bool:
             or forbidden_lower.startswith(normalized + " ")
         ):
             return True
-    # Also reject anything containing dangerous shell characters.
-    for char in DANGEROUS_COMMAND_CHARACTERS:
-        if char in normalized:
+
+    safe_defaults = {item.lower() for item in DEFAULT_ALLOWED_COMMAND_PREFIXES}
+    if normalized in safe_defaults:
+        return False
+
+    tokens = [tok for tok in normalized.split() if tok]
+    if not tokens:
+        return True
+    raw_exe = tokens[0]
+    exe = re.sub(r"\.(exe|cmd|bat)$", "", raw_exe, flags=re.IGNORECASE)
+
+    if raw_exe in _FORBIDDEN_BROAD_EXECUTABLES or exe in _FORBIDDEN_BROAD_EXECUTABLES:
+        if len(tokens) == 1:
             return True
+        rest = " ".join(tokens[1:])
+        if _DANGEROUS_INTERPRETER_FLAG.match(rest):
+            return True
+        if exe == "npx" or (exe == "npm" and tokens[1] in ("exec", "explore")):
+            return True
+        if exe == "npm" and tokens[1] == "run":
+            npm_run_prefix = " ".join(tokens[:3])
+            if npm_run_prefix not in ("npm run test", "npm run build", "npm run lint"):
+                return True
+            return False
+        if exe in ("python", "python3", "py") and len(tokens) > 1 and tokens[1] == "-m":
+            if len(tokens) > 2 and tokens[2] == "pytest":
+                return False
+            return True
+        if len(tokens) == 2 and tokens[1] in ("--version", "-v", "version"):
+            return False
+        return True
+
     return False
+
 
 
 def _load_allowed_commands_from_config() -> list[str] | None:
