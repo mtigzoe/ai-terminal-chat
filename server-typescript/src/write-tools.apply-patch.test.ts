@@ -131,3 +131,61 @@ test("write_file preview does not follow outside symlink for old content", () =>
   rmSync(project, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 });
+
+test("apply_patch applies a clean unified diff via secure I/O", () => {
+  const { project } = makeGitProject();
+  writeFileSync(join(project, "README.md"), "hello\n", "utf8");
+  const patch = [
+    "diff --git a/README.md b/README.md",
+    "--- a/README.md",
+    "+++ b/README.md",
+    "@@ -1 +1 @@",
+    "-hello",
+    "+hello world",
+    "",
+  ].join("\n");
+  const preview = apply_patch(patch, false);
+  assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+  const applied = apply_patch(patch, true);
+  assert.ok(!("error" in applied), JSON.stringify(applied));
+  assert.equal(readFileSync(join(project, "README.md"), "utf8"), "hello world\n");
+  rmSync(project, { recursive: true, force: true });
+});
+
+test("apply_patch does not use git apply path open for TOCTOU", () => {
+  // If a symlink appears only after preview, confirm-time re-check must refuse.
+  const { project, outside } = makeGitProject();
+  const secret = join(outside, "secret.txt");
+  writeFileSync(join(project, "target.txt"), "inside\n", "utf8");
+  const patch = [
+    "diff --git a/target.txt b/target.txt",
+    "--- a/target.txt",
+    "+++ b/target.txt",
+    "@@ -1 +1 @@",
+    "-inside",
+    "+patched",
+    "",
+  ].join("\n");
+  const preview = apply_patch(patch, false);
+  assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+
+  // Replace the file with a symlink to outside between preview and apply.
+  rmSync(join(project, "target.txt"));
+  try {
+    symlinkSync(secret, join(project, "target.txt"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+      rmSync(project, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+      return;
+    }
+    throw err;
+  }
+
+  const applied = apply_patch(patch, true);
+  assert.ok("error" in applied, JSON.stringify(applied));
+  assert.match(String(applied.error), /symlink|outside|Refusing|Cannot read/i);
+  assert.equal(readFileSync(secret, "utf8"), "OUTSIDE_SECRET\n");
+  rmSync(project, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+});
