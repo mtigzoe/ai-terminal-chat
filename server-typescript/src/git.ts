@@ -4,13 +4,13 @@
   // never mutate repository state. gitAdd() uses an explicit preview/confirm
   // flag and stages exactly one non-sensitive file.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath, writeFileWithinProject } from "./security.ts";
+import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath, writeFileWithinProject, openWithinProject } from "./security.ts";
 import { resolveTrustedExecutable } from "./trusted-exec.ts";
 
 const execFileAsync = promisify(execFile);
@@ -295,6 +295,69 @@ export interface IsolatedGitOptions {
    * to avoid recursion.
    */
   skipDynamicOverrides?: boolean;
+  /**
+   * When true, caller already holds the global Git operation lock
+   * (e.g. inside withSanitizedGitConfig). Prevents deadlock.
+   */
+  holdLock?: boolean;
+  /** Optional stdin for commands like hash-object --stdin. */
+  input?: string | Buffer;
+}
+
+/**
+ * Serialize all application Git operations so temporary .git/config
+ * sanitization cannot race with concurrent status/diff/fetch/add.
+ */
+class GitOperationMutex {
+  private chain: Promise<unknown> = Promise.resolve();
+  private depth = 0;
+
+  /**
+   * Queue exclusive work. Concurrent callers always wait on the chain.
+   * Nested Git calls must pass holdLock/skip the outer acquire — do not
+   * treat depth>0 as "run immediately" for a *different* concurrent task.
+   */
+  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(
+      async () => {
+        this.depth++;
+        try {
+          return await fn();
+        } finally {
+          this.depth--;
+        }
+      },
+      async () => {
+        this.depth++;
+        try {
+          return await fn();
+        } finally {
+          this.depth--;
+        }
+      },
+    );
+    this.chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  get isHeld(): boolean {
+    return this.depth > 0;
+  }
+}
+
+const gitOperationMutex = new GitOperationMutex();
+
+/** Test-only: run under the same exclusive lock as production Git ops. */
+export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T> {
+  return gitOperationMutex.runExclusive(fn);
+}
+
+/** Test-only: true while a Git exclusive section is active. */
+export function isGitOperationLockHeldForTests(): boolean {
+  return gitOperationMutex.isHeld;
 }
 
 /** Attacker-controlled key *names* that cannot live in a static -c list. */
@@ -463,27 +526,35 @@ export function stripDangerousGitConfig(content: string): string {
  * and filter.* definitions cannot affect the operation. Restores the original
  * file in `finally`. Not used for read-only inspection of config contents.
  */
+/**
+ * Temporarily sanitize `.git/config` under the global Git lock.
+ * All concurrent application Git entry points queue on the same mutex, so no
+ * other op observes the sanitized window. Always restores on success,
+ * failure, or exception.
+ */
 async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
-  const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
-  const configPath = join(getProjectRoot(), ".git", "config");
-  if (!existsSync(configPath)) {
-    return fn();
-  }
-  const original = readFileSync(configPath, "utf8");
-  const sanitized = stripDangerousGitConfig(original);
-  if (sanitized === original) {
-    return fn();
-  }
-  writeFileSync(configPath, sanitized, "utf8");
-  try {
-    return await fn();
-  } finally {
-    try {
-      writeFileSync(configPath, original, "utf8");
-    } catch {
-      // Best-effort restore
+  return gitOperationMutex.runExclusive(async () => {
+    const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
+    const configPath = join(getProjectRoot(), ".git", "config");
+    if (!existsSync(configPath)) {
+      return fn();
     }
-  }
+    const original = readFileSync(configPath, "utf8");
+    const sanitized = stripDangerousGitConfig(original);
+    if (sanitized === original) {
+      return fn();
+    }
+    writeFileSync(configPath, sanitized, "utf8");
+    try {
+      return await fn();
+    } finally {
+      try {
+        writeFileSync(configPath, original, "utf8");
+      } catch {
+        // Best-effort restore — original content was captured above.
+      }
+    }
+  });
 }
 
 export async function runIsolatedGit(
@@ -494,6 +565,12 @@ export async function runIsolatedGit(
   stdout: string;
   stderr: string;
 }> {
+  if (!options.holdLock) {
+    return gitOperationMutex.runExclusive(() =>
+      runIsolatedGit(args, { ...options, holdLock: true }),
+    );
+  }
+
   const timeout = options.timeout ?? 15_000;
   const maxBuffer = options.maxBuffer ?? Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000);
 
@@ -509,6 +586,70 @@ export async function runIsolatedGit(
     const gitExecutable = resolveTrustedExecutable("git", {
       projectRoot: getProjectRoot(),
     });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.GIT_EXTERNAL_DIFF;
+    delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
+    Object.assign(env, {
+      GIT_CONFIG: emptyConfigPath,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: "",
+      SSH_ASKPASS: "",
+      GIT_SSH_COMMAND: getGitSshCommand(),
+      GIT_PROXY_COMMAND: "none",
+      GIT_PAGER: "cat",
+      PAGER: "cat",
+    });
+
+    // hash-object --stdin: use spawn + explicit stdin.end(). Node execFile
+    // with `input` can hang waiting on git's stdin in some environments.
+    if (options.input !== undefined) {
+      const stdout = await new Promise<string>((resolve, reject) => {
+        const child = spawn(gitExecutable, safeArgs, {
+          cwd: getProjectRoot(),
+          shell: false,
+          windowsHide: true,
+          env,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        let out = "";
+        let err = "";
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" }));
+        }, timeout);
+        child.stdout.on("data", (d: Buffer) => {
+          out += d.toString("utf8");
+        });
+        child.stderr.on("data", (d: Buffer) => {
+          err += d.toString("utf8");
+        });
+        child.on("error", (e) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+        child.on("close", (code) => {
+          clearTimeout(timer);
+          if (code === 0) {
+            resolve(out);
+          } else {
+            reject(
+              Object.assign(new Error(err || `git exited ${code}`), {
+                code: code ?? 1,
+                stdout: out,
+                stderr: err,
+              }),
+            );
+          }
+        });
+        const payload = options.input!;
+        child.stdin.write(payload);
+        child.stdin.end();
+      });
+      return { code: 0, stdout, stderr: "" };
+    }
+
     const result = await execFileAsync(gitExecutable, safeArgs, {
       cwd: getProjectRoot(),
       shell: false,
@@ -516,25 +657,7 @@ export async function runIsolatedGit(
       windowsHide: true,
       maxBuffer,
       encoding: "utf8",
-      env: (() => {
-        const env: NodeJS.ProcessEnv = { ...process.env };
-        delete env.GIT_EXTERNAL_DIFF;
-        delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
-        return {
-          ...env,
-          // Does NOT block .git/config; see GIT_CONFIG_OVERRIDES + dynamic overrides.
-          GIT_CONFIG: emptyConfigPath,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_ASKPASS: "",
-          SSH_ASKPASS: "",
-          GIT_SSH_COMMAND: getGitSshCommand(),
-          GIT_PROXY_COMMAND: "none",
-          GIT_PAGER: "cat",
-          PAGER: "cat",
-        };
-      })(),
+      env,
     });
     return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
   } catch (error) {
@@ -566,12 +689,16 @@ export async function runIsolatedGit(
 }
 
 /** @deprecated Prefer runIsolatedGit — kept as a thin alias for internal callers. */
-async function runGit(args: string[], timeout: number): Promise<{
+async function runGit(
+  args: string[],
+  timeout: number,
+  holdLock = false,
+): Promise<{
   code: number;
   stdout: string;
   stderr: string;
 }> {
-  return runIsolatedGit(args, { timeout });
+  return runIsolatedGit(args, { timeout, holdLock });
 }
 
 export async function gitStatus(): Promise<Record<string, unknown>> {
@@ -718,12 +845,37 @@ async function stageFileWithoutFilters(
   relativePath: string,
   absolutePath: string,
 ): Promise<void> {
-  const { statSync } = await import("node:fs");
-  const mode = (statSync(absolutePath).mode & 0o111) !== 0 ? "100755" : "100644";
-  // Path form with --no-filters hashes worktree bytes without clean filter.
-  const hashed = await runGit(
-    ["hash-object", "-w", "--no-filters", "--", relativePath],
-    GIT_ADD_TIMEOUT_MS,
+  // Read through the race-resistant project open (O_NOFOLLOW / handle pin),
+  // then feed bytes to hash-object --stdin so Git never opens the path itself
+  // (avoids TOCTOU between validation and a path-based hash-object).
+  const { fstatSync, readSync, closeSync, constants: fsConstants } = await import("node:fs");
+  const { fd } = openWithinProject(relativePath, fsConstants.O_RDONLY);
+  let mode = "100644";
+  let payload: Buffer;
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      throw new Error("git_add can only stage a single file, not a directory.");
+    }
+    mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";
+    payload = Buffer.alloc(st.size);
+    let offset = 0;
+    while (offset < st.size) {
+      const n = readSync(fd, payload, offset, st.size - offset, offset);
+      if (n === 0) break;
+      offset += n;
+    }
+    if (offset < st.size) {
+      payload = payload.subarray(0, offset);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  void absolutePath;
+
+  const hashed = await runIsolatedGit(
+    ["hash-object", "-w", "--stdin", "--no-filters"],
+    { timeout: GIT_ADD_TIMEOUT_MS, input: payload },
   );
   if (hashed.code !== 0) {
     throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
@@ -732,9 +884,9 @@ async function stageFileWithoutFilters(
   if (!/^[0-9a-f]{40,64}$/i.test(oid)) {
     throw new Error(`Unexpected hash-object output: ${oid}`);
   }
-  const updated = await runGit(
+  const updated = await runIsolatedGit(
     ["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`],
-    GIT_ADD_TIMEOUT_MS,
+    { timeout: GIT_ADD_TIMEOUT_MS },
   );
   if (updated.code !== 0) {
     throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
@@ -825,7 +977,7 @@ export async function gitFetch(remote = ""): Promise<Record<string, unknown>> {
 
   try {
     return await withSanitizedGitConfig(async () => {
-      const result = await runGit(args, GIT_FETCH_TIMEOUT_MS);
+      const result = await runGit(args, GIT_FETCH_TIMEOUT_MS, true);
       if (result.code !== 0) return { error: result.stderr.trim() || "git fetch failed." };
 
       let output = result.stdout.trim();
@@ -865,7 +1017,7 @@ export async function gitPull(remote = "", branch = "", confirm = false): Promis
 
   try {
     return await withSanitizedGitConfig(async () => {
-      const result = await runGit(args, GIT_PULL_TIMEOUT_MS);
+      const result = await runGit(args, GIT_PULL_TIMEOUT_MS, true);
       if (result.code !== 0) return { error: result.stderr.trim() || "git pull failed." };
 
       return {
@@ -1005,7 +1157,7 @@ export async function gitPush(remote = "", branch = "", confirm = false): Promis
 
   try {
     return await withSanitizedGitConfig(async () => {
-      const result = await runGit(args, GIT_PUSH_TIMEOUT_MS);
+      const result = await runGit(args, GIT_PUSH_TIMEOUT_MS, true);
       if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." };
 
       return {

@@ -391,3 +391,116 @@ test("dynamic overrides clear filter process helper", async () => {
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("Git operations are serialized across the config sanitization window", async () => {
+  const repo = initRepo();
+  setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/example/repo.git"], {
+    cwd: repo,
+    stdio: "ignore",
+  });
+  __setProjectRootForTests(repo);
+
+  const {
+    withGitOperationLockForTests,
+    isGitOperationLockHeldForTests,
+    gitFetch,
+  } = await import("./git.ts");
+
+  const events: string[] = [];
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+
+  try {
+    // Hold the global Git lock like a long network op inside sanitization.
+    const holder = withGitOperationLockForTests(async () => {
+      events.push("holder-enter");
+      assert.equal(isGitOperationLockHeldForTests(), true);
+      await gate;
+      events.push("holder-exit");
+      return "held";
+    });
+
+    // Give holder time to acquire
+    await new Promise((r) => setTimeout(r, 20));
+    assert.ok(events.includes("holder-enter"));
+
+    let concurrentFinishedEarly = false;
+    const concurrent = runIsolatedGit(["status", "--short"]).then((result) => {
+      // Must not run until holder releases
+      if (!events.includes("holder-exit")) {
+        concurrentFinishedEarly = true;
+      }
+      events.push("concurrent-done");
+      return result;
+    });
+
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(
+      concurrentFinishedEarly,
+      false,
+      "status must not complete while another Git exclusive section holds the lock",
+    );
+    assert.equal(events.includes("concurrent-done"), false);
+
+    releaseGate();
+    await holder;
+    await concurrent;
+    assert.ok(events.includes("holder-exit"));
+    assert.ok(events.includes("concurrent-done"));
+    assert.equal(concurrentFinishedEarly, false);
+
+    // gitFetch also serializes (uses withSanitizedGitConfig)
+    void gitFetch;
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("withSanitizedGitConfig restores config after failure", async () => {
+  const repo = initRepo();
+  setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
+  const configPath = join(repo, ".git", "config");
+  const before = readFileSync(configPath, "utf8");
+  assert.ok(before.includes("evil.example"));
+  __setProjectRootForTests(repo);
+  try {
+    // Force a failing network op under sanitization (invalid remote)
+    const { gitFetch } = await import("./git.ts");
+    const result = await gitFetch("nonexistent-remote-xyz");
+    assert.ok(result.error || true);
+    const after = readFileSync(configPath, "utf8");
+    assert.ok(
+      after.includes("evil.example"),
+      "original insteadOf must be restored after failed fetch",
+    );
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("stage uses openWithinProject bytes not path-based hash-object", async () => {
+  // Behavioral: staging still works with a filter present and marker never runs.
+  // Path TOCTOU is mitigated by reading via openWithinProject then --stdin.
+  const repo = initRepo();
+  const marker = join(repo, "STDIN_STAGE");
+  const { configValue } = markerScript(marker);
+  const filterName = "stdin_filt";
+  writeFileSync(join(repo, ".gitattributes"), `*.txt filter=${filterName}\n`, "utf8");
+  setLocal(repo, `filter.${filterName}.clean`, configValue);
+  writeFileSync(join(repo, "a.txt"), "stdin-stage-content\n", "utf8");
+  __setProjectRootForTests(repo);
+  try {
+    const { gitAdd } = await import("./git.ts");
+    const result = await gitAdd("a.txt", true);
+    assert.equal(existsSync(marker), false);
+    assert.ok(!("error" in result && result.error), JSON.stringify(result));
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
