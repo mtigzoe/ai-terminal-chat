@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 import { gitAdd, gitCommit, gitDiff, gitStatus } from "../src/git.ts";
-import { getProjectRoot, setProjectRoot } from "../src/security.ts";
+import { __setProjectRootForTests } from "../src/security.ts";
 
 function runGit(dir: string, args: string[]) {
   return spawnSync("git", args, { cwd: dir, encoding: "utf8", stdio: "ignore" });
@@ -41,17 +41,19 @@ function withoutCommitIdentityEnv<T>(callback: () => Promise<T>): Promise<T> {
 }
 
 describe("Git repository configuration isolation", () => {
-  let originalRoot: string;
   let repoDir: string;
 
   beforeEach(() => {
-    originalRoot = getProjectRoot();
     repoDir = createRepo();
-    setProjectRoot(repoDir);
+    // Use the test-only in-memory override so this fixture cannot persist a
+    // temporary project root into shared application configuration.
+    __setProjectRootForTests(repoDir);
   });
 
   afterEach(() => {
-    setProjectRoot(originalRoot);
+    // Reset to the stable test working directory rather than restoring a
+    // temporary root that another test may already have removed.
+    __setProjectRootForTests(process.cwd());
     rmSync(repoDir, { recursive: true, force: true });
   });
 

@@ -18,6 +18,7 @@ import {
   validateProviderBaseUrl,
   normalizeOllamaUrlForStorage,
 } from "./url-validation.ts";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
@@ -150,6 +151,40 @@ app.get("/providers", async (c) => {
     ...status,
     current: status.name,
     providers: SUPPORTED_PROVIDERS,
+  });
+});
+
+/**
+ * Health check endpoint for Electron backend verification.
+ * Requires the AI_TERMINAL_CHAT_HEALTH_TOKEN environment variable to be set.
+ * Token must be provided via Authorization: Bearer header.
+ * Returns 404 when not configured (dev mode), 401 for invalid token.
+ * This prevents port collision attacks where an unrelated process binds the backend port.
+ */
+app.get("/health", async (c) => {
+  const expectedToken = process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
+  if (!expectedToken) {
+    // Health check not configured (development mode) - return 404 to avoid false positives
+    return c.json({ error: "Health check not configured" }, 404 as any);
+  }
+
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401 as any);
+  }
+
+  const providedToken = authHeader.slice(7); // Remove "Bearer " prefix
+  // Timing-safe comparison to prevent timing attacks
+  const expectedBuf = Buffer.from(expectedToken);
+  const providedBuf = Buffer.from(providedToken);
+  if (expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+    return c.json({ error: "Invalid health token" }, 401 as any);
+  }
+
+  return c.json({
+    status: "ok",
+    app: "ai-terminal-chat",
+    version: "1.0.0",
   });
 });
 

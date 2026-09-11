@@ -83,6 +83,72 @@ beforeEach(() => {
   // that modified or persisted the allowlist do not affect these tests.
 });
 
+describe("GET /health", () => {
+  it("returns 404 when health token is not configured", async () => {
+    const res = await createTestApp().request("http://localhost/health");
+    expect(res.status).toBe(404);
+    const data = await res.json();
+    expect(data.error).toContain("Health check not configured");
+  });
+
+  it("returns 401 when Authorization header is missing", async () => {
+    process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN = "test-token";
+    try {
+      const res = await createTestApp().request("http://localhost/health");
+      expect(res.status).toBe(401);
+      const data = await res.json();
+      expect(data.error).toContain("Authorization header");
+    } finally {
+      delete process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
+    }
+  });
+
+  it("returns 401 when Authorization header has invalid format", async () => {
+    process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN = "test-token";
+    try {
+      const res = await createTestApp().request("http://localhost/health", {
+        headers: { Authorization: "InvalidFormat" },
+      });
+      expect(res.status).toBe(401);
+      const data = await res.json();
+      expect(data.error).toContain("Authorization header");
+    } finally {
+      delete process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
+    }
+  });
+
+  it("returns 401 when health token is invalid", async () => {
+    process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN = "test-token";
+    try {
+      const res = await createTestApp().request("http://localhost/health", {
+        headers: { Authorization: "Bearer wrong-token" },
+      });
+      expect(res.status).toBe(401);
+      const data = await res.json();
+      expect(data.error).toContain("Invalid health token");
+    } finally {
+      delete process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
+    }
+  });
+
+  it("returns ok when health token is valid", async () => {
+    const token = "test-health-token";
+    process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN = token;
+    try {
+      const res = await createTestApp().request("http://localhost/health", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.status).toBe("ok");
+      expect(data.app).toBe("ai-terminal-chat");
+      expect(data.version).toBe("1.0.0");
+    } finally {
+      delete process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
+    }
+  });
+});
+
 describe("GET /providers", () => {
   it("returns provider status and supported providers list", async () => {
     const res = await createTestApp().request("http://localhost/providers");
