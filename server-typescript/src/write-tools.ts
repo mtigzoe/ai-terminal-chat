@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { getProjectRoot, isSensitivePath, safePath } from "./security.ts";
+import { getProjectRoot, isSensitivePath, safePath, writeFileWithinProject, unlinkWithinProject, SecurityValidationError } from "./security.ts";
 import { getGitSshCommand } from "./git.ts";
 import { resolveTrustedExecutable } from "./trusted-exec.ts";
 
@@ -165,17 +165,24 @@ export function create_file(
   }
 
   try {
-    ensureParentDir(filePath);
-    writeText(filePath, contents);
+    const { resolvedPath, bytesWritten } = writeFileWithinProject(relPath, contents, {
+      exclusive: true,
+    });
+    return {
+      path: relativePath(resolvedPath),
+      created: true,
+      bytes_written: bytesWritten,
+    };
   } catch (exc) {
+    if (exc instanceof SecurityValidationError) {
+      return { error: exc.message };
+    }
+    const code = (exc as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
+      return { error: `File already exists: ${relPath}` };
+    }
     return { error: `Could not create file: ${exc}` };
   }
-
-  return {
-    path: relativePath(filePath),
-    created: true,
-    bytes_written: Buffer.byteLength(contents, "utf-8"),
-  };
 }
 
 export function write_file(
@@ -230,17 +237,20 @@ export function write_file(
   }
 
   try {
-    ensureParentDir(filePath);
-    writeText(filePath, contents);
+    const { resolvedPath, bytesWritten } = writeFileWithinProject(relPath, contents, {
+      exclusive: false,
+    });
+    return {
+      path: relativePath(resolvedPath),
+      overwritten: existed,
+      bytes_written: bytesWritten,
+    };
   } catch (exc) {
+    if (exc instanceof SecurityValidationError) {
+      return { error: exc.message };
+    }
     return { error: `Could not write file: ${exc}` };
   }
-
-  return {
-    path: relativePath(filePath),
-    overwritten: existed,
-    bytes_written: Buffer.byteLength(contents, "utf-8"),
-  };
 }
 
 export function apply_patch(
@@ -347,12 +357,14 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
   }
 
   try {
-    unlinkFile(filePath);
+    const { resolvedPath } = unlinkWithinProject(relPath);
+    return { path: relativePath(resolvedPath), deleted: true };
   } catch (exc) {
+    if (exc instanceof SecurityValidationError) {
+      return { error: exc.message };
+    }
     return { error: `Could not delete file: ${exc}` };
   }
-
-  return { path: relativePath(filePath), deleted: true };
 }
 
 export function git_add(relPath: string, confirm = false): Record<string, unknown> {

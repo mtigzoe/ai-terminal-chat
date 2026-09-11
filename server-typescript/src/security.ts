@@ -25,16 +25,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // path doesn't exist yet (e.g. a new file about to be created).
 
 import {
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
+  closeSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
-  openSync,
-  closeSync,
+  writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
@@ -734,5 +738,285 @@ export function requireReadAllowed(requested: string): void {
 }
 
 
+// ---------------------------------------------------------------------------
+// Race-resistant filesystem I/O within the project root
+// ---------------------------------------------------------------------------
+//
+// safePath() validates a path, but a concurrent process can replace the final
+// component with a symlink/junction before a subsequent readFileSync/write.
+// Mitigation: open the final component with O_NOFOLLOW (so a symlink at the
+// last component cannot be followed), then perform I/O on the file descriptor.
+// After open, re-check that the real path of the opened object is still under
+// PROJECT_ROOT (Linux: /proc/self/fd/<fd>; elsewhere: realpath of the path
+// that O_NOFOLLOW just opened as a non-symlink).
 
+function noFollowFlag(): number {
+  // Present on modern Node for both Unix and Windows.
+  return typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+}
 
+function realPathOfFd(fd: number, fallbackPath: string): string {
+  if (process.platform === "linux") {
+    try {
+      return realpathSync(`/proc/self/fd/${fd}`);
+    } catch {
+      // Fall through.
+    }
+  }
+  // After a successful O_NOFOLLOW open the final component is not a symlink,
+  // so realpath of the path string resolves through trusted parents only for
+  // the open we already performed. Still best-effort on non-Linux.
+  return realpathSync(fallbackPath);
+}
+
+function assertOpenedWithinProject(fd: number, openPath: string): string {
+  const root = getProjectRoot();
+  let openedReal: string;
+  try {
+    openedReal = realPathOfFd(fd, openPath);
+  } catch (err) {
+    closeSync(fd);
+    throw new SecurityValidationError(
+      `Could not verify opened path stays inside the project: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (!isPathWithinRoot(root, openedReal)) {
+    closeSync(fd);
+    throw new SecurityValidationError(
+      "Access outside the project directory is not allowed.",
+    );
+  }
+  return openedReal;
+}
+
+/**
+ * Open a project path without following a final-component symlink/junction.
+ * Validates with safePath first, then opens with O_NOFOLLOW and re-checks
+ * the opened object is still under PROJECT_ROOT.
+ */
+export function openWithinProject(
+  inputPath: string,
+  flags: number,
+  mode?: number,
+): { fd: number; resolvedPath: string } {
+  const candidate = safePath(inputPath);
+  const openFlags = flags | noFollowFlag();
+  let fd: number;
+  let openPath = candidate;
+  try {
+    fd =
+      mode === undefined
+        ? openSync(candidate, openFlags)
+        : openSync(candidate, openFlags, mode);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // Final component is a symlink/reparse point. Allow only when the
+    // resolved target is still inside the project, then open that target
+    // with O_NOFOLLOW so a further replacement cannot redirect I/O.
+    if (code === "ELOOP" || code === "EINVAL") {
+      let target: string;
+      try {
+        target = realpathSync(candidate);
+      } catch {
+        throw new SecurityValidationError(
+          "Refusing to follow a symbolic link or reparse point at the final path component.",
+        );
+      }
+      if (!isPathWithinRoot(getProjectRoot(), target)) {
+        throw new SecurityValidationError(
+          "Access outside the project directory is not allowed.",
+        );
+      }
+      try {
+        fd =
+          mode === undefined
+            ? openSync(target, openFlags)
+            : openSync(target, openFlags, mode);
+        openPath = target;
+      } catch (err2) {
+        const code2 = (err2 as NodeJS.ErrnoException).code;
+        if (code2 === "ELOOP" || code2 === "EINVAL") {
+          throw new SecurityValidationError(
+            "Refusing to follow a symbolic link or reparse point at the final path component.",
+          );
+        }
+        throw err2;
+      }
+    } else {
+      throw err;
+    }
+  }
+  const resolvedPath = assertOpenedWithinProject(fd, openPath);
+  return { fd, resolvedPath };
+}
+
+/** Read a UTF-8 text file through an O_NOFOLLOW open + fd I/O. */
+export function readFileWithinProject(inputPath: string, maxBytes: number): {
+  resolvedPath: string;
+  contents: string;
+} {
+  const { fd, resolvedPath } = openWithinProject(
+    inputPath,
+    fsConstants.O_RDONLY,
+  );
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      throw new SecurityValidationError(`Not a file: ${inputPath}`);
+    }
+    if (st.size > maxBytes) {
+      throw new SecurityValidationError(
+        `File is too large to read. Maximum size is ${maxBytes} bytes.`,
+      );
+    }
+    const buffer = Buffer.alloc(st.size);
+    let offset = 0;
+    while (offset < st.size) {
+      const n = readSync(fd, buffer, offset, st.size - offset, offset);
+      if (n === 0) break;
+      offset += n;
+    }
+    const contents = new TextDecoder("utf-8", { fatal: true }).decode(
+      buffer.subarray(0, offset),
+    );
+    return { resolvedPath, contents };
+  } catch (err) {
+    if (err instanceof SecurityValidationError) throw err;
+    if (err instanceof TypeError || (err as Error).name === "TypeError") {
+      throw new SecurityValidationError("The file is not a UTF-8 text file.");
+    }
+    // TextDecoder fatal throws TypeError in some engines; also catch generic
+    if (
+      err instanceof Error &&
+      /UTF-8|utf-8|encoding/i.test(err.message)
+    ) {
+      throw new SecurityValidationError("The file is not a UTF-8 text file.");
+    }
+    throw err;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Write contents to a project path without following a final-component
+ * symlink. Uses O_CREAT|O_WRONLY|O_NOFOLLOW; callers that require exclusive
+ * create should pass exclusive=true (O_EXCL).
+ */
+export function writeFileWithinProject(
+  inputPath: string,
+  contents: string,
+  options: { exclusive?: boolean; mode?: number } = {},
+): { resolvedPath: string; bytesWritten: number } {
+  // Ensure parent exists and is still inside the project before creating.
+  const candidate = safePath(inputPath);
+  const parent = dirname(candidate);
+  const root = getProjectRoot();
+  if (!existsSync(parent)) {
+    mkdirSync(parent, { recursive: true });
+  }
+  // Re-validate parent after mkdir (directory could be replaced).
+  let parentReal: string;
+  try {
+    parentReal = realpathSync(parent);
+  } catch {
+    throw new SecurityValidationError(
+      `Parent directory is not accessible: ${parent}`,
+    );
+  }
+  if (!isPathWithinRoot(root, parentReal)) {
+    throw new SecurityValidationError(
+      "Access outside the project directory is not allowed.",
+    );
+  }
+  // Re-resolve full path under the verified parent.
+  const base = basename(candidate);
+  const target = join(parentReal, base);
+  if (!isPathWithinRoot(root, target) && existsSync(target)) {
+    // If target exists, realpath it; if not, lexical join under parentReal is final.
+  }
+  if (existsSync(target)) {
+    try {
+      const targetReal = realpathSync(target);
+      if (!isPathWithinRoot(root, targetReal)) {
+        throw new SecurityValidationError(
+          "Access outside the project directory is not allowed.",
+        );
+      }
+    } catch (err) {
+      if (err instanceof SecurityValidationError) throw err;
+    }
+  }
+
+  let flags =
+    fsConstants.O_WRONLY |
+    fsConstants.O_CREAT |
+    noFollowFlag();
+  if (options.exclusive) {
+    flags |= fsConstants.O_EXCL;
+  } else {
+    flags |= fsConstants.O_TRUNC;
+  }
+
+  let fd: number;
+  try {
+    fd = openSync(
+      target,
+      flags,
+      options.mode ?? 0o644,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EEXIST") {
+      if (code === "ELOOP") {
+        throw new SecurityValidationError(
+          "Refusing to follow a symbolic link or reparse point at the final path component.",
+        );
+      }
+      throw err;
+    }
+    throw err;
+  }
+
+  try {
+    const resolvedPath = assertOpenedWithinProject(fd, target);
+    const buffer = Buffer.from(contents, "utf-8");
+    let offset = 0;
+    while (offset < buffer.length) {
+      const n = writeSync(fd, buffer, offset, buffer.length - offset, offset);
+      offset += n;
+    }
+    return { resolvedPath, bytesWritten: buffer.length };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Unlink a project file. On POSIX, unlinking a symlink removes the link
+ * itself (not the target). We still open+verify with O_NOFOLLOW first so we
+ * only operate when the final component is not a symlink escape at open time.
+ * If the path is a symlink, open fails with ELOOP and we refuse.
+ */
+export function unlinkWithinProject(inputPath: string): { resolvedPath: string } {
+  const candidate = safePath(inputPath);
+  // Open for read with O_NOFOLLOW to pin the inode and refuse final symlinks.
+  const { fd, resolvedPath } = openWithinProject(
+    inputPath,
+    fsConstants.O_RDONLY,
+  );
+  closeSync(fd);
+  if (resolvedPath === getProjectRoot()) {
+    throw new SecurityValidationError("Refusing to delete the project root.");
+  }
+  const st = statSync(resolvedPath);
+  if (st.isDirectory()) {
+    throw new SecurityValidationError(
+      "delete_file can only delete a single file, not a directory.",
+    );
+  }
+  rmSync(resolvedPath);
+  return { resolvedPath };
+}

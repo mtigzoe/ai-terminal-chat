@@ -15,7 +15,7 @@
 // matching the ToolResult shapes in types.ts, so these can be wired
 // directly into the tool registry in tools.ts (Phase 5) without adaptation.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -28,6 +28,8 @@ import {
   safePath,
   resolveFollowingSymlinks,
   isPathWithinRoot,
+  readFileWithinProject,
+  SecurityValidationError,
 } from "./security.js";
 import type {
   FileEntry,
@@ -118,14 +120,15 @@ export function listFiles(inputPath = "."): ListFilesResult {
 const READ_FILE_MAX_BYTES = 200_000;
 
 export function readFile(inputPath: string): ReadFileResult {
-  let filePath: string;
+  // Sensitive / permission checks use the validated path first.
+  let previewPath: string;
   try {
-    filePath = safePath(inputPath);
+    previewPath = safePath(inputPath);
   } catch (err) {
     return { error: errorMessage(err) };
   }
 
-  if (isSensitivePath(filePath)) {
+  if (isSensitivePath(previewPath)) {
     return {
       error:
         `Refusing to read '${inputPath}': it looks like a secrets/` +
@@ -140,27 +143,25 @@ export function readFile(inputPath: string): ReadFileResult {
     return { error: errorMessage(err) };
   }
 
-  if (!existsSync(filePath)) {
-    return { error: `File does not exist: ${inputPath}` };
-  }
-  if (!statSync(filePath).isFile()) {
-    return { error: `Not a file: ${inputPath}` };
-  }
-  if (statSync(filePath).size > READ_FILE_MAX_BYTES) {
-    return {
-      error: `File is too large to read. Maximum size is ${READ_FILE_MAX_BYTES} bytes.`,
-    };
-  }
-
-  let contents: string;
   try {
-    const buffer = readFileSync(filePath);
-    contents = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-  } catch {
-    return { error: "The file is not a UTF-8 text file." };
+    const { resolvedPath, contents } = readFileWithinProject(
+      inputPath,
+      READ_FILE_MAX_BYTES,
+    );
+    return { path: relativeToProjectRoot(resolvedPath), contents };
+  } catch (err) {
+    if (err instanceof SecurityValidationError) {
+      return { error: err.message };
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return { error: `File does not exist: ${inputPath}` };
+    }
+    if (code === "EISDIR") {
+      return { error: `Not a file: ${inputPath}` };
+    }
+    return { error: errorMessage(err) };
   }
-
-  return { path: relativeToProjectRoot(filePath), contents };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,18 +275,15 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
         continue;
       }
 
-      let size: number;
-      try {
-        size = statSync(filePath).size;
-      } catch {
-        continue;
-      }
-      if (size > SEARCH_MAX_FILE_BYTES) continue;
-
+      // Use relative path for O_NOFOLLOW open so a final-component
+      // symlink cannot redirect the read outside the project.
+      const relForOpen = relative(root, filePath).split("\\").join("/");
       let text: string;
+      let matchPath: string;
       try {
-        const buffer = readFileSync(filePath);
-        text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+        const result = readFileWithinProject(relForOpen, SEARCH_MAX_FILE_BYTES);
+        text = result.contents;
+        matchPath = relative(root, result.resolvedPath);
       } catch {
         continue;
       }
@@ -296,7 +294,7 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
         if (!line.toLowerCase().includes(queryLower)) continue;
 
         matches.push({
-          path: relative(root, filePath),
+          path: matchPath,
           line: i + 1,
           text: line.trim().slice(0, 300),
         });
