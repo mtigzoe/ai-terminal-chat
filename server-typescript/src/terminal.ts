@@ -16,6 +16,7 @@ import {
   isReadAllowed,
 } from "./security.ts";
 import { runIsolatedGit } from "./git.ts";
+import { resolveTrustedExecutable, TrustedExecutableError } from "./trusted-exec.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -692,26 +693,28 @@ function executableForCommand(args: string[]): {
   file: string;
   args: string[];
 } {
+  const projectRoot = getProjectRoot();
+
   if (process.platform === "win32" && args.length > 0) {
     const command = args[0].toLowerCase();
 
     if (command === "pwd") {
       return {
-        file: "cmd",
+        file: resolveTrustedExecutable("cmd", { projectRoot }),
         args: ["/c", "cd"],
       };
     }
 
     if (command === "dir" || command === "ls") {
       return {
-        file: "cmd",
+        file: resolveTrustedExecutable("cmd", { projectRoot }),
         args: ["/c", "dir", ...args.slice(1)],
       };
     }
   }
 
   return {
-    file: args[0],
+    file: resolveTrustedExecutable(args[0], { projectRoot }),
     args: args.slice(1),
   };
 }
@@ -811,11 +814,23 @@ export async function runCommand(
     return { error: "No command was provided." };
   }
 
-  const { file, args: fileArgs } = executableForCommand(args);
+  let file: string;
+  let fileArgs: string[];
+  try {
+    ({ file, args: fileArgs } = executableForCommand(args));
+  } catch (err) {
+    if (err instanceof TrustedExecutableError) {
+      return { error: err.message };
+    }
+    return {
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 
   // Allowlisted `git …` commands share the same hardened execution
   // boundary as git.ts (isolated GIT_CONFIG, SSH, helpers, pager).
-  if (file.toLowerCase() === "git") {
+  // Detect by original token, not the resolved absolute path.
+  if (args[0].toLowerCase() === "git") {
     try {
       const result = await runIsolatedGit(fileArgs, {
         timeout: COMMAND_TIMEOUT_MS,

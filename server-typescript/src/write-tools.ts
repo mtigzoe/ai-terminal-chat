@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { getProjectRoot, isSensitivePath, safePath } from "./security.ts";
 import { getGitSshCommand } from "./git.ts";
+import { resolveTrustedExecutable } from "./trusted-exec.ts";
 
 const PREVIEW_CHAR_LIMIT = 2000;
 const MAX_PATCH_SIZE = 200_000;
@@ -67,7 +68,7 @@ function runGit(
 
   try {
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
-    const result = spawnSync("git", safeArgs, {
+    const result = spawnSync(resolveTrustedExecutable("git", { projectRoot: getProjectRoot() }), safeArgs, {
       cwd: getProjectRoot(),
       encoding: "utf-8",
       timeout: GIT_TIMEOUT * 1000,

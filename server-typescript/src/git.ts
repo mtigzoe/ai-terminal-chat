@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath } from "./security.ts";
+import { resolveTrustedExecutable } from "./trusted-exec.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -174,7 +175,10 @@ async function readGitIdentityValue(scope: "--local" | "--global", key: "user.na
   delete env.GIT_CONFIG_NOSYSTEM;
 
   try {
-    const result = await execFileAsync("git", [scope, "--no-includes", "--get", key], {
+    const gitExecutable = resolveTrustedExecutable("git", {
+      projectRoot: getProjectRoot(),
+    });
+    const result = await execFileAsync(gitExecutable, [scope, "--no-includes", "--get", key], {
       cwd: getProjectRoot(),
       shell: false,
       timeout: 5_000,
@@ -251,7 +255,10 @@ export async function runIsolatedGit(
 
   try {
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
-    const result = await execFileAsync("git", safeArgs, {
+    const gitExecutable = resolveTrustedExecutable("git", {
+      projectRoot: getProjectRoot(),
+    });
+    const result = await execFileAsync(gitExecutable, safeArgs, {
       cwd: getProjectRoot(),
       shell: false,
       timeout,
