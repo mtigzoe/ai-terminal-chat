@@ -161,3 +161,54 @@ test("shared SSH isolation is platform-correct", () => {
     `ssh -F ${expectedConfig} -o ProxyCommand=none -o ProxyJump=none`,
   );
 });
+
+test("git diff works when GIT_EXTERNAL_DIFF is set in the parent environment", async () => {
+  // Regression: setting GIT_EXTERNAL_DIFF="" in the child env made Git try to
+  // execute an empty external-diff command. Isolation must *delete* the var
+  // and rely on --no-ext-diff / -c diff.external=.
+  const project = mkdtempSync(join(tmpdir(), "git-ext-diff-env-"));
+  const marker = join(project, "EXT_DIFF_RAN");
+  const { scriptPath } = markerScript(marker);
+
+  execFileSync("git", ["init"], { cwd: project, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "t@example.com"], {
+    cwd: project,
+    stdio: "ignore",
+  });
+  execFileSync("git", ["config", "user.name", "T"], {
+    cwd: project,
+    stdio: "ignore",
+  });
+  writeFileSync(join(project, "a.txt"), "one\n", "utf8");
+  execFileSync("git", ["add", "a.txt"], { cwd: project, stdio: "ignore" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: project, stdio: "ignore" });
+  writeFileSync(join(project, "a.txt"), "two\n", "utf8");
+
+  const previous = process.env.GIT_EXTERNAL_DIFF;
+  const previousTrust = process.env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
+  try {
+    process.env.GIT_EXTERNAL_DIFF = scriptPath;
+    process.env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE = "1";
+    __setProjectRootForTests(project);
+
+    const result = await runCommand("git diff");
+    assert.equal(existsSync(marker), false, "external diff script must not run");
+    if ("error" in result && result.error) {
+      assert.equal(
+        String(result.error).includes("cannot run"),
+        false,
+        `must not fail with empty external-diff command: ${result.error}`,
+      );
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_EXTERNAL_DIFF;
+    else process.env.GIT_EXTERNAL_DIFF = previous;
+    if (previousTrust === undefined) {
+      delete process.env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
+    } else {
+      process.env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE = previousTrust;
+    }
+    __resetProjectRootForTests();
+    rmSync(project, { recursive: true, force: true });
+  }
+});

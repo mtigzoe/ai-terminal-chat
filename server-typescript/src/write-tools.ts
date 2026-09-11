@@ -76,18 +76,22 @@ function runGit(
       input,
       shell: false,
       windowsHide: true,
-      env: {
-        ...process.env,
-        GIT_CONFIG: emptyConfigPath,
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-        GIT_TERMINAL_PROMPT: "0",
-        GIT_EXTERNAL_DIFF: "",
-        GIT_ASKPASS: "",
-        SSH_ASKPASS: "",
-        GIT_SSH_COMMAND: getGitSshCommand(),
-        GIT_PROXY_COMMAND: "none",
-      },
+      env: (() => {
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        delete env.GIT_EXTERNAL_DIFF;
+        delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
+        return {
+          ...env,
+          GIT_CONFIG: emptyConfigPath,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_ASKPASS: "",
+          SSH_ASKPASS: "",
+          GIT_SSH_COMMAND: getGitSshCommand(),
+          GIT_PROXY_COMMAND: "none",
+        };
+      })(),
     });
     return {
       code: result.status ?? (result.error ? 1 : 0),

@@ -794,13 +794,17 @@ def _run_git(
         pass
 
     env = os.environ.copy()
+    # Empty GIT_EXTERNAL_DIFF makes Git try to execute "" and fail with
+    # "cannot run : No such file or directory". Remove inherited values
+    # instead; --no-ext-diff / -c diff.external= block repo-controlled helpers.
+    env.pop("GIT_EXTERNAL_DIFF", None)
+    env.pop("GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE", None)
     env.update(
         {
             "GIT_CONFIG": empty_config,
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "NUL" if os.name == "nt" else "/dev/null",
             "GIT_TERMINAL_PROMPT": "0",
-            "GIT_EXTERNAL_DIFF": "",
             "GIT_ASKPASS": "",
             "SSH_ASKPASS": "",
             "GIT_SSH_COMMAND": _git_ssh_command(),

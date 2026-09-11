@@ -265,27 +265,32 @@ export async function runIsolatedGit(
       windowsHide: true,
       maxBuffer,
       encoding: "utf8",
-      env: {
-        ...process.env,
-        // GIT_CONFIG selects the only configuration file Git reads for this
-        // subprocess. The file is empty and lives outside the repository.
-        GIT_CONFIG: emptyConfigPath,
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-        GIT_TERMINAL_PROMPT: "0",
-        // Prevent inherited external helpers from becoming another execution
-        // path. These environment variables take precedence over corresponding
-        // Git configuration where supported.
-        GIT_EXTERNAL_DIFF: "",
-        GIT_ASKPASS: "",
-        SSH_ASKPASS: "",
-        GIT_SSH_COMMAND: getGitSshCommand(),
-        GIT_PROXY_COMMAND: "none",
-        // Force a non-interactive pager so core.pager / pager.* cannot
-        // launch an attacker-controlled viewer.
-        GIT_PAGER: "cat",
-        PAGER: "cat",
-      },
+      env: (() => {
+        // Start from the process environment, then strip external-diff
+        // variables. Setting GIT_EXTERNAL_DIFF="" makes Git try to run an
+        // empty command ("cannot run : No such file or directory").
+        // Deleting the vars lets --no-ext-diff / -c diff.external= apply.
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        delete env.GIT_EXTERNAL_DIFF;
+        delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
+        return {
+          ...env,
+          // GIT_CONFIG selects the only configuration file Git reads for this
+          // subprocess. The file is empty and lives outside the repository.
+          GIT_CONFIG: emptyConfigPath,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_ASKPASS: "",
+          SSH_ASKPASS: "",
+          GIT_SSH_COMMAND: getGitSshCommand(),
+          GIT_PROXY_COMMAND: "none",
+          // Force a non-interactive pager so core.pager / pager.* cannot
+          // launch an attacker-controlled viewer.
+          GIT_PAGER: "cat",
+          PAGER: "cat",
+        };
+      })(),
     });
     return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
   } catch (error) {

@@ -1001,6 +1001,7 @@ function ensureDirectoryWithinProject(absDir: string): string {
           const probeFd = openRelativeToDirFd(currentFd, part, {
             create: false,
             write: false,
+            directory: true,
           });
           closeSync(probeFd);
           childExists = true;
@@ -1055,6 +1056,7 @@ function ensureDirectoryWithinProject(absDir: string): string {
           nextFd = openRelativeToDirFd(currentFd, part, {
             create: false,
             write: false,
+            directory: true,
           });
         } catch (err) {
           if (err instanceof WindowsHandlePathError) {
