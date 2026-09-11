@@ -307,6 +307,7 @@ DEFAULT_ALLOWED_COMMAND_PREFIXES = (
 # Commands that can execute repository/dependency-controlled code and require
 # explicit confirmation (mirrors server-typescript EXECUTION_RISK_COMMAND_PREFIXES).
 EXECUTION_RISK_COMMAND_PREFIXES = (
+    # Mirror TypeScript: only intentional default-allowed execution forms.
     "npm test",
     "npm run test",
     "npm run build",
@@ -319,9 +320,7 @@ EXECUTION_RISK_COMMAND_PREFIXES = (
     "python -m pytest",
     "python3 -m pytest",
     "black --check",
-    "black",
     "ruff check",
-    "ruff",
     "flake8",
 )
 

@@ -519,7 +519,16 @@ app.post("/terminal/run", async (c) => {
   if (!command) {
     return c.json({ error: "command is required." }, 400 as any);
   }
-  const result = await runCommand(command, true);  // HTTP API: operator-initiated
+  // Operator-facing terminal endpoint: the human already typed or selected
+  // the command in the UI. Default confirm=true so inspection and confirmed
+  // execution-risk commands proceed without a second agent-style gate.
+  // Callers that want a dry-run preview of execution-risk commands may pass
+  // { "confirm": false } and then re-post with confirm=true after approval.
+  // The agent tool path does NOT use this route; it calls runCommand via
+  // toolFunctions with confirm driven by the pending-confirmation flow.
+  const confirm =
+    data.confirm === undefined ? true : Boolean(data.confirm);
+  const result = await runCommand(command, confirm);
   if (result && typeof result === "object" && "error" in result) {
     return c.json(result, 400 as any);
   }

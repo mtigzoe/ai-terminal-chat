@@ -144,6 +144,9 @@ let allowedCommandPrefixes: string[] = [...DEFAULT_ALLOWED_COMMAND_PREFIXES];
  * explicit user confirmation before the process is spawned.
  */
 export const EXECUTION_RISK_COMMAND_PREFIXES = [
+  // Exact forms that appear on DEFAULT_ALLOWED_COMMAND_PREFIXES (and safe
+  // variants). Bare "black"/"ruff" are intentionally omitted: they are not
+  // default-allowed, and a longer prefix would also match "black --check".
   "npm test",
   "npm run test",
   "npm run build",
@@ -156,9 +159,7 @@ export const EXECUTION_RISK_COMMAND_PREFIXES = [
   "python -m pytest",
   "python3 -m pytest",
   "black --check",
-  "black",
   "ruff check",
-  "ruff",
   "flake8",
 ] as const;
 

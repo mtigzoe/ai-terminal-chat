@@ -742,6 +742,13 @@ test("isExecutionRiskCommand classifies install/test/build commands", async () =
   assert.equal(isExecutionRiskCommand("npm run build"), true);
   assert.equal(isExecutionRiskCommand("pytest -q"), true);
   assert.equal(isExecutionRiskCommand("pip install -r requirements.txt"), true);
+  assert.equal(isExecutionRiskCommand("black --check"), true);
+  assert.equal(isExecutionRiskCommand("ruff check ."), true);
+  assert.equal(isExecutionRiskCommand("flake8"), true);
+  // Bare "black"/"ruff" are not default-allowed and are not listed as risk
+  // prefixes; they remain forbidden by the allowlist itself.
+  assert.equal(isExecutionRiskCommand("black"), false);
+  assert.equal(isExecutionRiskCommand("ruff"), false);
   assert.equal(isExecutionRiskCommand("git status"), false);
   assert.equal(isExecutionRiskCommand("node --version"), false);
   assert.equal(isExecutionRiskCommand("ls"), false);

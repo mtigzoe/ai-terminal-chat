@@ -189,7 +189,11 @@ export async function resolveAndPinHostname(
   for (const rec of records) {
     const reason = blockedAddressReason(rec.address, allowLoopback);
     if (reason) {
-      // Any blocked address in the set → reject (strict dual-stack policy).
+      // Strict dual-stack policy (intentional): if DNS returns any private,
+      // link-local, or metadata address alongside public ones, reject the
+      // entire set. Prefer a temporary resolution failure over connecting
+      // when the name is dual-homed with an internal address (classic
+      // rebinding pattern). Do not "prefer the public A/AAAA" here.
       return {
         ok: false,
         error: `${reason} (${rec.address})`,
