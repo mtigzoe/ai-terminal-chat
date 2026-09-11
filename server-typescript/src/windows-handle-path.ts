@@ -60,6 +60,10 @@ const FILE_ATTRIBUTE_NORMAL = 0x00000080;
 const FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
 
 const OBJ_CASE_INSENSITIVE = 0x00000040;
+// Fail closed if any reparse point is encountered while resolving this name.
+// Unlike FILE_OPEN_REPARSE_POINT (which opens the reparse point itself),
+// OBJ_DONT_REPARSE prevents the lookup from following it at all.
+const OBJ_DONT_REPARSE = 0x00001000;
 
 // CRT flags for _open_osfhandle
 const O_RDWR = 2;
@@ -71,6 +75,7 @@ const NTSTATUS_OBJECT_NAME_NOT_FOUND = 0xc000_0034;
 const NTSTATUS_OBJECT_PATH_NOT_FOUND = 0xc000_003a;
 const NTSTATUS_ACCESS_DENIED = 0xc000_0022;
 const NTSTATUS_DELETE_PENDING = 0xc000_0056;
+const NTSTATUS_REPARSE_POINT_ENCOUNTERED = 0xc000_050b;
 
 const RESERVED_DOS_NAMES = new Set([
   "con",
@@ -321,7 +326,7 @@ function ntCreateRelative(
     Length: koffi.sizeof(ObjectAttributes),
     RootDirectory: parentHandle,
     ObjectName: usPtr,
-    Attributes: OBJ_CASE_INSENSITIVE,
+    Attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
     SecurityDescriptor: null,
     SecurityQualityOfService: null,
   });
@@ -373,6 +378,13 @@ function ntCreateRelative(
       err.code = "ENOENT";
       throw err;
     }
+    if (statusU === NTSTATUS_REPARSE_POINT_ENCOUNTERED) {
+      const err = new Error(
+        `Reparse point encountered while opening '${relativeName}'.`,
+      ) as NodeJS.ErrnoException;
+      err.code = "ELOOP";
+      throw err;
+    }
     const dos = native.RtlNtStatusToDosError(status);
     throw new WindowsHandlePathError(
       `NtCreateFile failed for '${relativeName}' (NTSTATUS=0x${statusU.toString(16)}, win32=${dos})`,
@@ -407,9 +419,12 @@ export function openRelativeToDirFd(
     disposition = FILE_OPEN;
   }
 
-  // For open of an existing name, FILE_OPEN_REPARSE_POINT prevents following
-  // a final-component junction/symlink to an outside target. For create of a
-  // new name there is no reparse point yet, so the flag is omitted.
+  // OBJ_DONT_REPARSE on OBJECT_ATTRIBUTES is the primary security boundary:
+  // it prevents both existing final-component reparses and reparses encountered
+  // while resolving the relative name. A reparse is rejected instead of being
+  // followed and checked only after the open has already occurred.
+  // FILE_OPEN_REPARSE_POINT is retained for existing-name opens as defense in
+  // depth, but it is not sufficient for create=true/FILE_OPEN_IF.
   let createOptions =
     FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
   if (!options.create) {
