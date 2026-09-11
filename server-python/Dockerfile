@@ -36,8 +36,9 @@ ENV HOST=0.0.0.0 \
 
 EXPOSE 9000
 
-# Lightweight readiness check against the Flask process.
+# Lightweight readiness check against the Flask process. Authentication is
+# supplied through API_AUTH_TOKEN at runtime.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT}/providers" >/dev/null || exit 1
+    CMD sh -c 'curl -fsS -H "Authorization: Bearer ${API_AUTH_TOKEN}" "http://127.0.0.1:${PORT}/providers" >/dev/null || exit 1'
 
-CMD ["python", "app.py"]
+CMD ["python", "secure_server.py"]
