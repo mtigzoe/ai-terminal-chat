@@ -11,6 +11,8 @@ import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from urllib.parse import urlparse
+import ipaddress
 from typing import Iterable, Optional
 
 
@@ -209,8 +211,7 @@ def persist_provider_selection(
     if ollama_base_url is not None:
         url = str(ollama_base_url).strip()
         if url:
-            if "://" not in url:
-                url = f"http://{url}"
+            url = normalize_ollama_url_for_storage(url)
             payload["ollama_base_url"] = url
         else:
             payload.pop("ollama_base_url", None)
@@ -484,3 +485,121 @@ def require_read_allowed(path: str | Path) -> None:
             f"Access denied: '{display}' is not in the set of files the user "
             f"selected for the agent. Select it on the Project page first."
         )
+
+
+# ---------------------------------------------------------------------------
+# Provider URL / SSRF protection
+# ---------------------------------------------------------------------------
+
+_BLOCKED_IPV4 = {
+    "169.254.169.254",  # cloud metadata
+    "169.254.169.253",
+    "100.100.100.200",  # Alibaba metadata
+}
+
+_ALLOWED_PORTS = frozenset({80, 443, 11434, 8080, 8000, 3000, 9000, 4433})
+
+
+def _is_blocked_ip(ip_str: str) -> str | None:
+    """Return an error message if the IP is private/reserved/metadata, else None."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return None
+
+    if ip_str in _BLOCKED_IPV4:
+        return f"Blocked address (cloud metadata): {ip_str}"
+
+    if isinstance(ip, ipaddress.IPv4Address):
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return f"Private or reserved IPv4 address is not allowed: {ip_str}"
+    else:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return f"Private or reserved IPv6 address is not allowed: {ip_str}"
+    return None
+
+
+def validate_provider_base_url(
+    raw_url: str,
+    *,
+    allowed_ports: frozenset[int] | None = None,
+) -> str:
+    """Validate a provider base URL for SSRF protection.
+
+    Allows hostnames (including localhost) so local Ollama works.
+    Blocks private/reserved IP *literals* and cloud metadata endpoints.
+    Returns the normalized URL string (no trailing slash on path root).
+    Raises ValueError on rejection.
+    """
+    if not raw_url or not str(raw_url).strip():
+        raise ValueError("A base URL is required.")
+
+    url = str(raw_url).strip()
+    if "://" not in url:
+        url = f"http://{url}"
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http: and https: schemes are allowed")
+
+    if parsed.username or parsed.password:
+        raise ValueError("Credentials in URL are not allowed. Use API key configuration instead")
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL must include a hostname")
+
+    # IP literals: block private/reserved/metadata
+    try:
+        ipaddress.ip_address(host)
+        err = _is_blocked_ip(host)
+        if err:
+            raise ValueError(err)
+    except ValueError as exc:
+        # Not an IP, or blocked IP error
+        if "not allowed" in str(exc) or "Blocked address" in str(exc):
+            raise
+        # hostname — allowed (DNS rebinding checked at request time where needed)
+
+    ports = allowed_ports if allowed_ports is not None else _ALLOWED_PORTS
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    if port not in ports and port < 1024:
+        raise ValueError(
+            "Privileged ports (< 1024) are not allowed except standard HTTP/HTTPS"
+        )
+    if port < 1 or port > 65535:
+        raise ValueError("Invalid port number")
+
+    # Rebuild without trailing slash noise
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    path = parsed.path or ""
+    if path == "/":
+        path = ""
+    elif path.endswith("/"):
+        path = path.rstrip("/")
+    return f"{parsed.scheme}://{netloc}{path}"
+
+
+def normalize_ollama_url_for_storage(raw: str) -> str:
+    """Normalize and validate an Ollama base URL for persistence."""
+    if not raw or not str(raw).strip():
+        raise ValueError("An Ollama hostname is required.")
+    return validate_provider_base_url(str(raw).strip())

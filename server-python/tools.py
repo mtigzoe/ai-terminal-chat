@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -739,6 +740,96 @@ def run_command(command: str) -> dict:
 
 
 # ---------------------------------------------------------
+# Isolated Git execution
+# ---------------------------------------------------------
+
+# Defense-in-depth -c overrides so repository-local configuration cannot
+# supply command-executing settings (hooks, credential helpers, proxies).
+_GIT_CONFIG_OVERRIDES = [
+    "-c", "core.hooksPath=",
+    "-c", "core.fsmonitor=",
+    "-c", "core.fsmonitorHook=",
+    "-c", "merge.*.command=",
+    "-c", "merge.*.driver=",
+    "-c", "gpg.program=",
+    "-c", "sendemail.smtpserver=",
+    "-c", "sendemail.smtpencryption=",
+    "-c", "sendemail.smtpuser=",
+    "-c", "sendemail.smtppass=",
+    "-c", "sendemail.smtpdomain=",
+    "-c", "http.extraHeader=",
+    "-c", "http.proxy=",
+    "-c", "http.postBuffer=",
+    "-c", "credential.helper=",
+    "-c", "core.gitProxy=none",
+]
+
+
+def _git_ssh_command() -> str:
+    """SSH without loading user config (blocks ProxyCommand/ProxyJump)."""
+    if os.name == "nt":
+        return "ssh -F NUL -o ProxyCommand=none -o ProxyJump=none"
+    return "ssh -F /dev/null -o ProxyCommand=none -o ProxyJump=none"
+
+
+def _run_git(
+    args: list,
+    timeout: float,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess:
+    """Run git with config/SSH isolation matching the TypeScript backend.
+
+    Uses an empty temporary GIT_CONFIG, disables system/global config,
+    isolates SSH, and applies -c overrides that neutralize
+    command-executing settings from repository config.
+    """
+    isolation = tempfile.mkdtemp(prefix="git-isolation-")
+    empty_config = os.path.join(isolation, "config")
+    try:
+        with open(empty_config, "w", encoding="utf-8") as fh:
+            fh.write("")
+        os.chmod(empty_config, 0o600)
+    except OSError:
+        # Best-effort mode bits; continue with empty file.
+        pass
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "GIT_CONFIG": empty_config,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "NUL" if os.name == "nt" else "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_EXTERNAL_DIFF": "",
+            "GIT_ASKPASS": "",
+            "SSH_ASKPASS": "",
+            "GIT_SSH_COMMAND": _git_ssh_command(),
+            "GIT_PROXY_COMMAND": "none",
+        }
+    )
+
+    safe_args = list(_GIT_CONFIG_OVERRIDES) + list(args)
+    try:
+        return subprocess.run(
+            ["git", *safe_args],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            input=input_text,
+            env=env,
+            shell=False,
+        )
+    finally:
+        try:
+            import shutil
+
+            shutil.rmtree(isolation, ignore_errors=True)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------
 # Git tools
 # ---------------------------------------------------------
 
@@ -779,13 +870,7 @@ def _git_status_raw() -> dict:
     """Run `git status --short --branch` and return raw text (or error)."""
 
     try:
-        result = subprocess.run(
-            ["git", "status", "--short", "--branch"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_STATUS_TIMEOUT,
-        )
+        result = _run_git(["status", "--short", "--branch"], timeout=GIT_STATUS_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -984,13 +1069,7 @@ def git_committed_file_count() -> dict:
     """
 
     try:
-        result = subprocess.run(
-            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_STATUS_TIMEOUT,
-        )
+        result = _run_git(["ls-tree", "-r", "--name-only", "HEAD"], timeout=GIT_STATUS_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1063,13 +1142,7 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
         }
 
     try:
-        result = subprocess.run(
-            args,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_DIFF_TIMEOUT,
-        )
+        result = _run_git(args[1:], timeout=GIT_DIFF_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1116,13 +1189,7 @@ def git_log(max_count: int = 10) -> dict:
     count = max(1, min(count, 100))
 
     try:
-        result = subprocess.run(
-            ["git", "log", f"-{count}", "--oneline", "--decorate"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_LOG_TIMEOUT,
-        )
+        result = _run_git(["log", f"-{count}", "--oneline", "--decorate"], timeout=GIT_LOG_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1159,13 +1226,7 @@ def git_branch() -> dict:
     """
 
     try:
-        result = subprocess.run(
-            ["git", "branch", "--list"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_BRANCH_TIMEOUT,
-        )
+        result = _run_git(["branch", "--list"], timeout=GIT_BRANCH_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1232,13 +1293,7 @@ def git_add(path: str, confirm: bool = False) -> dict:
         # other git_* tools and apply_patch above), so this is only a
         # quick heuristic to fail fast for a fully untracked project.
         try:
-            top_level = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            top_level = _run_git(["rev-parse", "--show-toplevel"], timeout=10)
         except FileNotFoundError:
             return {"error": "git is not installed or not on PATH."}
         except subprocess.TimeoutExpired:
@@ -1277,13 +1332,7 @@ def git_add(path: str, confirm: bool = False) -> dict:
         }
 
     try:
-        result = subprocess.run(
-            ["git", "add", "--", rel_path],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
+        result = _run_git(["add", "--", rel_path], timeout=15)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1316,13 +1365,7 @@ def git_fetch(remote: str = "") -> dict:
         args = ["git", "fetch"]
         if remote:
             args.append(remote)
-        result = subprocess.run(
-            args,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_FETCH_TIMEOUT,
-        )
+        result = _run_git(args[1:], timeout=GIT_FETCH_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1381,13 +1424,7 @@ def git_pull(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
             args.append(remote)
         if branch:
             args.append(branch)
-        result = subprocess.run(
-            args,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_PULL_TIMEOUT,
-        )
+        result = _run_git(args[1:], timeout=GIT_PULL_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1466,13 +1503,7 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
             args.append("--staged")
         args.append("--")
         args.append(rel_path)
-        result = subprocess.run(
-            args,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
+        result = _run_git(args[1:], timeout=15)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1537,13 +1568,7 @@ def git_commit(message: str, confirm: bool = False) -> dict:
         }
 
     try:
-        result = subprocess.run(
-            ["git", "commit", "-m", message],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_COMMIT_TIMEOUT,
-        )
+        result = _run_git(["commit", "-m", message], timeout=GIT_COMMIT_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1600,13 +1625,7 @@ def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
             args.append(remote)
         if branch:
             args.append(branch)
-        result = subprocess.run(
-            args,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=GIT_PUSH_TIMEOUT,
-        )
+        result = _run_git(args[1:], timeout=GIT_PUSH_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1915,13 +1934,7 @@ def apply_patch(patch: str, confirm: bool = False) -> dict:
         # only a quick heuristic to fail fast for a *fully* untracked
         # project — the real check is `git apply --check` below.
         try:
-            top_level = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            top_level = _run_git(["rev-parse", "--show-toplevel"], timeout=10)
         except FileNotFoundError:
             return {"error": "git is not installed or not on PATH."}
         except subprocess.TimeoutExpired:
@@ -1971,14 +1984,7 @@ def apply_patch(patch: str, confirm: bool = False) -> dict:
         resolved_paths.append(str(file_path.relative_to(PROJECT_ROOT)))
 
     try:
-        check = subprocess.run(
-            ["git", "apply", "--check", "-"],
-            input=patch,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        check = _run_git(["apply", "--check", "-"], timeout=30, input_text=patch)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -2007,14 +2013,7 @@ def apply_patch(patch: str, confirm: bool = False) -> dict:
         }
 
     try:
-        applied = subprocess.run(
-            ["git", "apply", "-"],
-            input=patch,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        applied = _run_git(["apply", "-"], timeout=30, input_text=patch)
     except subprocess.TimeoutExpired:
         return {"error": "Applying the patch timed out."}
     except Exception as exc:

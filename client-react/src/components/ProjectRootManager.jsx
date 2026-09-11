@@ -68,6 +68,13 @@ export default function ProjectRootManager({ host }) {
       setPathDraft(savedPath);
       setError(false);
       setStatus(`Active project changed to ${savedPath}.`);
+      if (window.electronAPI?.setProjectRoot) {
+        try {
+          await window.electronAPI.setProjectRoot(savedPath);
+        } catch {
+          // Non-fatal: editor/reveal validation may use a stale root until restart.
+        }
+      }
       window.dispatchEvent(
         new CustomEvent('project-root-changed', { detail: { path: savedPath } })
       );

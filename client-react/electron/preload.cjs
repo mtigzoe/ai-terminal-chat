@@ -25,4 +25,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('shell:reveal', filePath),
   getAvailableEditors: () =>
     ipcRenderer.invoke('editor:getAvailable'),
+  /**
+   * Sync the active project root into the main process so editor/reveal
+   * path validation matches the backend after HTTP-based root changes.
+   * @param {string} path
+   * @returns {Promise<boolean>}
+   */
+  setProjectRoot: (path) => ipcRenderer.invoke('project:setRoot', path),
 });

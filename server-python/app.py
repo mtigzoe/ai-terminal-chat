@@ -62,7 +62,14 @@ if _saved.get("provider"):
         # provider so load_provider_config() picks it up from the env,
         # matching the runtime path used by select_provider().
         if _saved.get("provider") == "ollama" and _saved.get("ollama_base_url"):
-            os.environ["OLLAMA_BASE_URL"] = _saved["ollama_base_url"].strip()
+            try:
+                from security import normalize_ollama_url_for_storage
+                os.environ["OLLAMA_BASE_URL"] = normalize_ollama_url_for_storage(
+                    _saved["ollama_base_url"].strip()
+                )
+            except ValueError:
+                # Drop an invalid stored URL rather than enabling SSRF.
+                pass
         provider = get_provider(_saved["provider"], model=_saved.get("model"))
     except Exception:
         provider = get_provider()
@@ -266,6 +273,8 @@ def select_provider():
         provider = candidate
     try:
         persist_provider_selection(name, model=model, ollama_base_url=data.get("ollama_base_url"))
+    except ValueError as exc:
+        return {"error": f"Could not switch to '{name}': {exc}"}, 400
     except Exception as exc:
         print(f"[Warning] Could not persist provider selection: {exc}")
     return _provider_status(probe=True)

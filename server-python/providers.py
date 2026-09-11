@@ -154,10 +154,8 @@ def get_provider(name: str = None, model: str = None) -> Provider:
     name = (name or os.getenv("PROVIDER", "gemini")).lower()
 
     if name == "ollama" and pending_ollama_base_url is not None:
-        if not pending_ollama_base_url:
-            raise ValueError("An Ollama hostname is required.")
-        if "://" not in pending_ollama_base_url:
-            pending_ollama_base_url = f"http://{pending_ollama_base_url}"
+        from security import normalize_ollama_url_for_storage
+        pending_ollama_base_url = normalize_ollama_url_for_storage(pending_ollama_base_url)
         os.environ["OLLAMA_BASE_URL"] = pending_ollama_base_url
 
     config = load_provider_config(name)
