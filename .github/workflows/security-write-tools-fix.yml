@@ -1,0 +1,97 @@
+name: Patch write-tools Git staging isolation
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[security-write-tools]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Patch git_add to stage without filters
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('server-typescript/src/write-tools.ts')
+          text = path.read_text(encoding='utf-8')
+
+          marker = 'export function git_add(relPath: string, confirm = false): Record<string, unknown> {'
+          if marker not in text:
+              raise SystemExit('git_add marker not found')
+
+          helper = r'''async function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string): Promise<void> {
+            const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+            let payload: Buffer;
+            let mode = "100644";
+            try {
+              const st = fs.fstatSync(fd);
+              if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory.");
+              mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";
+              payload = Buffer.alloc(st.size);
+              let offset = 0;
+              while (offset < st.size) {
+                const n = fs.readSync(fd, payload, offset, st.size - offset, offset);
+                if (n === 0) break;
+                offset += n;
+              }
+              if (offset < st.size) payload = payload.subarray(0, offset);
+            } finally {
+              fs.closeSync(fd);
+            }
+
+            const hashed = runGit(["hash-object", "-w", "--stdin", "--no-filters"], payload.toString("utf8"));
+            if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
+            const oid = hashed.stdout.trim();
+            if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error(`Unexpected hash-object output: ${oid}`);
+
+            const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
+            if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+          }
+
+          '''
+
+          text = text.replace(marker, helper + marker, 1)
+
+          old = '''  const result = runGit(["add", "--", relPath]);
+  if (result.code !== 0) {
+    return {
+      error: `git add failed: ${result.stderr.trim() || result.stdout.trim()}`,
+    };
+  }
+
+  return { path: relativePath(filePath), staged: true };'''
+          new = '''  try {
+    // Do not invoke `git add`: repository .gitattributes can bind arbitrary
+    // filter.clean/process commands. Hash the already-open file bytes with
+    // --no-filters and update the index directly instead.
+    stageFileWithoutFiltersForWriteTool(relPath, filePath);
+    return { path: relativePath(filePath), staged: true };
+  } catch (exc) {
+    return { error: `git add failed: ${exc instanceof Error ? exc.message : String(exc)}` };
+  }'''
+          if old not in text:
+              raise SystemExit('git_add staging block not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Verify
+        run: |
+          npx tsc --noEmit -p server-typescript/tsconfig.json
+          grep -n "stageFileWithoutFiltersForWriteTool\|git add.*gitattributes" server-typescript/src/write-tools.ts
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server-typescript/src/write-tools.ts
+          git diff --cached --check
+          git commit -m "security: isolate write-tools git staging from repository filters [security-write-tools]"
+          git push origin HEAD:main
