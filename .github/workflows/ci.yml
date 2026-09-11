@@ -69,7 +69,7 @@ jobs:
       - name: Build test runtime
         run: npm run build
       - name: Run security regression tests
-        run: npm run test:unit -- src/security.test.ts src/terminal.git-isolation.test.ts src/trusted-exec.test.ts src/windows-handle-path.test.ts src/safe-fetch.test.ts
+        run: npx tsx --test src/security.test.ts src/terminal.git-isolation.test.ts src/trusted-exec.test.ts src/windows-handle-path.test.ts src/safe-fetch.test.ts
 
   client-react:
     name: client-react tests and build
