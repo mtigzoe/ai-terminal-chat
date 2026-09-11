@@ -49,6 +49,26 @@ jobs:
       - name: Run tests
         run: npm test -- --run
 
+  server-typescript-windows:
+    name: server-typescript Windows security tests
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: server-typescript
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Run security and filesystem tests
+        run: npm run test:unit -- --test-name-pattern="security|filesystem|terminal|trusted-exec|windows-handle-path|safe-fetch|git.config-isolation"
+
   client-react:
     name: client-react tests and build
     runs-on: ubuntu-latest
