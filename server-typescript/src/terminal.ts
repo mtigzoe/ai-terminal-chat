@@ -15,6 +15,7 @@ import {
   getProjectRoot,
   isReadAllowed,
 } from "./security.ts";
+import { runIsolatedGit } from "./git.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -703,6 +704,60 @@ export async function runCommand(
   }
 
   const { file, args: fileArgs } = executableForCommand(args);
+
+  // Allowlisted `git …` commands share the same hardened execution
+  // boundary as git.ts (isolated GIT_CONFIG, SSH, helpers, pager).
+  if (file.toLowerCase() === "git") {
+    try {
+      const result = await runIsolatedGit(fileArgs, {
+        timeout: COMMAND_TIMEOUT_MS,
+        maxBuffer: MAX_OUTPUT_CHARS * 2,
+      });
+
+      const out = capOutput(String(result.stdout ?? ""));
+      const err = capOutput(String(result.stderr ?? ""));
+      const truncated = out.truncated || err.truncated;
+
+      const payload: RunCommandResult = {
+        command: normalized,
+        returncode: result.code,
+        stdout: out.value,
+        stderr: err.value,
+        truncated,
+      };
+
+      if (truncated) {
+        payload.truncation_note =
+          `Output was truncated to ${MAX_OUTPUT_CHARS} ` +
+          "characters per stream.";
+      }
+
+      return payload;
+    } catch (err) {
+      const error = err as NodeJS.ErrnoException & {
+        code?: number | string;
+        killed?: boolean;
+        signal?: string;
+      };
+
+      if (error.code === "ETIMEDOUT" || (error.killed && error.signal === "SIGTERM")) {
+        return {
+          error:
+            `Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds.`,
+        };
+      }
+
+      if (error.code === "ENOENT") {
+        return { error: "git is not installed or not on PATH." };
+      }
+
+      return {
+        error: `Could not execute command: ${
+          error instanceof Error ? error.message : String(err)
+        }`,
+      };
+    }
+  }
 
   try {
     const { stdout, stderr } = await execFileAsync(

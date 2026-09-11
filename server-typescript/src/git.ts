@@ -23,13 +23,25 @@ const execFileAsync = promisify(execFile);
  * hooks/known command-execution settings disabled even if configuration
  * isolation changes in a future Git version.
  */
-const GIT_CONFIG_OVERRIDES: string[] = [
+export const GIT_CONFIG_OVERRIDES: string[] = [
   // Hooks - disable all hooks
   "-c", "core.hooksPath=",
 
   // FS monitor hooks
   "-c", "core.fsmonitor=",
   "-c", "core.fsmonitorHook=",
+
+  // Pagers (can execute arbitrary viewer commands)
+  "-c", "core.pager=cat",
+  "-c", "pager.status=cat",
+  "-c", "pager.diff=cat",
+  "-c", "pager.log=cat",
+  "-c", "pager.show=cat",
+  "-c", "pager.branch=cat",
+
+  // External diff / text conversion (command-valued)
+  "-c", "diff.external=",
+  "-c", "diff.mnemonicPrefix=false",
 
   // Merge drivers - can execute arbitrary commands
   "-c", "merge.*.command=",
@@ -206,17 +218,35 @@ export function getGitSshCommand(): string {
     : "ssh -F /dev/null -o ProxyCommand=none -o ProxyJump=none";
 }
 
-async function runGit(args: string[], timeout: number): Promise<{
+export interface IsolatedGitOptions {
+  /** Subprocess timeout in milliseconds. */
+  timeout?: number;
+  /** Max stdout/stderr buffer size in bytes. */
+  maxBuffer?: number;
+}
+
+/**
+ * Single hardened Git execution boundary used by git.ts tools and by
+ * terminal.ts allowlisted `git …` commands. Repository-local config,
+ * includes, hooks, external helpers, SSH proxies, and pagers must not
+ * become command-execution paths.
+ */
+export async function runIsolatedGit(
+  args: string[],
+  options: IsolatedGitOptions = {},
+): Promise<{
   code: number;
   stdout: string;
   stderr: string;
 }> {
+  const timeout = options.timeout ?? 15_000;
+  const maxBuffer = options.maxBuffer ?? Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000);
+
   // GIT_CONFIG is the exclusive Git configuration file used by Git commands.
   // Point it at an empty temporary file so repository-local .git/config and
   // .git/config.worktree cannot supply command-executing configuration.
   const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
   const emptyConfigPath = join(isolationDir, "config");
-  const emptyHooksDir = join(isolationDir, "hooks");
   writeFileSync(emptyConfigPath, "", { encoding: "utf8", mode: 0o600 });
 
   try {
@@ -226,7 +256,7 @@ async function runGit(args: string[], timeout: number): Promise<{
       shell: false,
       timeout,
       windowsHide: true,
-      maxBuffer: Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000),
+      maxBuffer,
       encoding: "utf8",
       env: {
         ...process.env,
@@ -244,6 +274,10 @@ async function runGit(args: string[], timeout: number): Promise<{
         SSH_ASKPASS: "",
         GIT_SSH_COMMAND: getGitSshCommand(),
         GIT_PROXY_COMMAND: "none",
+        // Force a non-interactive pager so core.pager / pager.* cannot
+        // launch an attacker-controlled viewer.
+        GIT_PAGER: "cat",
+        PAGER: "cat",
       },
     });
     return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
@@ -273,6 +307,15 @@ async function runGit(args: string[], timeout: number): Promise<{
       // Ignore cleanup errors
     }
   }
+}
+
+/** @deprecated Prefer runIsolatedGit — kept as a thin alias for internal callers. */
+async function runGit(args: string[], timeout: number): Promise<{
+  code: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return runIsolatedGit(args, { timeout });
 }
 
 export async function gitStatus(): Promise<Record<string, unknown>> {
