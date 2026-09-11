@@ -64,11 +64,7 @@ describe("Git repository-config code execution audit", () => {
 [core]
     sshCommand = echo "EXECUTED_SSH_COMMAND" > /tmp/ssh_executed.txt
 `);
-      // SSH remotes won't work without a real server, but we can verify
-      // the config is being read by checking if git tries to execute it
       const result = await gitFetch("nonexistent");
-      // Should fail but the key question is whether the command was attempted
-      // The fetch will fail due to no remote, but we can check if config was read
       expect(result.error).toBeDefined();
     });
   });
@@ -81,7 +77,6 @@ describe("Git repository-config code execution audit", () => {
     uploadpack = echo "EXECUTED_UPLOADPACK" > /tmp/uploadpack_executed.txt
 `);
       const result = await gitFetch("origin");
-      // Should attempt to execute uploadpack
       expect(result.error).toBeDefined();
     });
 
@@ -150,13 +145,12 @@ describe("Git repository-config code execution audit", () => {
   });
 
   describe("core.hooksPath - Hook redirection", () => {
-    it("commit: core.hooksPath can redirect to malicious hooks", async () => {
-      // Create a malicious hook directory
+    it("commit: repository-controlled hooks are blocked", async () => {
+      const marker = resolve(repoDir, "hook-executed.txt");
       const hooksDir = resolve(repoDir, "malicious_hooks");
       mkdirSync(hooksDir, { recursive: true });
-      writeFileSync(resolve(hooksDir, "pre-commit"), `#!/bin/sh\necho "EXECUTED_PRE_COMMIT_HOOK" > /tmp/hook_executed.txt\nexit 0\n`);
-      // Make executable
-      const { chmodSync } = require("node:fs");
+      writeFileSync(resolve(hooksDir, "pre-commit"), `#!/bin/sh\necho "EXECUTED_PRE_COMMIT_HOOK" > "${marker}"\nexit 0\n`);
+      const { chmodSync, existsSync } = require("node:fs");
       chmodSync(resolve(hooksDir, "pre-commit"), 0o755);
 
       writeGitConfig(repoDir, `
@@ -164,14 +158,12 @@ describe("Git repository-config code execution audit", () => {
     hooksPath = ${hooksDir}
 `);
 
-      // Need to set up a repo with a file to commit
       writeFileSync(join(repoDir, "test.txt"), "test");
       await gitAdd("test.txt", true);
 
       const result = await gitCommit("test commit", true);
-      // Should be BLOCKED by -c core.hooksPath= override
-      // commit fails because -c core.hooksPath= overrides the config
-      expect(result.error).toContain("fatal: bad config line");
+      expect(result.error).toBeDefined();
+      expect(existsSync(marker)).toBe(false);
     });
   });
 
@@ -181,14 +173,11 @@ describe("Git repository-config code execution audit", () => {
 [diff "malicious"]
     command = echo "EXECUTED_DIFF_COMMAND" > /tmp/diff_executed.txt
 `);
-
       writeFileSync(join(repoDir, "test.txt"), "test");
       await gitAdd("test.txt", true);
       writeFileSync(join(repoDir, "test.txt"), "modified");
-
       const result = await gitDiff("test.txt");
-      // diff will try to execute custom command
-      expect(result.error).toBeUndefined(); // diff succeeds but command executes
+      expect(result.error).toBeUndefined();
     });
   });
 
@@ -198,10 +187,8 @@ describe("Git repository-config code execution audit", () => {
 [diff "malicious"]
     textconv = echo "EXECUTED_TEXTCONV" > /tmp/textconv_executed.txt
 `);
-
       writeFileSync(join(repoDir, "test.txt"), "test");
       await gitAdd("test.txt", true);
-
       const result = await gitDiff("test.txt");
       expect(result.error).toBeUndefined();
     });
@@ -213,10 +200,8 @@ describe("Git repository-config code execution audit", () => {
 [merge "malicious"]
     driver = echo "EXECUTED_MERGE_DRIVER" > /tmp/merge_executed.txt
 `);
-
-      // This would require a merge situation
       const result = await gitPull("origin", "main", true);
-      expect(result.error).toBeDefined(); // Will fail but merge driver config is read
+      expect(result.error).toBeDefined();
     });
   });
 
@@ -227,11 +212,9 @@ describe("Git repository-config code execution audit", () => {
     clean = echo "EXECUTED_FILTER_CLEAN" > /tmp/filter_clean.txt
     smudge = echo "EXECUTED_FILTER_SMUDGE" > /tmp/filter_smudge.txt
 `);
-
       writeFileSync(join(repoDir, "test.txt"), "test");
-      // Add will trigger clean filter
       const result = await gitAdd("test.txt", true);
-      expect(result.error).toBeUndefined(); // add succeeds but filter executes
+      expect(result.error).toBeUndefined();
     });
 
     it("diff/restore: filter.smudge can execute arbitrary command", async () => {
@@ -239,10 +222,8 @@ describe("Git repository-config code execution audit", () => {
 [filter "malicious"]
     smudge = echo "EXECUTED_FILTER_SMUDGE_DIFF" > /tmp/filter_smudge_diff.txt
 `);
-
       writeFileSync(join(repoDir, "test.txt"), "test");
       await gitAdd("test.txt", true);
-
       const result = await gitDiff("test.txt");
       expect(result.error).toBeUndefined();
     });
@@ -255,13 +236,10 @@ describe("Git repository-config code execution audit", () => {
       writeFileSync(resolve(hooksDir, "pre-commit"), `#!/bin/sh\necho "EXECUTED_PRE_COMMIT" > /tmp/precommit_executed.txt\nexit 0\n`);
       const { chmodSync } = require("node:fs");
       chmodSync(resolve(hooksDir, "pre-commit"), 0o755);
-
       writeFileSync(join(repoDir, "test.txt"), "test");
       await gitAdd("test.txt", true);
-
       const result = await gitCommit("test commit", true);
       expect(result.error).toBeUndefined();
-      // Hook executes but commit succeeds
     });
   });
 
@@ -271,7 +249,6 @@ describe("Git repository-config code execution audit", () => {
 [url "file:///tmp/malicious"]
     insteadOf = https://github.com/
 `);
-      // This would redirect GitHub URLs to local file paths
       const result = await gitFetch("origin");
       expect(result.error).toBeDefined();
     });
@@ -283,8 +260,6 @@ describe("Git repository-config code execution audit", () => {
 [alias]
     malicious = "!echo EXECUTED_ALIAS > /tmp/alias_executed.txt"
 `);
-      // Aliases are expanded before command parsing
-      // Not directly reachable via our tool calls, but worth noting
     });
   });
 
@@ -295,19 +270,15 @@ describe("Git repository-config code execution audit", () => {
       writeFileSync(resolve(hooksDir, "pre-push"), `#!/bin/sh\necho "EXECUTED_PRE_PUSH" > /tmp/prepush_executed.txt\nexit 0\n`);
       const { chmodSync } = require("node:fs");
       chmodSync(resolve(hooksDir, "pre-push"), 0o755);
-
-      // Need commits to push
       writeFileSync(join(repoDir, "test.txt"), "test");
       await gitAdd("test.txt", true);
       await gitCommit("initial", true);
-
       writeGitConfig(repoDir, `
 [remote "origin"]
     url = https://github.com/test/test.git
 `);
-
       const result = await gitPush("origin", "main", true);
-      expect(result.error).toBeDefined(); // Push fails but hook executes
+      expect(result.error).toBeDefined();
     });
   });
 
@@ -318,8 +289,6 @@ describe("Git repository-config code execution audit", () => {
       writeFileSync(resolve(hooksDir, "pre-merge"), `#!/bin/sh\necho "EXECUTED_PRE_MERGE" > /tmp/premerge_executed.txt\nexit 0\n`);
       const { chmodSync } = require("node:fs");
       chmodSync(resolve(hooksDir, "pre-merge"), 0o755);
-
-      // Pull may invoke merge
       const result = await gitPull("origin", "main", true);
       expect(result.error).toBeDefined();
     });
@@ -342,14 +311,12 @@ describe("Argument validation - verify -- positioning", () => {
   });
 
   it("gitFetch uses -- before remote name", async () => {
-    // Test that -- is positioned correctly
     writeGitConfig(repoDir, `
 [remote "origin"]
     url = https://github.com/test/test.git
 `);
     const result = await gitFetch("origin");
-    // Should work with -- separator
-    expect(result.error).toBeDefined(); // No actual remote but validates syntax
+    expect(result.error).toBeDefined();
   });
 
   it("gitPull uses -- before remote name", async () => {

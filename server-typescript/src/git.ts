@@ -6,7 +6,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -15,9 +15,13 @@ import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, sa
 const execFileAsync = promisify(execFile);
 
 /**
- * Git configuration keys that can cause external command execution.
- * These are overridden to empty string via -c flags which take precedence over .git/config.
- * Wildcards are used for arbitrary subsection names (e.g., diff.*.command covers diff.evil.command).
+ * Git configuration overrides for settings that can execute external commands
+ * or otherwise weaken the application's Git execution boundary.
+ *
+ * Repository configuration is isolated separately with GIT_CONFIG pointing at
+ * a temporary empty file. These -c values provide defense in depth and keep
+ * hooks/known command-execution settings disabled even if configuration
+ * isolation changes in a future Git version.
  */
 const GIT_CONFIG_OVERRIDES: string[] = [
   // Hooks - disable all hooks
@@ -27,18 +31,10 @@ const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "core.fsmonitor=",
   "-c", "core.fsmonitorHook=",
 
-  // Diff/merge drivers - can execute arbitrary commands
-  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
-  // "-c", "diff.*.command=",
-  // "-c", "diff.*.textconv=",
+  // Merge drivers - can execute arbitrary commands
   "-c", "merge.*.command=",
   "-c", "merge.*.driver=",
 
-  // Filter programs - execute on checkout/checkin
-  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
-  // "-c", "filter.*.clean=",
-  // "-c", "filter.*.smudge=",
-
   // GPG
   "-c", "gpg.program=",
 
@@ -49,49 +45,17 @@ const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "sendemail.smtppass=",
   "-c", "sendemail.smtpdomain=",
 
-  // HTTP
+  // HTTP configuration that can affect outbound requests
   "-c", "http.extraHeader=",
   "-c", "http.proxy=",
   "-c", "http.postBuffer=",
 
-  // Submodules
-  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
-  // "-c", "submodule.*.url=",
-  // "-c", "submodule.*.fetch=",
+  // Credential helpers can execute shell commands. An empty value resets
+  // inherited/multi-valued helpers.
+  "-c", "credential.helper=",
 
-  // GPG
-  "-c", "gpg.program=",
-
-  // Email/sendemail
-  "-c", "sendemail.smtpserver=",
-  "-c", "sendemail.smtpencryption=",
-  "-c", "sendemail.smtpuser=",
-  "-c", "sendemail.smtppass=",
-  "-c", "sendemail.smtpdomain=",
-
-  // HTTP
-  "-c", "http.extraHeader=",
-  "-c", "http.proxy=",
-  "-c", "http.postBuffer=",
-
-  // Submodules
-  // TODO: Re-enable when Windows Git parsing is fixed upstream (git-for-windows/git#xxxx)
-  // "-c", "submodule.*.url=",
-  // "-c", "submodule.*.fetch=",
-
-  // GPG
-  "-c", "gpg.program=",
-
-  // Email/sendemail
-  "-c", "sendemail.smtpserver=",
-  "-c", "sendemail.smtpencryption=",
-  "-c", "sendemail.smtpuser=",
-  "-c", "sendemail.smtppass=",
-  "-c", "sendemail.smtpdomain=",
-
-  // FS monitor
-  "-c", "core.fsmonitor=",
-  "-c", "core.fsmonitorHook=",
+  // Git protocol proxy command can execute an external program.
+  "-c", "core.gitProxy=none",
 ] as const;
 
 /**
@@ -130,7 +94,7 @@ function validateGitBranch(branch: string): string {
     throw new Error("Branch name cannot start with '-' (reserved for Git options)");
   }
   // Basic validation - reject obviously dangerous patterns
-  // Git branch names can't contain spaces, ~, ^, :, ?, *, [, \, or control chars
+  // Git branch names can't contain spaces, ~, ^, :, ?, *, [, \\, or control chars
   if (/[\s~^:?*[\\]/.test(trimmed)) {
     throw new Error(`Invalid branch name: '${trimmed}'. Contains disallowed characters.`);
   }
@@ -185,16 +149,66 @@ function errorText(error: unknown): string {
   return value.message ?? String(error);
 }
 
+/**
+ * Reads only the requested Git identity value from a specific config scope.
+ * This is deliberately limited to user.name/user.email and uses --no-includes
+ * so repository-controlled include directives cannot redirect the read.
+ */
+async function readGitIdentityValue(scope: "--local" | "--global", key: "user.name" | "user.email"): Promise<string | undefined> {
+  const env = { ...process.env };
+  delete env.GIT_CONFIG;
+  delete env.GIT_CONFIG_GLOBAL;
+  delete env.GIT_CONFIG_SYSTEM;
+  delete env.GIT_CONFIG_NOSYSTEM;
+
+  try {
+    const result = await execFileAsync("git", [scope, "--no-includes", "--get", key], {
+      cwd: getProjectRoot(),
+      shell: false,
+      timeout: 5_000,
+      windowsHide: true,
+      maxBuffer: 8_192,
+      encoding: "utf8",
+      env,
+    });
+    const value = String(result.stdout ?? "").trim();
+    if (!value || value.length > 256 || /[\u0000\r\n]/.test(value)) return undefined;
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the normal commit identity without exposing any other repository
+ * configuration to the isolated Git subprocess. Explicit environment values
+ * remain authoritative; otherwise local identity is preferred, then global.
+ */
+async function getSafeCommitIdentity(): Promise<{ name?: string; email?: string }> {
+  const name = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME
+    ?? await readGitIdentityValue("--local", "user.name")
+    ?? await readGitIdentityValue("--global", "user.name");
+  const email = process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL
+    ?? await readGitIdentityValue("--local", "user.email")
+    ?? await readGitIdentityValue("--global", "user.email");
+
+  return { name, email };
+}
+
 async function runGit(args: string[], timeout: number): Promise<{
   code: number;
   stdout: string;
   stderr: string;
 }> {
-  // Create empty hooks directory to disable hooks (cross-platform)
-  const emptyHooksDir = mkdtempSync(join(tmpdir(), "git-empty-hooks-"));
+  // GIT_CONFIG is the exclusive Git configuration file used by Git commands.
+  // Point it at an empty temporary file so repository-local .git/config and
+  // .git/config.worktree cannot supply command-executing configuration.
+  const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
+  const emptyConfigPath = join(isolationDir, "config");
+  const emptyHooksDir = join(isolationDir, "hooks");
+  writeFileSync(emptyConfigPath, "", { encoding: "utf8", mode: 0o600 });
 
   try {
-    // Prepend safe config overrides that take precedence over .git/config
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
     const result = await execFileAsync("git", safeArgs, {
       cwd: getProjectRoot(),
@@ -203,17 +217,22 @@ async function runGit(args: string[], timeout: number): Promise<{
       windowsHide: true,
       maxBuffer: Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000),
       encoding: "utf8",
-      // Prevent system/global config and disable repo config via GIT_CONFIG_SYSTEM
-      // This also blocks repository-local .git/config, .git/config.worktree, and includes
-      // Repository attributes (.gitattributes, .git/info/attributes) are not config files
-      // but are mitigated because filter/merge/diff drivers are disabled via -c overrides
-      // and .git/config (where drivers are defined) is not read.
       env: {
         ...process.env,
+        // GIT_CONFIG selects the only configuration file Git reads for this
+        // subprocess. The file is empty and lives outside the repository.
+        GIT_CONFIG: emptyConfigPath,
         GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_NOGLOBAL: "1",
-        GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
         GIT_TERMINAL_PROMPT: "0",
+        // Prevent inherited external helpers from becoming another execution
+        // path. These environment variables take precedence over corresponding
+        // Git configuration where supported.
+        GIT_EXTERNAL_DIFF: "",
+        GIT_ASKPASS: "",
+        SSH_ASKPASS: "",
+        GIT_SSH_COMMAND: "ssh",
+        GIT_PROXY_COMMAND: "none",
       },
     });
     return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
@@ -231,15 +250,14 @@ async function runGit(args: string[], timeout: number): Promise<{
         code: "ETIMEDOUT",
       });
     }
-return {
+    return {
       code: typeof value.code === "number" ? value.code : (value.status ?? 1),
       stdout: String(value.stdout ?? ""),
       stderr: String(value.stderr ?? ""),
     };
   } finally {
-    // Clean up empty hooks directory
     try {
-      rmSync(emptyHooksDir, { recursive: true, force: true });
+      rmSync(isolationDir, { recursive: true, force: true });
     } catch {
       // Ignore cleanup errors
     }
@@ -286,7 +304,7 @@ export async function gitCommittedFileCount(): Promise<Record<string, unknown>> 
 }
 
 export async function gitDiff(path = "", staged = false): Promise<Record<string, unknown>> {
-  const args = ["diff"];
+  const args = ["diff", "--no-ext-diff", "--no-textconv"];
   if (staged) args.push("--staged");
 
   const allowed = getAllowedReadPaths();
@@ -436,9 +454,8 @@ export async function gitAdd(path: string, confirm = false): Promise<Record<stri
 const PREVIEW_CHAR_LIMIT = 2000;
 
 export async function gitFetch(remote = ""): Promise<Record<string, unknown>> {
-  const args = ["fetch", "--no-recurse-submodules"];
+  const args = ["fetch", "--no-recurse-submodules", "--upload-pack=git-upload-pack"];
   if (remote) {
-    // Validate remote name to prevent option injection
     const validation = safeValidate(validateGitRemote, remote);
     if ("error" in validation) return validation;
     args.push("--", validation.value);
@@ -470,7 +487,7 @@ export async function gitPull(remote = "", branch = "", confirm = false): Promis
     };
   }
 
-  const args = ["pull", "--no-recurse-submodules"];
+  const args = ["pull", "--no-recurse-submodules", "--upload-pack=git-upload-pack"];
   if (remote) {
     const validation = safeValidate(validateGitRemote, remote);
     if ("error" in validation) return validation;
@@ -573,7 +590,11 @@ export async function gitCommit(message: string, confirm = false): Promise<Recor
   }
 
   try {
-    const result = await runGit(["commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS);
+    const identity = await getSafeCommitIdentity();
+    const identityArgs: string[] = [];
+    if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`);
+    if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`);
+    const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS);
     if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." };
 
     return {
@@ -592,11 +613,11 @@ export async function gitPush(remote = "", branch = "", confirm = false): Promis
       requires_confirmation: true,
       remote: remote || "default",
       branch: branch || "current",
-      message: `This will push commits to '${remote || "default remote"}' on branch '${branch || "current branch"}'. This updates the remote repository. Confirm to proceed.`,
+      message: `This will push commits to '${remote || "default"}' on branch '${branch || "current branch"}'. This updates the remote repository. Confirm to proceed.`,
     };
   }
 
-  const args = ["push", "--no-recurse-submodules"];
+  const args = ["push", "--no-recurse-submodules", "--receive-pack=git-receive-pack"];
   if (remote) {
     const validation = safeValidate(validateGitRemote, remote);
     if ("error" in validation) return validation;
@@ -605,7 +626,7 @@ export async function gitPush(remote = "", branch = "", confirm = false): Promis
   if (branch) {
     const validation = safeValidate(validateGitBranch, branch);
     if ("error" in validation) return validation;
-    args.push(validation.value);
+    args.push(branch);
   }
 
   try {
