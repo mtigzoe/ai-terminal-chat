@@ -1,0 +1,64 @@
+name: Security maintenance patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: startsWith(github.event.head_commit.message, 'Security maintenance:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply verified security fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          security = Path('server-typescript/src/security.ts')
+          text = security.read_text()
+          old = '''          const probeFd = openRelativeToDirFd(currentFd, part, {\n            create: false,\n            write: false,\n          });'''
+          new = '''          const probeFd = openRelativeToDirFd(currentFd, part, {\n            create: false,\n            write: false,\n            directory: true,\n          });'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one Windows existence-probe block, found {text.count(old)}')
+          text = text.replace(old, new)
+
+          old = '''          nextFd = openRelativeToDirFd(currentFd, part, {\n            create: false,\n            write: false,\n          });'''
+          new = '''          nextFd = openRelativeToDirFd(currentFd, part, {\n            create: false,\n            write: false,\n            directory: true,\n          });'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one Windows child-directory block, found {text.count(old)}')
+          text = text.replace(old, new)
+          security.write_text(text)
+
+          git = Path('server-typescript/src/git.ts')
+          text = git.read_text()
+          old = '''    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];'''
+          new = '''    const command = args[0] ?? "";\n    const safeCommandArgs =\n      command === "diff"\n        ? [command, "--no-ext-diff", ...args.slice(1)]\n        : args;\n    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...safeCommandArgs];'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one safeArgs declaration, found {text.count(old)}')
+          text = text.replace(old, new)
+
+          old = '''      env: {\n        ...process.env,'''
+          new = '''      env: (() => {\n        const safeEnv = { ...process.env };\n        // Never let the inherited GIT_EXTERNAL_DIFF override Git's internal\n        // diff implementation. An empty value is still considered set by Git\n        // and causes it to try executing an empty command.\n        delete safeEnv.GIT_EXTERNAL_DIFF;\n        delete safeEnv.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;\n        return {\n          ...safeEnv,'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one Git environment block, found {text.count(old)}')
+          text = text.replace(old, new)
+
+          old = '''        PAGER: "cat",\n      },\n    });'''
+          new = '''          PAGER: "cat",\n        };\n      })(),\n    });'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one Git environment terminator, found {text.count(old)}')
+          text = text.replace(old, new)
+          git.write_text(text)
+          PY
+
+          npm --prefix server-typescript run typecheck
+          npm --prefix server-typescript run test:unit
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server-typescript/src/security.ts server-typescript/src/git.ts
+          git commit -m 'Security maintenance: fix Windows traversal and Git environment' || exit 0
+          git push
