@@ -83,10 +83,14 @@ def test_options_preflight_is_allowed_without_auth(client):
     assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:3000"
 
 
-def test_missing_token_at_non_loopback_startup_is_rejected(monkeypatch):
-    monkeypatch.setattr(secure_server, "host", "0.0.0.0")
-    monkeypatch.setattr(secure_server, "is_loopback", False)
-    monkeypatch.setattr(secure_server, "api_auth_token", "")
+def test_non_loopback_without_token_is_rejected_at_startup():
     with pytest.raises(RuntimeError, match="API_AUTH_TOKEN is required"):
-        if not secure_server.is_loopback and not secure_server.api_auth_token:
-            raise RuntimeError("API_AUTH_TOKEN is required when HOST is not a loopback address.")
+        secure_server.validate_network_config("0.0.0.0", "")
+
+
+def test_loopback_without_token_is_valid_configuration():
+    secure_server.validate_network_config("127.0.0.1", "")
+
+
+def test_non_loopback_with_token_is_valid_configuration():
+    secure_server.validate_network_config("0.0.0.0", "test-token")
