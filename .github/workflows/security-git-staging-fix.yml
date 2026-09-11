@@ -1,0 +1,58 @@
+name: Security fix - isolate write-tool Git staging
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Patch Python git_add
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server-python/tools.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''    try:\n        result = _run_git(["add", "--", rel_path], timeout=15)\n    except FileNotFoundError:\n        return {"error": "git is not installed or not on PATH."}\n    except subprocess.TimeoutExpired:\n        return {"error": "Staging the file timed out."}\n    except Exception as exc:\n        return {"error": f"Could not stage file: {exc}"}\n\n    if result.returncode != 0:\n        return {\n            "error": (\n                f"git add failed: "\n                f"{result.stderr.strip() or result.stdout.strip()}"\n            )\n        }\n\n    return {"path": rel_path, "staged": True}\n'''
+          new = '''    try:\n        # Never invoke `git add` here: repository .gitattributes can attach\n        # arbitrary filter.clean/filter.process commands. Hash the exact file\n        # bytes with --no-filters and update the index directly instead.\n        mode = "100755" if (file_path.stat().st_mode & 0o111) else "100644"\n        payload = file_path.read_bytes()\n        hashed = _run_git(\n            ["hash-object", "-w", "--stdin", "--no-filters"],\n            timeout=15,\n            input_text=payload.decode("utf-8", errors="surrogateescape"),\n        )\n        if hashed.returncode != 0:\n            return {"error": f"git add failed: {hashed.stderr.strip() or hashed.stdout.strip()}"}\n        oid = hashed.stdout.strip()\n        if not re.fullmatch(r"[0-9a-f]{40,64}", oid, re.IGNORECASE):\n            return {"error": "git add failed: unexpected hash-object output."}\n        indexed = _run_git(\n            ["update-index", "--add", "--cacheinfo", f"{mode},{oid},{rel_path}"],\n            timeout=15,\n        )\n        if indexed.returncode != 0:\n            return {"error": f"git add failed: {indexed.stderr.strip() or indexed.stdout.strip()}"}\n    except FileNotFoundError:\n        return {"error": "git is not installed or not on PATH."}\n    except subprocess.TimeoutExpired:\n        return {"error": "Staging the file timed out."}\n    except Exception as exc:\n        return {"error": f"Could not stage file: {exc}"}\n\n    return {"path": rel_path, "staged": True}\n'''
+          if old not in s:
+              raise SystemExit('Python git_add block not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Patch TypeScript write-tools git_add
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server-typescript/src/write-tools.ts')
+          s = p.read_text(encoding='utf-8')
+          marker = 'export function git_add(relPath: string, confirm = false): Record<string, unknown> {'
+          helper = '''function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string): void {\n  const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));\n  let payload: Buffer;\n  let mode = "100644";\n  try {\n    const st = fs.fstatSync(fd);\n    if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory.");\n    mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";\n    payload = Buffer.alloc(st.size);\n    let offset = 0;\n    while (offset < st.size) {\n      const n = fs.readSync(fd, payload, offset, st.size - offset, offset);\n      if (n === 0) break;\n      offset += n;\n    }\n    if (offset < st.size) payload = payload.subarray(0, offset);\n  } finally {\n    fs.closeSync(fd);\n  }\n  const hashed = runGit(["hash-object", "-w", "--stdin", "--no-filters"], payload.toString("utf8"));\n  if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");\n  const oid = hashed.stdout.trim();\n  if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");\n  const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);\n  if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");\n}\n\n'''
+          if marker not in s:
+              raise SystemExit('TypeScript git_add marker not found')
+          if 'stageFileWithoutFiltersForWriteTool' not in s:
+              s = s.replace(marker, helper + marker, 1)
+          old = '''  const result = runGit(["add", "--", rel]);\n  if (result.code !== 0) {\n    return {\n      error: `git add failed: ${result.stderr.trim() || result.stdout.trim()}`,\n    };\n  }\n\n  return { path: rel, staged: true };'''
+          new = '''  try {\n    stageFileWithoutFiltersForWriteTool(rel, filePath);\n  } catch (exc) {\n    return { error: `git add failed: ${exc instanceof Error ? exc.message : String(exc)}` };\n  }\n\n  return { path: rel, staged: true };'''
+          if old not in s:
+              raise SystemExit('TypeScript git_add block not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Verify TypeScript
+        run: npx tsc --noEmit -p server-typescript/tsconfig.json
+      - name: Verify Python syntax
+        run: python -m py_compile server-python/tools.py
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server-python/tools.py server-typescript/src/write-tools.ts
+          git diff --cached --check
+          git commit -m "security: isolate write-tool git staging from filters"
+          git push origin HEAD:main
