@@ -45,9 +45,11 @@ jobs:
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Install TypeScript dependencies
+        working-directory: server-typescript
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Verify TypeScript
-        run: npx tsc --noEmit -p server-typescript/tsconfig.json
+        working-directory: server-typescript
+        run: npx tsc --noEmit -p tsconfig.json
       - name: Verify Python syntax
         run: python -m py_compile server-python/tools.py
       - name: Commit and push
