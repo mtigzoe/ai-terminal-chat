@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { getProjectRoot, isSensitivePath, safePath, writeFileWithinProject, unlinkWithinProject, SecurityValidationError } from "./security.ts";
+import { getProjectRoot, isSensitivePath, isPathWithinRoot, safePath, writeFileWithinProject, unlinkWithinProject, readFileWithinProject, SecurityValidationError } from "./security.ts";
 import { getGitSshCommand } from "./git.ts";
 import { resolveTrustedExecutable } from "./trusted-exec.ts";
 
@@ -211,7 +211,9 @@ export function write_file(
     let oldText = "";
     if (existed) {
       try {
-        oldText = readText(filePath);
+        // O_NOFOLLOW fd read — do not follow a final-component symlink to
+        // an outside file when building the confirmation diff.
+        oldText = readFileWithinProject(relPath, PREVIEW_CHAR_LIMIT * 4).contents;
       } catch {
         oldText = "";
       }
@@ -297,6 +299,14 @@ export function apply_patch(
     resolvedPaths.push(relativePath(filePath));
   }
 
+  try {
+    assertPatchTargetsNotOutsideSymlinks(resolvedPaths);
+  } catch (exc) {
+    return {
+      error: exc instanceof Error ? exc.message : String(exc),
+    };
+  }
+
   if (!confirm) {
     const check = runGit(["apply", "--check", "-"], patch);
     if (check.code !== 0) {
@@ -309,6 +319,14 @@ export function apply_patch(
       requires_confirmation: true,
       files: resolvedPaths,
       message: `This patch was NOT applied. It would modify: ${resolvedPaths.join(", ")}. Show the user the patch and ask them to explicitly confirm it, then call apply_patch again with confirm=true.`,
+    };
+  }
+
+  try {
+    assertPatchTargetsNotOutsideSymlinks(resolvedPaths);
+  } catch (exc) {
+    return {
+      error: exc instanceof Error ? exc.message : String(exc),
     };
   }
 
@@ -416,20 +434,102 @@ function extractPatchTargetPaths(patchText: string): string[] {
   const paths: string[] = [];
   const seen = new Set<string>();
 
+  const add = (raw: string) => {
+    let candidate = raw.split("\t")[0].trim();
+    // Strip optional git path quotes: "foo bar.txt"
+    if (
+      candidate.length >= 2 &&
+      ((candidate.startsWith('"') && candidate.endsWith('"')) ||
+        (candidate.startsWith("'") && candidate.endsWith("'")))
+    ) {
+      candidate = candidate.slice(1, -1);
+    }
+    if (!candidate || candidate === "/dev/null") return;
+    if (seen.has(candidate)) return;
+    seen.add(candidate);
+    paths.push(candidate);
+  };
+
   for (const line of patchText.split("\n")) {
+    // diff --git a/<path> b/<path> (unquoted paths without spaces)
+    const diffGit = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+    if (diffGit) {
+      add(diffGit[1] ?? "");
+      add(diffGit[2] ?? "");
+      continue;
+    }
+
     for (const prefix of ["+++ b/", "--- a/", "+++ ", "--- "]) {
       if (line.startsWith(prefix)) {
-        const candidate = line.slice(prefix.length).split("\t")[0].trim();
-        if (candidate && candidate !== "/dev/null" && !seen.has(candidate)) {
-          seen.add(candidate);
-          paths.push(candidate);
-        }
+        add(line.slice(prefix.length));
         break;
       }
     }
   }
 
   return paths;
+}
+
+/**
+ * Refuse patch targets that are final-component symlinks/junctions pointing
+ * outside the project. Closes a TOCTOU class where safePath passed, then
+ * `git apply` followed a replaced symlink to an outside file.
+ */
+function assertPatchTargetsNotOutsideSymlinks(relPaths: string[]): void {
+  const root = getProjectRoot();
+  for (const rel of relPaths) {
+    let abs: string;
+    try {
+      abs = safePath(rel);
+    } catch (exc) {
+      throw new SecurityValidationError(
+        `Patch touches an invalid path '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
+      );
+    }
+    if (!fs.existsSync(abs)) {
+      // New file: ensure parent stays inside the project.
+      const parent = path.dirname(abs);
+      if (fs.existsSync(parent)) {
+        let parentReal: string;
+        try {
+          parentReal = fs.realpathSync(parent);
+        } catch {
+          throw new SecurityValidationError(
+            `Patch parent path is not accessible: ${rel}`,
+          );
+        }
+        if (!isPathWithinRoot(root, parentReal)) {
+          throw new SecurityValidationError(
+            `Patch would write outside the project via parent path: ${rel}`,
+          );
+        }
+      }
+      continue;
+    }
+    try {
+      const st = fs.lstatSync(abs);
+      if (st.isSymbolicLink()) {
+        const target = fs.realpathSync(abs);
+        if (!isPathWithinRoot(root, target)) {
+          throw new SecurityValidationError(
+            `Refusing to patch symlink that points outside the project: ${rel}`,
+          );
+        }
+      } else {
+        const target = fs.realpathSync(abs);
+        if (!isPathWithinRoot(root, target)) {
+          throw new SecurityValidationError(
+            `Refusing to patch path outside the project: ${rel}`,
+          );
+        }
+      }
+    } catch (err) {
+      if (err instanceof SecurityValidationError) throw err;
+      throw new SecurityValidationError(
+        `Could not verify patch target '${rel}': ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 }
 
 function generateUnifiedDiff(
