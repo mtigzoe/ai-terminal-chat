@@ -1,0 +1,58 @@
+name: Apply command boundary security fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: !contains(github.event.head_commit.message, '[security-command-boundary]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch run_command boundary checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('server-python/tools.py')
+          text = path.read_text(encoding='utf-8')
+
+          marker = '''def is_command_allowed(command: str) -> bool:\n'''
+          helper = '''def _validate_directory_command_paths(command: str, args: list[str]) -> dict | None:\n    """Keep directory-inspection commands inside PROJECT_ROOT.\n\n    `run_command` executes with PROJECT_ROOT as cwd, but commands such as\n    `ls /tmp` or `dir C:\\Users` can otherwise enumerate outside that root.\n    `pwd` also must not accept a path argument because its only purpose here\n    is to report the current project directory.\n    """\n\n    if not args:\n        return None\n\n    command_name = args[0].lower()\n    if command_name == "pwd":\n        if len(args) != 1:\n            return {"error": "pwd does not accept a path argument."}\n        return None\n\n    if command_name not in {"ls", "dir"}:\n        return None\n\n    # Keep this intentionally small: directory listings need no switches for\n    # the agent's supported workflow. Reject switches rather than allowing a\n    # future shell-specific option to reinterpret a path outside the project.\n    path_args = args[1:]\n    for value in path_args:\n        if value == "--":\n            return {\n                "error": "Directory listing options are not supported; use a project-relative path.",\n            }\n        if value.startswith("-") or value.startswith("/"):\n            return {\n                "error": f"Directory listing path must stay inside the project: {value}",\n            }\n        try:\n            safe_path(value)\n        except ValueError as exc:\n            return {"error": str(exc)}\n\n    return None\n\n\n'''
+
+          if text.count(marker) != 1:
+              raise SystemExit('expected exactly one is_command_allowed marker')
+          if '_validate_directory_command_paths' not in text:
+              text = text.replace(marker, helper + marker, 1)
+
+          old = '''    try:\n        args = shlex.split(command, posix=False)\n        \n        # `pwd` is not a standalone executable on Windows.\n'''
+          new = '''    try:\n        args = shlex.split(command, posix=False)\n\n        boundary_error = _validate_directory_command_paths(command, args)\n        if boundary_error is not None:\n            return boundary_error\n\n        # `pwd` is not a standalone executable on Windows.\n'''
+
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one run_command argument block')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify patch
+        run: |
+          python -m py_compile server-python/tools.py
+          grep -n "_validate_directory_command_paths" server-python/tools.py
+
+      - name: Commit and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server-python/tools.py
+          git diff --cached --check
+          git commit -m "security: enforce project boundary for directory commands [security-command-boundary]"
+          git push origin HEAD:main
