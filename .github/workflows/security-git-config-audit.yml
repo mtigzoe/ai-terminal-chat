@@ -1,0 +1,110 @@
+name: Security Git config audit
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  harden-git-config:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Harden Python Git config execution paths
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("server-python/tools.py")
+          s = p.read_text(encoding="utf-8")
+
+          s = s.replace(
+              "import subprocess\nimport tempfile\n",
+              "import subprocess\nimport tempfile\nimport threading\nfrom contextlib import contextmanager\n",
+              1,
+          )
+
+          marker = "_GIT_CONFIG_OVERRIDES = [\n"
+          insert = '''_GIT_OPERATION_LOCK = threading.RLock()\n\n\ndef _git_config_files() -> list[Path]:\n    \"\"\"Return local/worktree Git config files without following config symlinks.\"\"\"\n    git_path = (get_project_root() / \".git\")\n    candidates: list[Path] = []\n    if git_path.is_dir():\n        git_dir = git_path.resolve()\n    elif git_path.is_file():\n        try:\n            text = git_path.read_text(encoding=\"utf-8\")\n            line = next((line for line in text.splitlines() if line.lower().startswith(\"gitdir:\")), \"\")\n            if not line:\n                return []\n            raw = line.split(\":\", 1)[1].strip()\n            git_dir = (git_path.parent / raw).resolve()\n        except (OSError, UnicodeDecodeError):\n            return []\n    else:\n        return []\n\n    for name in (\"config\", \"config.worktree\"):\n        path = git_dir / name\n        try:\n            resolved = path.resolve(strict=True)\n            resolved.relative_to(git_dir)\n            if path.is_symlink() or not path.is_file():\n                raise ValueError(\"Git config path is not a regular file.\")\n            candidates.append(path)\n        except (OSError, ValueError):\n            continue\n    return candidates\n\n\ndef _strip_dangerous_git_config(content: str) -> str:\n    \"\"\"Remove config sections that can rewrite URLs or execute filters.\"\"\"\n    lines = content.splitlines(keepends=True)\n    out: list[str] = []\n    skipping = False\n    for raw in lines:\n        stripped = raw.strip()\n        if stripped.startswith(\"[\") and stripped.endswith(\"]\"):\n            section = stripped[1:-1].strip().lower()\n            if (\n                section == \"url\"\n                or section.startswith(\"url \")\n                or section == \"filter\"\n                or section.startswith(\"filter \")\n                or section == \"include\"\n                or section.startswith(\"includeif \")\n            ):\n                skipping = True\n                continue\n            skipping = False\n        if skipping:\n            continue\n        out.append(raw)\n    return \"\".join(out)\n\n\n@contextmanager\ndef _sanitized_git_config():\n    \"\"\"Temporarily remove URL/filter/include config for network Git operations.\"\"\"\n    with _GIT_OPERATION_LOCK:\n        backups: list[tuple[Path, str]] = []\n        for path in _git_config_files():\n            try:\n                original = path.read_text(encoding=\"utf-8\")\n                sanitized = _strip_dangerous_git_config(original)\n                if sanitized != original:\n                    path.write_text(sanitized, encoding=\"utf-8\")\n                    backups.append((path, original))\n            except (OSError, UnicodeDecodeError):\n                for backup_path, backup in reversed(backups):\n                    try:\n                        backup_path.write_text(backup, encoding=\"utf-8\")\n                    except OSError:\n                        pass\n                raise\n        try:\n            yield\n        finally:\n            for path, original in reversed(backups):\n                try:\n                    path.write_text(original, encoding=\"utf-8\")\n                except OSError:\n                    pass\n\n\n'''
+          if marker not in s:
+              raise SystemExit("Git config marker not found")
+          s = s.replace(marker, insert + marker, 1)
+
+          old_regex = 'DANGEROUS_GIT_CONFIG_KEY_RE = re.compile(\n'
+          if old_regex in s:
+              raise SystemExit("unexpected existing Python dynamic regex marker")
+
+          dynamic_marker = "def _git_ssh_command() -> str:\n"
+          dynamic_insert = '''DYNAMIC_GIT_CONFIG_KEY_RE = re.compile(\n    r\"^(filter\\..+\\.(clean|smudge|process|required)|url\\..+\\.(insteadof|pushinsteadof)|include\\.path|includeif\\..+\\.path|merge\\..+\\.driver|remote\\..+\\.(uploadpack|receivepack)|diff\\..+\\.textconv|submodule\\..+\\.update)$\",\n    re.IGNORECASE,\n)\n\n\ndef _dynamic_git_config_overrides() -> list[str]:\n    overrides: list[str] = []\n    for path in _git_config_files():\n        try:\n            section = \"\"\n            for raw in path.read_text(encoding=\"utf-8\").splitlines():\n                line = raw.strip()\n                if not line or line.startswith(\"#\") or line.startswith(\";\"):\n                    continue\n                if line.startswith(\"[\") and line.endswith(\"]\"):\n                    body = line[1:-1].strip()\n                    match = re.match(r'^(\\S+)\\s+\"(.*)\"$', body)\n                    section = (f\"{match.group(1).lower()}.{match.group(2)}\" if match else body.lower())\n                    continue\n                match = re.match(r'^([^=]+)=', line)\n                if match and section:\n                    key = f\"{section}.{match.group(1).strip().lower()}\"\n                    if DYNAMIC_GIT_CONFIG_KEY_RE.fullmatch(key):\n                        overrides.extend([\"-c\", f\"{key}=\"])\n        except (OSError, UnicodeDecodeError):\n            continue\n    return overrides\n\n\n'''
+          if dynamic_marker not in s:
+              raise SystemExit("SSH marker not found")
+          s = s.replace(dynamic_marker, dynamic_insert + dynamic_marker, 1)
+
+          old = 'safe_args = list(_GIT_CONFIG_OVERRIDES) + list(args)'
+          new = 'safe_args = list(_GIT_CONFIG_OVERRIDES) + _dynamic_git_config_overrides() + list(args)'
+          if old not in s:
+              raise SystemExit("safe_args line not found")
+          s = s.replace(old, new, 1)
+
+          old_diff = 'args = ["git", "diff"]\n'
+          new_diff = 'args = ["git", "diff", "--no-ext-diff", "--no-textconv"]\n'
+          if old_diff not in s:
+              raise SystemExit("git diff args not found")
+          s = s.replace(old_diff, new_diff, 1)
+
+          # Wrap only network-affecting operations. URL rewrites cannot be reliably
+          # neutralized by -c because url.*.insteadOf is multi-valued.
+          for func, call in [
+              ("git_fetch", 'result = _run_git(args[1:], timeout=GIT_FETCH_TIMEOUT)'),
+              ("git_pull", 'result = _run_git(args[1:], timeout=GIT_PULL_TIMEOUT)'),
+              ("git_push", 'result = _run_git(args[1:], timeout=GIT_PUSH_TIMEOUT)'),
+          ]:
+              if call not in s:
+                  raise SystemExit(f"{func} call not found")
+              s = s.replace(call, f'with _sanitized_git_config():\n            {call}', 1)
+
+          # Fail closed if the config file itself is a symlink. The sanitizer
+          # should never overwrite a file outside the repository's Git dir.
+          p.write_text(s, encoding="utf-8")
+
+      - name: Harden TypeScript Git config execution paths
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("server-typescript/src/git.ts")
+          s = p.read_text(encoding="utf-8")
+          old = '  /^(filter\\..+\\.(clean|smudge|process|required)|url\\..+\\.(insteadof|pushinsteadof)|include\\.path|includeif\\..+\\.path)$/i;'
+          new = '  /^(filter\\..+\\.(clean|smudge|process|required)|url\\..+\\.(insteadof|pushinsteadof)|include\\.path|includeif\\..+\\.path|merge\\..+\\.driver|remote\\..+\\.(uploadpack|receivepack)|diff\\..+\\.textconv|submodule\\..+\\.update)$/i;'
+          if old not in s:
+              raise SystemExit("TypeScript dynamic override regex not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding="utf-8")
+
+      - name: Add regression tests
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("server-python/tests/test_git_config_security.py")
+          p.write_text('''import subprocess\nimport sys\nfrom pathlib import Path\n\nSERVER_DIR = Path(__file__).resolve().parents[1]\nsys.path.insert(0, str(SERVER_DIR))\n\nimport tools  # noqa: E402\n\n\ndef _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:\n    return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=True)\n\n\ndef _repo(tmp_path: Path) -> Path:\n    root = tmp_path / "repo"\n    root.mkdir()\n    _git(root, "init")\n    _git(root, "config", "user.name", "Test")\n    _git(root, "config", "user.email", "test@example.com")\n    (root / "file.txt").write_text("base\\n", encoding="utf-8")\n    _git(root, "add", "file.txt")\n    _git(root, "commit", "-m", "base")\n    return root\n\n\ndef test_strip_dangerous_git_config_removes_execution_sections():\n    config = """[core]\\n\\tbare = false\\n[filter \\"evil\\"]\\n\\tclean = sh -c \\"touch pwned; cat\\"\\n[url \\"file:///evil/\\"]\\n\\tinsteadOf = https://example.com/\\n[include]\\n\\tpath = evil.conf\\n[merge \\"evil\\"]\\n\\tdriver = sh -c \\"touch merge-pwned\\"\\n"""\n    sanitized = tools._strip_dangerous_git_config(config)\n    assert "filter \\"evil\\" not in sanitized\n    assert "url \\"file:///evil/\\" not in sanitized\n    assert "[include]" not in sanitized\n    assert "merge \\"evil\\" in sanitized\n\n\ndef test_git_diff_disables_textconv(tmp_path, monkeypatch):\n    root = _repo(tmp_path)\n    (root / ".gitattributes").write_text("file.txt diff=evil\\n", encoding="utf-8")\n    _git(root, "config", "diff.evil.textconv", "sh -c 'touch pwned; cat'")\n    (root / "file.txt").write_text("changed\\n", encoding="utf-8")\n    monkeypatch.setattr(tools, "PROJECT_ROOT", root)\n    result = tools.git_diff("file.txt")\n    assert "error" not in result\n    assert not (root / "pwned").exists()\n\n\ndef test_dynamic_git_config_overrides_include_merge_filter_and_remote():\n    root = _repo(tmp_path)\n    _git(root, "config", "filter.evil.clean", "sh -c 'touch pwned; cat'")\n    _git(root, "config", "merge.evil.driver", "sh -c 'touch merge-pwned'")\n    _git(root, "config", "remote.origin.uploadpack", "touch upload-pwned")\n    monkeypatch.setattr(tools, "PROJECT_ROOT", root)\n    overrides = tools._dynamic_git_config_overrides()\n    flattened = " ".join(overrides)\n    assert "filter.evil.clean=" in flattened\n    assert "merge.evil.driver=" in flattened\n    assert "remote.origin.uploadpack=" in flattened\n''', encoding="utf-8")
+
+      - name: Verify Python syntax
+        run: python -m py_compile server-python/tools.py server-python/tests/test_git_config_security.py
+
+      - name: Verify TypeScript typecheck
+        working-directory: server-typescript
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx tsc --noEmit -p tsconfig.json
+
+      - name: Commit hardening
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add server-python/tools.py server-python/tests/test_git_config_security.py server-typescript/src/git.ts
+          git diff --cached --quiet && exit 0
+          git commit -m "security: harden Git config execution isolation"
+          git push origin main
