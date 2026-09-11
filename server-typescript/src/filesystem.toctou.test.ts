@@ -247,3 +247,75 @@ test("delete_file tool uses race-resistant unlink", () => {
   rmSync(project, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 });
+
+test("writeFileWithinProject refuses parent directory that is a symlink outside the project", () => {
+  const { project, outside } = makeProject();
+  const outsideDir = join(outside, "extdir");
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(join(outsideDir, "preexisting.txt"), "keep\n", "utf8");
+
+  // Plant parent as symlink to outside directory
+  try {
+    symlinkSync(outsideDir, join(project, "subdir"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+      rmSync(project, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(
+    () =>
+      writeFileWithinProject("subdir/new.txt", "PWNED\n", { exclusive: true }),
+    (e: unknown) => e instanceof SecurityValidationError,
+  );
+
+  // Outside must not gain new.txt or have preexisting truncated
+  assert.equal(existsSync(join(outsideDir, "new.txt")), false);
+  assert.equal(readFileSync(join(outsideDir, "preexisting.txt"), "utf8"), "keep\n");
+
+  rmSync(project, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+});
+
+test("writeFileWithinProject does not truncate outside file when parent is replaced with symlink", () => {
+  // Sequence that models the race after parent validation:
+  // 1. Create real in-project parent and write once (valid).
+  // 2. Replace parent with symlink to outside dir containing a file.
+  // 3. Further write through that parent must not truncate the outside file.
+  const { project, outside } = makeProject();
+  const outsideDir = join(outside, "victim-dir");
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(join(outsideDir, "victim.txt"), "IMPORTANT\n", "utf8");
+
+  mkdirSync(join(project, "subdir"), { recursive: true });
+  writeFileWithinProject("subdir/ok.txt", "in-project\n", { exclusive: true });
+  assert.equal(readFileSync(join(project, "subdir", "ok.txt"), "utf8"), "in-project\n");
+
+  // Replace parent with outside symlink (attacker race).
+  rmSync(join(project, "subdir"), { recursive: true, force: true });
+  try {
+    symlinkSync(outsideDir, join(project, "subdir"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+      rmSync(project, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+      return;
+    }
+    throw err;
+  }
+
+  assert.throws(
+    () =>
+      writeFileWithinProject("subdir/victim.txt", "PWNED\n", {
+        exclusive: false,
+      }),
+    (e: unknown) => e instanceof SecurityValidationError,
+  );
+  assert.equal(readFileSync(join(outsideDir, "victim.txt"), "utf8"), "IMPORTANT\n");
+
+  rmSync(project, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+});

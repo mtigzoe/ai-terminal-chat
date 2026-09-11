@@ -39,6 +39,8 @@ import {
   statSync,
   writeFileSync,
   writeSync,
+  ftruncateSync,
+  lstatSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
@@ -901,96 +903,211 @@ export function readFileWithinProject(inputPath: string, maxBytes: number): {
 }
 
 /**
- * Write contents to a project path without following a final-component
- * symlink. Uses O_CREAT|O_WRONLY|O_NOFOLLOW; callers that require exclusive
- * create should pass exclusive=true (O_EXCL).
+ * Ensure `absDir` exists as a real directory chain under PROJECT_ROOT.
+ * Creates missing segments one at a time and verifies each with an
+ * O_DIRECTORY|O_NOFOLLOW open so recursive mkdir cannot follow an
+ * attacker-controlled parent symlink/junction outside the project.
+ */
+function ensureDirectoryWithinProject(absDir: string): string {
+  const root = getProjectRoot();
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    throw new SecurityValidationError("Project root is not accessible.");
+  }
+
+  const target = resolve(absDir);
+  // Lexical containment before any creation.
+  if (!isPathWithinRoot(rootReal, target) && target !== rootReal) {
+    // target may not exist yet; check lexical join from root via relative
+    const relTry = relative(rootReal, target);
+    if (relTry.startsWith("..") || relTry === "" && target !== rootReal) {
+      // relative() returns ".." paths when outside
+      if (relTry.startsWith("..")) {
+        throw new SecurityValidationError(
+          "Access outside the project directory is not allowed.",
+        );
+      }
+    }
+  }
+
+  const rel = relative(rootReal, target);
+  if (rel.startsWith("..")) {
+    throw new SecurityValidationError(
+      "Access outside the project directory is not allowed.",
+    );
+  }
+  if (!rel || rel === ".") {
+    return rootReal;
+  }
+
+  let current = rootReal;
+  for (const part of rel.split(sep)) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      throw new SecurityValidationError(
+        "Access outside the project directory is not allowed.",
+      );
+    }
+    const next = join(current, part);
+    if (!existsSync(next)) {
+      try {
+        mkdirSync(next);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST") throw err;
+      }
+    }
+    const dirFlags =
+      fsConstants.O_RDONLY |
+      (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
+      noFollowFlag();
+    let dfd: number;
+    try {
+      dfd = openSync(next, dirFlags);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ELOOP" || code === "EINVAL") {
+        // Final component of next is a symlink — only allow in-project targets.
+        let real: string;
+        try {
+          real = realpathSync(next);
+        } catch {
+          throw new SecurityValidationError(
+            "Refusing to follow a symbolic link or reparse point in a parent directory.",
+          );
+        }
+        if (!isPathWithinRoot(rootReal, real)) {
+          throw new SecurityValidationError(
+            "Access outside the project directory is not allowed.",
+          );
+        }
+        dfd = openSync(real, dirFlags);
+        current = assertOpenedWithinProject(dfd, real);
+        closeSync(dfd);
+        continue;
+      }
+      throw err;
+    }
+    try {
+      current = assertOpenedWithinProject(dfd, next);
+    } finally {
+      closeSync(dfd);
+    }
+  }
+  return current;
+}
+
+/**
+ * Write contents to a project path with parent-directory and final-component
+ * race resistance.
+ *
+ * Linux: open the parent with O_DIRECTORY, pin it, then open the file via
+ * `/proc/self/fd/<parentFd>/<basename>` (openat semantics) so a concurrent
+ * parent→symlink swap cannot redirect the create/write.
+ *
+ * All platforms: never open with O_TRUNC. Open, verify the descriptor is
+ * still under PROJECT_ROOT, then ftruncate + write. A lost race that opens
+ * an outside file is detected before truncation.
  */
 export function writeFileWithinProject(
   inputPath: string,
   contents: string,
   options: { exclusive?: boolean; mode?: number } = {},
 ): { resolvedPath: string; bytesWritten: number } {
-  // Ensure parent exists and is still inside the project before creating.
   const candidate = safePath(inputPath);
-  const parent = dirname(candidate);
   const root = getProjectRoot();
-  if (!existsSync(parent)) {
-    mkdirSync(parent, { recursive: true });
-  }
-  // Re-validate parent after mkdir (directory could be replaced).
-  let parentReal: string;
-  try {
-    parentReal = realpathSync(parent);
-  } catch {
-    throw new SecurityValidationError(
-      `Parent directory is not accessible: ${parent}`,
-    );
-  }
-  if (!isPathWithinRoot(root, parentReal)) {
-    throw new SecurityValidationError(
-      "Access outside the project directory is not allowed.",
-    );
-  }
-  // Re-resolve full path under the verified parent.
   const base = basename(candidate);
-  const target = join(parentReal, base);
-  if (!isPathWithinRoot(root, target) && existsSync(target)) {
-    // If target exists, realpath it; if not, lexical join under parentReal is final.
+  if (!base || base === "." || base === ".." || base.includes("/") || base.includes("\\")) {
+    throw new SecurityValidationError(`Invalid file name: ${base}`);
   }
-  if (existsSync(target)) {
-    try {
-      const targetReal = realpathSync(target);
-      if (!isPathWithinRoot(root, targetReal)) {
+
+  const parentLexical = dirname(candidate);
+  if (!existsSync(parentLexical)) {
+    ensureDirectoryWithinProject(parentLexical);
+  }
+
+  // Pin the parent directory inode.
+  const dirFlags =
+    fsConstants.O_RDONLY |
+    (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
+    noFollowFlag();
+
+  let parentFd: number;
+  let parentOpenPath = parentLexical;
+  try {
+    parentFd = openSync(parentLexical, dirFlags);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EINVAL") {
+      let parentReal: string;
+      try {
+        parentReal = realpathSync(parentLexical);
+      } catch {
+        throw new SecurityValidationError(
+          "Refusing to follow a symbolic link or reparse point in a parent directory.",
+        );
+      }
+      if (!isPathWithinRoot(root, parentReal)) {
         throw new SecurityValidationError(
           "Access outside the project directory is not allowed.",
         );
       }
-    } catch (err) {
-      if (err instanceof SecurityValidationError) throw err;
+      parentFd = openSync(parentReal, dirFlags);
+      parentOpenPath = parentReal;
+    } else {
+      throw err;
     }
   }
 
-  let flags =
-    fsConstants.O_WRONLY |
-    fsConstants.O_CREAT |
-    noFollowFlag();
-  if (options.exclusive) {
-    flags |= fsConstants.O_EXCL;
-  } else {
-    flags |= fsConstants.O_TRUNC;
-  }
-
-  let fd: number;
   try {
-    fd = openSync(
-      target,
-      flags,
-      options.mode ?? 0o644,
-    );
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ELOOP" || code === "EEXIST") {
-      if (code === "ELOOP") {
+    const parentReal = assertOpenedWithinProject(parentFd, parentOpenPath);
+
+    // Race-resistant open relative to the pinned parent on Linux.
+    const fileOpenPath =
+      process.platform === "linux"
+        ? `/proc/self/fd/${parentFd}/${base}`
+        : join(parentReal, base);
+
+    // No O_TRUNC on open — truncation only after the fd is verified in-project.
+    let flags =
+      fsConstants.O_RDWR |
+      fsConstants.O_CREAT |
+      noFollowFlag();
+    if (options.exclusive) {
+      flags |= fsConstants.O_EXCL;
+    }
+
+    let fd: number;
+    try {
+      fd = openSync(fileOpenPath, flags, options.mode ?? 0o644);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ELOOP" || code === "EINVAL") {
         throw new SecurityValidationError(
           "Refusing to follow a symbolic link or reparse point at the final path component.",
         );
       }
       throw err;
     }
-    throw err;
-  }
 
-  try {
-    const resolvedPath = assertOpenedWithinProject(fd, target);
-    const buffer = Buffer.from(contents, "utf-8");
-    let offset = 0;
-    while (offset < buffer.length) {
-      const n = writeSync(fd, buffer, offset, buffer.length - offset, offset);
-      offset += n;
+    try {
+      const resolvedPath = assertOpenedWithinProject(fd, fileOpenPath);
+      // Safe to truncate now — descriptor is confirmed inside the project.
+      ftruncateSync(fd, 0);
+      const buffer = Buffer.from(contents, "utf-8");
+      let offset = 0;
+      while (offset < buffer.length) {
+        const n = writeSync(fd, buffer, offset, buffer.length - offset, offset);
+        offset += n;
+      }
+      return { resolvedPath, bytesWritten: buffer.length };
+    } finally {
+      closeSync(fd);
     }
-    return { resolvedPath, bytesWritten: buffer.length };
   } finally {
-    closeSync(fd);
+    closeSync(parentFd);
   }
 }
 
