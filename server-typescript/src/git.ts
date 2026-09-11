@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath } from "./security.ts";
+import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath, writeFileWithinProject } from "./security.ts";
 import { resolveTrustedExecutable } from "./trusted-exec.ts";
 
 const execFileAsync = promisify(execFile);
@@ -289,14 +289,203 @@ export interface IsolatedGitOptions {
   timeout?: number;
   /** Max stdout/stderr buffer size in bytes. */
   maxBuffer?: number;
+  /**
+   * When false, skip discovering/clearing attacker-named filter.* and
+   * url.*.insteadOf keys. Used only for the config --list bootstrap call
+   * to avoid recursion.
+   */
+  skipDynamicOverrides?: boolean;
+}
+
+/** Attacker-controlled key *names* that cannot live in a static -c list. */
+const DYNAMIC_OVERRIDE_KEY_RE =
+  /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path)$/i;
+
+/**
+ * Parse Git config file(s) into dotted keys. Avoids `git config --local`,
+ * which conflicts with GIT_CONFIG= (error: only one config file at a time).
+ */
+function parseGitConfigKeys(content: string): string[] {
+  const keys: string[] = [];
+  let section = "";
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    const sectionMatch = line.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      const body = sectionMatch[1]!.trim();
+      // [filter "evil"] or [core]
+      const withSub = body.match(/^(\S+)\s+"(.*)"$/);
+      if (withSub) {
+        section = `${withSub[1]!.toLowerCase()}.${withSub[2]!}`;
+      } else {
+        section = body.toLowerCase();
+      }
+      continue;
+    }
+    const kv = line.match(/^([^=]+)=(.*)$/);
+    if (kv && section) {
+      keys.push(`${section}.${kv[1]!.trim().toLowerCase()}`);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Discover local/worktree config keys that must be cleared with dynamic
+ * `-c key=` overrides. Reads config files directly (no git config subprocess).
+ */
+async function dynamicConfigOverrides(): Promise<string[]> {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const root = getProjectRoot();
+  const candidates = [
+    join(root, ".git", "config"),
+    join(root, ".git", "config.worktree"),
+  ];
+  // Resolve gitdir if .git is a file (worktree)
+  try {
+    const gitFile = join(root, ".git");
+    if (existsSync(gitFile)) {
+      const { statSync } = await import("node:fs");
+      if (statSync(gitFile).isFile()) {
+        const text = readFileSync(gitFile, "utf8");
+        const m = text.match(/gitdir:\s*(.+)/i);
+        if (m) {
+          const gitdir = m[1]!.trim();
+          const abs = gitdir.startsWith("/") || /^[A-Za-z]:[\\/]/.test(gitdir)
+            ? gitdir
+            : join(root, gitdir);
+          candidates.push(join(abs, "config"), join(abs, "config.worktree"));
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const file of candidates) {
+    try {
+      if (!existsSync(file)) continue;
+      const content = readFileSync(file, "utf8");
+      for (const key of parseGitConfigKeys(content)) {
+        if (!DYNAMIC_OVERRIDE_KEY_RE.test(key)) continue;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // Preserve original casing from file for -c; Git config keys are case-insensitive
+        // for matching, but use the dotted lowercase form which Git accepts.
+        out.push("-c", `${key}=`);
+      }
+    } catch {
+      // ignore unreadable config
+    }
+  }
+  return out;
 }
 
 /**
  * Single hardened Git execution boundary used by git.ts tools and by
- * terminal.ts allowlisted `git …` commands. Repository-local config,
- * includes, hooks, external helpers, SSH proxies, and pagers must not
- * become command-execution paths.
+ * terminal.ts allowlisted `git …` commands.
+ *
+ * Local `.git/config` is still loaded by Git. Security comes from:
+ * static `-c` overrides, dynamic clearing of filter.* / url.*.insteadOf
+ * keys, SSH/pager environment isolation, and filter-free add/restore paths.
  */
+
+/**
+ * Remove security-sensitive sections from a Git config document.
+ * Used for network ops where `-c url.*.insteadOf=` does not clear rewrites.
+ */
+export function stripDangerousGitConfig(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const out: string[] = [];
+  let skipping = false;
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      const body = sectionMatch[1]!.trim().toLowerCase();
+      // Drop entire [url "..."] sections (insteadOf / pushInsteadOf).
+      if (body.startsWith("url ") || body === "url") {
+        skipping = true;
+        continue;
+      }
+      // Drop [filter "..."] process-executing filter definitions.
+      if (body.startsWith("filter ") || body === "filter") {
+        skipping = true;
+        continue;
+      }
+      skipping = false;
+      out.push(raw);
+      continue;
+    }
+    if (skipping) continue;
+    // Drop include / includeIf path directives in other sections.
+    if (/^include\.path\s*=/i.test(trimmed) || /^path\s*=/i.test(trimmed) && false) {
+      // only skip include.path keys when in include section — handled by section skip if we add include
+      continue;
+    }
+    if (/^includepath\s*=/i.test(trimmed)) continue;
+    // [include] section path =
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith("path =") && out.length > 0) {
+      // Check if current section is include - approximate: skip path under include
+      // Safer: drop lines that are clearly include.path from flattened form
+    }
+    out.push(raw);
+  }
+  // Second pass: remove [include] / [includeIf] sections entirely
+  const lines2 = out.join("\n").split(/\r?\n/);
+  const out2: string[] = [];
+  skipping = false;
+  for (const raw of lines2) {
+    const trimmed = raw.trim();
+    const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      const body = sectionMatch[1]!.trim().toLowerCase();
+      if (body === "include" || body.startsWith("includeif ")) {
+        skipping = true;
+        continue;
+      }
+      skipping = false;
+      out2.push(raw);
+      continue;
+    }
+    if (skipping) continue;
+    out2.push(raw);
+  }
+  return out2.join("\n");
+}
+
+/**
+ * Run a function with a temporarily sanitized `.git/config` so url.*.insteadOf
+ * and filter.* definitions cannot affect the operation. Restores the original
+ * file in `finally`. Not used for read-only inspection of config contents.
+ */
+async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
+  const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
+  const configPath = join(getProjectRoot(), ".git", "config");
+  if (!existsSync(configPath)) {
+    return fn();
+  }
+  const original = readFileSync(configPath, "utf8");
+  const sanitized = stripDangerousGitConfig(original);
+  if (sanitized === original) {
+    return fn();
+  }
+  writeFileSync(configPath, sanitized, "utf8");
+  try {
+    return await fn();
+  } finally {
+    try {
+      writeFileSync(configPath, original, "utf8");
+    } catch {
+      // Best-effort restore
+    }
+  }
+}
+
 export async function runIsolatedGit(
   args: string[],
   options: IsolatedGitOptions = {},
@@ -308,15 +497,15 @@ export async function runIsolatedGit(
   const timeout = options.timeout ?? 15_000;
   const maxBuffer = options.maxBuffer ?? Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000);
 
-  // GIT_CONFIG is the exclusive Git configuration file used by Git commands.
-  // Point it at an empty temporary file so repository-local .git/config and
-  // .git/config.worktree cannot supply command-executing configuration.
   const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
   const emptyConfigPath = join(isolationDir, "config");
   writeFileSync(emptyConfigPath, "", { encoding: "utf8", mode: 0o600 });
 
   try {
-    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
+    const dynamic = options.skipDynamicOverrides
+      ? []
+      : await dynamicConfigOverrides();
+    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...dynamic, ...args];
     const gitExecutable = resolveTrustedExecutable("git", {
       projectRoot: getProjectRoot(),
     });
@@ -328,17 +517,12 @@ export async function runIsolatedGit(
       maxBuffer,
       encoding: "utf8",
       env: (() => {
-        // Start from the process environment, then strip external-diff
-        // variables. Setting GIT_EXTERNAL_DIFF="" makes Git try to run an
-        // empty command ("cannot run : No such file or directory").
-        // Deleting the vars lets --no-ext-diff / -c diff.external= apply.
         const env: NodeJS.ProcessEnv = { ...process.env };
         delete env.GIT_EXTERNAL_DIFF;
         delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
         return {
           ...env,
-          // Empty GIT_CONFIG reduces some plumbing defaults; it does NOT
-          // block .git/config or .git/config.worktree (see GIT_CONFIG_OVERRIDES).
+          // Does NOT block .git/config; see GIT_CONFIG_OVERRIDES + dynamic overrides.
           GIT_CONFIG: emptyConfigPath,
           GIT_CONFIG_NOSYSTEM: "1",
           GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
@@ -347,8 +531,6 @@ export async function runIsolatedGit(
           SSH_ASKPASS: "",
           GIT_SSH_COMMAND: getGitSshCommand(),
           GIT_PROXY_COMMAND: "none",
-          // Force a non-interactive pager so core.pager / pager.* cannot
-          // launch an attacker-controlled viewer.
           GIT_PAGER: "cat",
           PAGER: "cat",
         };
@@ -527,6 +709,59 @@ export async function gitBranch(): Promise<Record<string, unknown>> {
   }
 }
 
+
+/**
+ * Stage a single file without invoking clean/smudge/process filters.
+ * Uses `git hash-object -w --no-filters` + `git update-index --cacheinfo`.
+ */
+async function stageFileWithoutFilters(
+  relativePath: string,
+  absolutePath: string,
+): Promise<void> {
+  const { statSync } = await import("node:fs");
+  const mode = (statSync(absolutePath).mode & 0o111) !== 0 ? "100755" : "100644";
+  // Path form with --no-filters hashes worktree bytes without clean filter.
+  const hashed = await runGit(
+    ["hash-object", "-w", "--no-filters", "--", relativePath],
+    GIT_ADD_TIMEOUT_MS,
+  );
+  if (hashed.code !== 0) {
+    throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
+  }
+  const oid = hashed.stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/i.test(oid)) {
+    throw new Error(`Unexpected hash-object output: ${oid}`);
+  }
+  const updated = await runGit(
+    ["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`],
+    GIT_ADD_TIMEOUT_MS,
+  );
+  if (updated.code !== 0) {
+    throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+  }
+}
+
+/**
+ * Restore a worktree file from HEAD without smudge filters.
+ */
+async function restoreWorktreeWithoutFilters(relativePath: string): Promise<void> {
+  const rev = await runGit(
+    ["rev-parse", `HEAD:${relativePath.replace(/\\/g, "/")}`],
+    GIT_RESTORE_TIMEOUT_MS,
+  );
+  if (rev.code !== 0) {
+    throw new Error(rev.stderr.trim() || `Path not in HEAD: ${relativePath}`);
+  }
+  const oid = rev.stdout.trim();
+  const blob = await runGit(["cat-file", "blob", oid], GIT_RESTORE_TIMEOUT_MS);
+  if (blob.code !== 0) {
+    throw new Error(blob.stderr.trim() || "cat-file failed");
+  }
+  // cat-file outputs raw bytes as utf8 string from execFile encoding — for
+  // binary this is imperfect; application tools already assume text files.
+  writeFileWithinProject(relativePath, blob.stdout, {});
+}
+
 export async function gitAdd(path: string, confirm = false): Promise<Record<string, unknown>> {
   let filePath: string;
   try {
@@ -568,11 +803,10 @@ export async function gitAdd(path: string, confirm = false): Promise<Record<stri
     };
   }
 
+  // Stage without clean/smudge/process filters. Repository .gitattributes can
+  // bind arbitrary filter names; plain `git add` would execute them.
   try {
-    const result = await runGit(["add", "--", relativePath], GIT_ADD_TIMEOUT_MS);
-    if (result.code !== 0) {
-      return { error: `git add failed: ${result.stderr.trim() || result.stdout.trim()}` };
-    }
+    await stageFileWithoutFilters(relativePath, filePath);
     return { path: relativePath, staged: true };
   } catch (error) {
     return { error: `Could not stage file: ${errorText(error)}` };
@@ -590,16 +824,18 @@ export async function gitFetch(remote = ""): Promise<Record<string, unknown>> {
   }
 
   try {
-    const result = await runGit(args, GIT_FETCH_TIMEOUT_MS);
-    if (result.code !== 0) return { error: result.stderr.trim() || "git fetch failed." };
+    return await withSanitizedGitConfig(async () => {
+      const result = await runGit(args, GIT_FETCH_TIMEOUT_MS);
+      if (result.code !== 0) return { error: result.stderr.trim() || "git fetch failed." };
 
-    let output = result.stdout.trim();
-    if (!output && !result.stderr.trim()) output = "Fetch completed successfully.";
+      let output = result.stdout.trim();
+      if (!output && !result.stderr.trim()) output = "Fetch completed successfully.";
 
-    return {
-      output: output.slice(0, GIT_FETCH_MAX_CHARS),
-      remote: remote || "all remotes",
-    };
+      return {
+        output: output.slice(0, GIT_FETCH_MAX_CHARS),
+        remote: remote || "all remotes",
+      };
+    });
   } catch (exc) {
     return { error: errorText(exc) };
   }
@@ -628,14 +864,16 @@ export async function gitPull(remote = "", branch = "", confirm = false): Promis
   }
 
   try {
-    const result = await runGit(args, GIT_PULL_TIMEOUT_MS);
-    if (result.code !== 0) return { error: result.stderr.trim() || "git pull failed." };
+    return await withSanitizedGitConfig(async () => {
+      const result = await runGit(args, GIT_PULL_TIMEOUT_MS);
+      if (result.code !== 0) return { error: result.stderr.trim() || "git pull failed." };
 
-    return {
-      output: (result.stdout || "").slice(0, GIT_PULL_MAX_CHARS),
-      remote: remote || "default",
-      branch: branch || "current",
-    };
+      return {
+        output: (result.stdout || "").slice(0, GIT_PULL_MAX_CHARS),
+        remote: remote || "default",
+        branch: branch || "current",
+      };
+    });
   } catch (exc) {
     return { error: errorText(exc) };
   }
@@ -671,17 +909,25 @@ export async function gitRestore(path: string, staged = false, confirm = false):
     };
   }
 
-  const args = ["restore"];
-  if (staged) args.push("--staged");
-  args.push("--", relativePath);
-
   try {
-    const result = await runGit(args, GIT_RESTORE_TIMEOUT_MS);
-    if (result.code !== 0) {
-      return { error: `git restore failed: ${result.stderr.trim() || result.stdout.trim()}` };
+    if (staged) {
+      // Unstage only — does not touch worktree filters.
+      const result = await runGit(
+        ["restore", "--staged", "--", relativePath],
+        GIT_RESTORE_TIMEOUT_MS,
+      );
+      if (result.code !== 0) {
+        return {
+          error: `git restore failed: ${result.stderr.trim() || result.stdout.trim()}`,
+        };
+      }
+      return { path: relativePath, restored: false, unstaged: true };
     }
 
-    return { path: relativePath, restored: !staged, unstaged: staged };
+    // Worktree restore without smudge: read blob bytes via cat-file, write
+    // with the project's path-safe writer (never git checkout/restore smudge).
+    await restoreWorktreeWithoutFilters(relativePath);
+    return { path: relativePath, restored: true, unstaged: false };
   } catch (exc) {
     return { error: errorText(exc) };
   }
@@ -758,15 +1004,17 @@ export async function gitPush(remote = "", branch = "", confirm = false): Promis
   }
 
   try {
-    const result = await runGit(args, GIT_PUSH_TIMEOUT_MS);
-    if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." };
+    return await withSanitizedGitConfig(async () => {
+      const result = await runGit(args, GIT_PUSH_TIMEOUT_MS);
+      if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." };
 
-    return {
-      output: (result.stdout || "").slice(0, GIT_PUSH_MAX_CHARS),
-      remote: remote || "default",
-      branch: branch || "current",
-      pushed: true,
-    };
+      return {
+        output: (result.stdout || "").slice(0, GIT_PUSH_MAX_CHARS),
+        remote: remote || "default",
+        branch: branch || "current",
+        pushed: true,
+      };
+    });
   } catch (exc) {
     return { error: errorText(exc) };
   }

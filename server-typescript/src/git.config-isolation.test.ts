@@ -20,7 +20,7 @@ import {
 import { join } from "node:path";
 import { tmpdir, platform } from "node:os";
 
-import { runIsolatedGit, GIT_CONFIG_OVERRIDES } from "./git.ts";
+import { runIsolatedGit, GIT_CONFIG_OVERRIDES, stripDangerousGitConfig } from "./git.ts";
 import { runCommand } from "./terminal.ts";
 import {
   __setProjectRootForTests,
@@ -271,6 +271,121 @@ test("runIsolatedGit still produces usable status/diff/log output", async () => 
     const log = await runIsolatedGit(["log", "-1", "--oneline"]);
     assert.equal(log.code, 0);
     assert.ok(log.stdout.trim().length > 0);
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("arbitrary filter name clean cannot run on git_add path", async () => {
+  const repo = initRepo();
+  const marker = join(repo, "FILTER_ADD");
+  const { configValue } = markerScript(marker);
+  const filterName = "evil_x9f3";
+  writeFileSync(join(repo, ".gitattributes"), `*.txt filter=${filterName}\n`, "utf8");
+  setLocal(repo, `filter.${filterName}.clean`, configValue);
+  setLocal(repo, `filter.${filterName}.smudge`, configValue);
+  writeFileSync(join(repo, "a.txt"), "three\n", "utf8");
+  __setProjectRootForTests(repo);
+  try {
+    const { gitAdd } = await import("./git.ts");
+    const result = await gitAdd("a.txt", true);
+    assert.equal(existsSync(marker), false, "clean filter must not run on add");
+    assert.ok(!("error" in result) || !result.error, `add result: ${JSON.stringify(result)}`);
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("arbitrary filter name smudge cannot run on git_restore path", async () => {
+  const repo = initRepo();
+  const marker = join(repo, "FILTER_RESTORE");
+  const { configValue } = markerScript(marker);
+  const filterName = "smudge_z8";
+  writeFileSync(join(repo, ".gitattributes"), `*.txt filter=${filterName}\n`, "utf8");
+  setLocal(repo, `filter.${filterName}.clean`, configValue);
+  setLocal(repo, `filter.${filterName}.smudge`, configValue);
+  // Commit with filters disabled so object is clean
+  execFileSync("git", ["-c", `filter.${filterName}.clean=`, "-c", `filter.${filterName}.smudge=`, "add", "a.txt"], {
+    cwd: repo,
+    stdio: "ignore",
+  });
+  execFileSync(
+    "git",
+    ["-c", `filter.${filterName}.clean=`, "-c", `filter.${filterName}.smudge=`, "commit", "-m", "filtered"],
+    { cwd: repo, stdio: "ignore" },
+  );
+  writeFileSync(join(repo, "a.txt"), "dirty-worktree\n", "utf8");
+  __setProjectRootForTests(repo);
+  try {
+    const { gitRestore } = await import("./git.ts");
+    const result = await gitRestore("a.txt", false, true);
+    assert.equal(existsSync(marker), false, "smudge filter must not run on restore");
+    assert.ok(!("error" in result) || !result.error, `restore result: ${JSON.stringify(result)}`);
+    const body = readFileSync(join(repo, "a.txt"), "utf8");
+    assert.ok(!body.includes("dirty-worktree"), "worktree should be restored from HEAD");
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("url.insteadOf is stripped for network isolation", async () => {
+  const repo = initRepo();
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/example/repo.git"], {
+    cwd: repo,
+    stdio: "ignore",
+  });
+  setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
+  const configPath = join(repo, ".git", "config");
+  const original = readFileSync(configPath, "utf8");
+  assert.ok(original.includes("evil.example"));
+  // -c cannot clear insteadOf; sanitization removes [url] sections.
+  const sanitized = stripDangerousGitConfig(original);
+  assert.equal(sanitized.includes("evil.example"), false);
+  assert.ok(sanitized.includes("github.com/example/repo.git"));
+  writeFileSync(configPath, sanitized, "utf8");
+  try {
+    const getUrl = execFileSync("git", ["remote", "get-url", "origin"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    assert.equal(getUrl.includes("evil.example"), false);
+    assert.ok(getUrl.includes("github.com"));
+  } finally {
+    writeFileSync(configPath, original, "utf8");
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("include.path cannot re-enable core.fsmonitor under isolation", async () => {
+  const repo = initRepo();
+  const marker = join(repo, "INCLUDE_FSMON");
+  const { configValue } = markerScript(marker);
+  const includeFile = join(repo, "evil-include.cfg");
+  writeFileSync(includeFile, `[core]\n\tfsmonitor = ${configValue}\n`, "utf8");
+  setLocal(repo, "include.path", includeFile);
+  __setProjectRootForTests(repo);
+  try {
+    await runIsolatedGit(["status", "--short"]);
+    assert.equal(existsSync(marker), false, "included fsmonitor must not run");
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("dynamic overrides clear filter process helper", async () => {
+  const repo = initRepo();
+  const marker = join(repo, "PROCESS");
+  const { configValue } = markerScript(marker);
+  setLocal(repo, "filter.procfilter.process", configValue);
+  writeFileSync(join(repo, ".gitattributes"), "*.txt filter=procfilter\n", "utf8");
+  __setProjectRootForTests(repo);
+  try {
+    await runIsolatedGit(["status", "--short"]);
+    assert.equal(existsSync(marker), false);
   } finally {
     __resetProjectRootForTests();
     rmSync(repo, { recursive: true, force: true });
