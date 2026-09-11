@@ -10,11 +10,13 @@ The constructor never contacts the network, so the app can start
 offline even when `ollama serve` is not running.
 """
 
+import os
 import platform
 import re
 import shutil
 import subprocess
 from dataclasses import replace
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -25,6 +27,7 @@ from openai_compatible import (
     looks_like_tools_unsupported,
 )
 from providers.base import ProviderCapabilities
+from security import get_project_root
 
 
 def native_and_openai_urls(base_url: str) -> tuple[str, str]:
@@ -81,59 +84,65 @@ _SAFE_MODEL_NAME = re.compile(
 )
 
 
-def is_ollama_cli_installed() -> bool:
-    """True if the `ollama` executable is recognized on this machine's PATH.
+def _resolve_ollama_executable() -> str | None:
+    """Resolve a trusted Ollama executable before launching it.
 
-    This checks the CLI binary itself — the same thing a user would learn
-    by typing `ollama` at a terminal prompt — which is distinct from
-    :meth:`OllamaProvider.probe`, which checks whether the background
-    server (`ollama serve`) is reachable over HTTP. The CLI can be
-    installed with the server not yet started, so the two checks answer
-    different questions.
+    `shutil.which()` follows the current PATH, but launching the bare name
+    later would introduce a resolution race. Resolve once, canonicalize it,
+    and reject a project-local executable so repository contents cannot
+    shadow the real Ollama CLI.
     """
 
-    return shutil.which("ollama") is not None
+    executable = shutil.which("ollama")
+    if not executable:
+        return None
+
+    try:
+        resolved = Path(executable).resolve(strict=True)
+        root = get_project_root().resolve()
+        resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    if platform.system() == "Windows" and resolved.suffix.lower() not in {".exe", ".com", ".cmd", ".bat"}:
+        return None
+
+    return str(resolved)
+
+
+def is_ollama_cli_installed() -> bool:
+    """True if a trusted `ollama` executable is recognized on this machine."""
+
+    return _resolve_ollama_executable() is not None
 
 
 def launch_ollama_run(model: str) -> dict:
-    """Start `ollama run <model>` in the background, without blocking.
-
-    This is what the Settings page's "Run Ollama" button calls so a user
-    never has to type `ollama run <model>` into a terminal themselves.
-    `ollama run` pulls the model if needed, starts the server if it isn't
-    already running, and then drops into an interactive chat — it does
-    not exit on its own — so this launches it as a detached process
-    rather than waiting for it to finish.
-
-    On Windows it opens in its own console window so pull/startup
-    progress stays visible, mirroring what the user would see if they
-    ran the command themselves. Elsewhere it runs fully detached in the
-    background, since there is no single cross-platform way to open a
-    new terminal window.
-    """
+    """Start `ollama run <model>` in the background, without blocking."""
 
     model = (model or "").strip()
     if not model:
         return {"error": "A model name is required."}
     if not _SAFE_MODEL_NAME.match(model):
         return {"error": f"'{model}' is not a valid Ollama model name."}
-    if not is_ollama_cli_installed():
+
+    executable = _resolve_ollama_executable()
+    if not executable:
         return {
             "error": (
-                "The `ollama` command was not found on PATH. Install "
-                "Ollama first, then try again."
+                "The `ollama` command was not found on PATH, or the resolved "
+                "executable is not trusted. Install Ollama first, then try again."
             )
         }
 
     try:
         if platform.system() == "Windows":
             process = subprocess.Popen(
-                ["ollama", "run", model],
+                [executable, "run", model],
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
         else:
             process = subprocess.Popen(
-                ["ollama", "run", model],
+                [executable, "run", model],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -142,8 +151,8 @@ def launch_ollama_run(model: str) -> dict:
     except FileNotFoundError:
         return {
             "error": (
-                "The `ollama` command was not found on PATH. Install "
-                "Ollama first, then try again."
+                "The `ollama` command disappeared before launch. "
+                "Install Ollama first, then try again."
             )
         }
     except OSError as exc:
@@ -219,8 +228,6 @@ class OllamaProvider(OpenAICompatibleProvider):
                 ),
             }
         except Exception as exc:
-            # See OpenAICompatibleProvider.probe() for why this routes
-            # through _unreachable_message() rather than str(exc).
             message = str(exc)
             if not message.startswith("Could not reach Ollama"):
                 message = self._unreachable_message(exc)
@@ -281,12 +288,7 @@ class OllamaProvider(OpenAICompatibleProvider):
         notes = []
 
         if raw is None:
-            # Older Ollama builds omit the field. Keep optimistic
-            # defaults so a capable model is not silently downgraded.
-            return replace(
-                self._capabilities,
-                notes="",
-            )
+            return replace(self._capabilities, notes="")
 
         flags = {str(item).lower() for item in raw} if isinstance(raw, list) else set()
         tools = "tools" in flags
@@ -345,13 +347,9 @@ class OllamaProvider(OpenAICompatibleProvider):
         return self._capabilities
 
     def generate(self, contents):
-        # Detect capabilities on first generate so a no-tools model
-        # never receives a `tools` array that would 400 the request.
         if not self._capabilities.notes and self._capabilities.tools:
             self.refresh_capabilities()
 
-        # Surface a missing-model error before the OpenAI-compatible
-        # path produces a less actionable HTTP 404 from /v1.
         if self._capabilities.notes and "is not installed" in self._capabilities.notes:
             raise RuntimeError(self._capabilities.notes)
         if self._capabilities.notes and "no models are installed" in self._capabilities.notes:
