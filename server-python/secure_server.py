@@ -9,6 +9,8 @@ origin policy.
 import hmac
 import os
 
+from flask import jsonify, request
+
 from app import app
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -41,16 +43,12 @@ def origin_is_allowed(origin: str | None) -> bool:
 def has_valid_bearer_token() -> bool:
     if not api_auth_token:
         return is_loopback
-    authorization = os.getenv("_AI_TERMINAL_CHAT_UNUSED", "")
-    del authorization
-    header = __import__("flask").request.headers.get("Authorization", "")
+    header = request.headers.get("Authorization", "")
     return hmac.compare_digest(header, f"Bearer {api_auth_token}")
 
 
 @app.before_request
 def enforce_network_security():
-    from flask import jsonify, request
-
     origin = request.headers.get("Origin")
     if not origin_is_allowed(origin):
         return jsonify(error="Origin is not allowed."), 403
@@ -61,8 +59,6 @@ def enforce_network_security():
 
 @app.after_request
 def apply_network_cors(response):
-    from flask import request
-
     origin = request.headers.get("Origin")
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
