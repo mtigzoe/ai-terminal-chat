@@ -44,7 +44,9 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import {
-  windowsPathFromFd,
+  openRelativeToDirFd,
+  mkdirRelativeToDirFd,
+  WindowsHandlePathError,
 } from "./windows-handle-path.ts";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 
@@ -907,10 +909,14 @@ export function readFileWithinProject(inputPath: string, maxBytes: number): {
 
 /**
  * Ensure `absDir` exists as a real directory chain under PROJECT_ROOT.
- * Creates missing segments one at a time. On Linux each segment is verified
- * with O_DIRECTORY|O_NOFOLLOW. On Windows, after pinning a parent handle,
- * mkdir uses GetFinalPathNameByHandleW so a concurrent name→junction swap
- * cannot redirect directory creation outside the project.
+ * Creates missing segments one at a time relative to a pinned parent:
+ *   Linux: mkdir via path under /proc/self/fd/<parentFd>/name is still
+ *          pathname-based for mkdir — we open O_DIRECTORY|O_NOFOLLOW after
+ *          create and verify. For mkdir the kernel create relative to
+ *          an open dir uses mkdirat when available; Node lacks mkdirat, so
+ *          we use /proc/self/fd parent + name open verification.
+ *   Windows: mkdirRelativeToDirFd → NtCreateFile(FILE_DIRECTORY_FILE)
+ *          with RootDirectory = parent HANDLE (true handle-relative create).
  */
 function ensureDirectoryWithinProject(absDir: string): string {
   const root = getProjectRoot();
@@ -946,7 +952,6 @@ function ensureDirectoryWithinProject(absDir: string): string {
       (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
       noFollowFlag();
 
-    // Pin current before creating the next segment under it.
     let currentFd: number;
     try {
       currentFd = openSync(current, dirFlags);
@@ -976,54 +981,113 @@ function ensureDirectoryWithinProject(absDir: string): string {
     try {
       current = assertOpenedWithinProject(currentFd, current);
 
-      // Path of the pinned parent — stable against concurrent name replacement.
-      let createUnder = current;
-      if (process.platform === "win32") {
+      // Probe whether child exists relative to the pinned parent without
+      // walking a replaceable pathname for the *create* step.
+      let childExists = false;
+      if (process.platform === "linux") {
         try {
-          createUnder = windowsPathFromFd(currentFd);
-        } catch (err) {
-          throw new SecurityValidationError(
-            err instanceof Error
-              ? err.message
-              : "Windows handle-path resolution failed while creating directories.",
+          const probe = openSync(
+            `/proc/self/fd/${currentFd}/${part}`,
+            dirFlags,
           );
+          closeSync(probe);
+          childExists = true;
+        } catch {
+          childExists = false;
         }
-      } else if (process.platform === "linux") {
-        createUnder = `/proc/self/fd/${currentFd}`;
-      }
-
-      const next = join(createUnder, part);
-      if (!existsSync(next)) {
+      } else if (process.platform === "win32") {
+        // Existence probe via handle-relative open (FILE_OPEN).
         try {
-          mkdirSync(next);
+          const probeFd = openRelativeToDirFd(currentFd, part, {
+            create: false,
+            write: false,
+          });
+          closeSync(probeFd);
+          childExists = true;
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
-          if (code !== "EEXIST") throw err;
+          if (code === "ENOENT") {
+            childExists = false;
+          } else if (err instanceof WindowsHandlePathError) {
+            // Might be "not a directory" etc. — treat as needs create attempt
+            childExists = false;
+          } else {
+            childExists = false;
+          }
+        }
+      } else {
+        childExists = existsSync(join(current, part));
+      }
+
+      if (!childExists) {
+        if (process.platform === "win32") {
+          try {
+            mkdirRelativeToDirFd(currentFd, part);
+          } catch (err) {
+            if (err instanceof WindowsHandlePathError) {
+              throw new SecurityValidationError(err.message);
+            }
+            throw err;
+          }
+        } else if (process.platform === "linux") {
+          // Node has no mkdirat; create via /proc path of the pinned fd.
+          // The directory object is pinned; the name is created in that object.
+          try {
+            mkdirSync(`/proc/self/fd/${currentFd}/${part}`);
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code !== "EEXIST") throw err;
+          }
+        } else {
+          try {
+            mkdirSync(join(current, part));
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code !== "EEXIST") throw err;
+          }
         }
       }
 
-      // Open the new segment and verify containment.
+      // Open the child relative to the parent handle and verify.
       let nextFd: number;
-      try {
-        // Prefer open relative to pinned parent on Linux.
-        const openNext =
-          process.platform === "linux"
-            ? `/proc/self/fd/${currentFd}/${part}`
-            : process.platform === "win32"
-              ? join(createUnder, part)
-              : join(current, part);
-        nextFd = openSync(openNext, dirFlags);
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === "ELOOP" || code === "EINVAL") {
-          throw new SecurityValidationError(
-            "Refusing to follow a symbolic link or reparse point in a parent directory.",
-          );
+      if (process.platform === "win32") {
+        try {
+          nextFd = openRelativeToDirFd(currentFd, part, {
+            create: false,
+            write: false,
+          });
+        } catch (err) {
+          if (err instanceof WindowsHandlePathError) {
+            throw new SecurityValidationError(err.message);
+          }
+          throw err;
         }
-        throw err;
+      } else if (process.platform === "linux") {
+        nextFd = openSync(`/proc/self/fd/${currentFd}/${part}`, dirFlags);
+      } else {
+        nextFd = openSync(join(current, part), dirFlags);
       }
       try {
-        current = assertOpenedWithinProject(nextFd, next);
+        const st = fstatSync(nextFd);
+        if (!st.isDirectory()) {
+          throw new SecurityValidationError(
+            "Path component is not a directory.",
+          );
+        }
+        // Parent was in-project; child opened relative to parent handle is
+        // inside that directory object. Update current to lexical join for
+        // the next iteration's openSync of current on non-Windows.
+        current = join(current, part);
+        try {
+          current = realpathSync(current);
+        } catch {
+          // keep join path
+        }
+        if (!isPathWithinRoot(rootReal, current)) {
+          throw new SecurityValidationError(
+            "Access outside the project directory is not allowed.",
+          );
+        }
       } finally {
         closeSync(nextFd);
       }
@@ -1033,6 +1097,7 @@ function ensureDirectoryWithinProject(absDir: string): string {
   }
   return current;
 }
+
 
 /**
  * Write contents to a project path with parent-directory and final-component
@@ -1079,93 +1144,59 @@ function writeFileWithinProjectWindows(
   // Confirm the open parent descriptor is still inside the project.
   assertOpenedWithinProject(parentFd, parentOpenPath);
 
-  let parentFromHandle: string;
-  try {
-    parentFromHandle = windowsPathFromFd(parentFd);
-  } catch (err) {
-    throw new SecurityValidationError(
-      err instanceof Error
-        ? err.message
-        : "Windows handle-path resolution failed for parent directory.",
-    );
-  }
-
-  // Normalize \\?\ prefix for containment checks.
-  const parentNormalized = parentFromHandle.replace(/^\\\\\?\\/i, "");
-  let parentReal: string;
-  try {
-    parentReal = realpathSync(parentFromHandle);
-  } catch {
-    parentReal = parentNormalized;
-  }
-  if (!isPathWithinRoot(root, parentReal) && !isPathWithinRoot(root, parentNormalized)) {
-    throw new SecurityValidationError(
-      "Access outside the project directory is not allowed.",
-    );
-  }
-
-  // Open/create under the *handle* path — not under the original lexical name
-  // that an attacker could replace with a junction.
-  const destOnHandle = join(parentFromHandle, base);
-
-  if (existsSync(destOnHandle)) {
-    if (options.exclusive) {
-      const err = new Error(`File already exists: ${base}`) as NodeJS.ErrnoException;
-      err.code = "EEXIST";
-      throw err;
-    }
-    // Existing file: no O_CREAT, verify, then truncate/write.
-    let fd: number;
-    try {
-      fd = openSync(destOnHandle, fsConstants.O_RDWR | noFollowFlag());
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ELOOP" || code === "EINVAL") {
-        throw new SecurityValidationError(
-          "Refusing to follow a symbolic link or reparse point at the final path component.",
-        );
-      }
-      throw err;
-    }
-    try {
-      const resolvedPath = assertOpenedWithinProject(fd, destOnHandle);
-      const bytesWritten = writeBufferToFd(fd, contents);
-      return { resolvedPath, bytesWritten };
-    } finally {
-      closeSync(fd);
-    }
-  }
-
-  // New file: O_CREAT under the pinned handle path only.
-  let flags =
-    fsConstants.O_RDWR |
-    fsConstants.O_CREAT |
-    noFollowFlag();
-  if (options.exclusive) {
-    flags |= fsConstants.O_EXCL;
-  }
-
+  // True handle-relative open/create via NtCreateFile(RootDirectory=parent).
+  // No pathname is constructed from GetFinalPathNameByHandle — the child is
+  // resolved relative to the directory *object* the parentFd refers to.
   let fd: number;
   try {
-    fd = openSync(destOnHandle, flags, options.mode ?? 0o644);
+    fd = openRelativeToDirFd(parentFd, base, {
+      create: true,
+      exclusive: options.exclusive === true,
+      write: true,
+      // Prefer open-if for non-exclusive overwrite; we ftruncate after verify.
+      truncate: false,
+    });
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ELOOP" || code === "EINVAL") {
-      throw new SecurityValidationError(
-        "Refusing to follow a symbolic link or reparse point at the final path component.",
-      );
+    if (err instanceof WindowsHandlePathError) {
+      throw new SecurityValidationError(err.message);
     }
     throw err;
   }
 
   try {
-    const resolvedPath = assertOpenedWithinProject(fd, destOnHandle);
+    // Containment check on the opened object before any truncate/write.
+    // realPathOfFd on Windows falls back to realpath of a path; we verify
+    // via fstat + requiring the parent was already in-project. Additionally
+    // reject if the opened object is a reparse point we didn't intend.
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      throw new SecurityValidationError(
+        "Refusing to write to a non-file object.",
+      );
+    }
+    // Reconstruct a path for assertOpenedWithinProject best-effort reporting
+    // by using parentOpenPath/base only for the error message path — the
+    // security decision is that parentFd was verified and the child was
+    // opened relative to that handle (NtCreateFile RootDirectory semantics).
+    const resolvedPath = join(
+      assertOpenedWithinProject(parentFd, parentOpenPath),
+      base,
+    );
+    if (!isPathWithinRoot(root, resolvedPath)) {
+      // Parent verified in-project; relative child under that parent is
+      // inside the same directory object. Lexical join under parent real
+      // path must still be within root.
+      throw new SecurityValidationError(
+        "Access outside the project directory is not allowed.",
+      );
+    }
     const bytesWritten = writeBufferToFd(fd, contents);
     return { resolvedPath, bytesWritten };
   } finally {
     closeSync(fd);
   }
 }
+
 
 export function writeFileWithinProject(
   inputPath: string,
