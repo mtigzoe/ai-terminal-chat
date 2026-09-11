@@ -1,11 +1,36 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { getProjectRoot, isSensitivePath, safePath } from "./security.ts";
+import { getGitSshCommand } from "./git.ts";
 
 const PREVIEW_CHAR_LIMIT = 2000;
 const MAX_PATCH_SIZE = 200_000;
 const GIT_TIMEOUT = 15;
+
+/**
+ * Same defense-in-depth -c overrides used by git.ts so repository-local
+ * configuration cannot supply command-executing settings.
+ */
+const GIT_CONFIG_OVERRIDES: string[] = [
+  "-c", "core.hooksPath=",
+  "-c", "core.fsmonitor=",
+  "-c", "core.fsmonitorHook=",
+  "-c", "merge.*.command=",
+  "-c", "merge.*.driver=",
+  "-c", "gpg.program=",
+  "-c", "sendemail.smtpserver=",
+  "-c", "sendemail.smtpencryption=",
+  "-c", "sendemail.smtpuser=",
+  "-c", "sendemail.smtppass=",
+  "-c", "sendemail.smtpdomain=",
+  "-c", "http.extraHeader=",
+  "-c", "http.proxy=",
+  "-c", "http.postBuffer=",
+  "-c", "credential.helper=",
+  "-c", "core.gitProxy=none",
+];
 
 function relativePath(filePath: string): string {
   return path.relative(getProjectRoot(), filePath);
@@ -27,25 +52,55 @@ function unlinkFile(filePath: string): void {
   fs.unlinkSync(filePath);
 }
 
+/**
+ * Run Git with the same isolation boundary as git.ts:
+ * empty GIT_CONFIG, disabled system/global config, SSH isolation,
+ * and -c overrides that neutralize command-executing settings.
+ */
 function runGit(
   args: string[],
   input?: string
 ): { code: number; stdout: string; stderr: string } {
+  const isolationDir = fs.mkdtempSync(path.join(tmpdir(), "git-isolation-"));
+  const emptyConfigPath = path.join(isolationDir, "config");
+  fs.writeFileSync(emptyConfigPath, "", { encoding: "utf8", mode: 0o600 });
+
   try {
-    const result = spawnSync("git", args, {
+    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
+    const result = spawnSync("git", safeArgs, {
       cwd: getProjectRoot(),
       encoding: "utf-8",
       timeout: GIT_TIMEOUT * 1000,
       stdio: ["pipe", "pipe", "pipe"],
       input,
+      shell: false,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GIT_CONFIG: emptyConfigPath,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_EXTERNAL_DIFF: "",
+        GIT_ASKPASS: "",
+        SSH_ASKPASS: "",
+        GIT_SSH_COMMAND: getGitSshCommand(),
+        GIT_PROXY_COMMAND: "none",
+      },
     });
     return {
-      code: result.status ?? 0,
+      code: result.status ?? (result.error ? 1 : 0),
       stdout: result.stdout || "",
       stderr: result.stderr || "",
     };
   } catch {
     return { code: 1, stdout: "", stderr: "git command failed" };
+  } finally {
+    try {
+      fs.rmSync(isolationDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 }
 
