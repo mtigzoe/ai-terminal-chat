@@ -42,6 +42,7 @@ import {
   ftruncateSync,
   lstatSync,
 } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 
@@ -1007,10 +1008,189 @@ function ensureDirectoryWithinProject(absDir: string): string {
  * `/proc/self/fd/<parentFd>/<basename>` (openat semantics) so a concurrent
  * parent→symlink swap cannot redirect the create/write.
  *
- * All platforms: never open with O_TRUNC. Open, verify the descriptor is
- * still under PROJECT_ROOT, then ftruncate + write. A lost race that opens
- * an outside file is detected before truncation.
+ * Windows / non-Linux: Node has no openat equivalent. O_CREAT must never use
+ * a pathname under an untrusted parent (that could be replaced with a
+ * junction). Instead:
+ *   - Existing targets: open without O_CREAT, verify, ftruncate, write.
+ *   - New files: O_CREAT|O_EXCL only under the project root (safe basename
+ *     temp file), write content, rename into place, then verify the final
+ *     path is still inside PROJECT_ROOT and delete the misplaced object if
+ *     a race moved it outside.
+ *
+ * Residual Windows limitation: between existsSync(dest) and rename, a
+ * concurrent junction install can cause rename to place or replace a file
+ * outside the project. We detect via post-rename realpath and best-effort
+ * unlink of *our* temp content; a pre-existing outside file that Node's
+ * rename overwrites remains a residual risk without a native openat.
+ * Do not claim full Windows race resistance for that window.
+ *
+ * All platforms: never open with O_TRUNC before containment is verified.
  */
+function writeBufferToFd(fd: number, contents: string): number {
+  ftruncateSync(fd, 0);
+  const buffer = Buffer.from(contents, "utf-8");
+  let offset = 0;
+  while (offset < buffer.length) {
+    const n = writeSync(fd, buffer, offset, buffer.length - offset, offset);
+    offset += n;
+  }
+  return buffer.length;
+}
+
+function writeFileWithinProjectWindows(
+  root: string,
+  parentFd: number,
+  parentOpenPath: string,
+  base: string,
+  contents: string,
+  options: { exclusive?: boolean; mode?: number },
+): { resolvedPath: string; bytesWritten: number } {
+  const parentReal = assertOpenedWithinProject(parentFd, parentOpenPath);
+  const dest = join(parentReal, base);
+
+  // Refuse final-component symlink/junction at dest when it already exists.
+  if (existsSync(dest)) {
+    if (options.exclusive) {
+      const err = new Error(`File already exists: ${base}`) as NodeJS.ErrnoException;
+      err.code = "EEXIST";
+      throw err;
+    }
+    // Open existing object without O_CREAT — cannot create outside.
+    let flags = fsConstants.O_RDWR | noFollowFlag();
+    let fd: number;
+    try {
+      fd = openSync(dest, flags);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ELOOP" || code === "EINVAL") {
+        throw new SecurityValidationError(
+          "Refusing to follow a symbolic link or reparse point at the final path component.",
+        );
+      }
+      throw err;
+    }
+    try {
+      const resolvedPath = assertOpenedWithinProject(fd, dest);
+      const bytesWritten = writeBufferToFd(fd, contents);
+      return { resolvedPath, bytesWritten };
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  // New file: O_CREAT only under the project root (not under parentReal).
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    throw new SecurityValidationError("Project root is not accessible.");
+  }
+  if (!isPathWithinRoot(rootReal, rootReal)) {
+    throw new SecurityValidationError("Project root is not accessible.");
+  }
+
+  const tempName = `.ai-w-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`;
+  if (tempName.includes("/") || tempName.includes("\\") || tempName.includes("..")) {
+    throw new SecurityValidationError("Invalid temporary file name.");
+  }
+  const tempPath = join(rootReal, tempName);
+
+  let tfd: number;
+  try {
+    tfd = openSync(
+      tempPath,
+      fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag(),
+      options.mode ?? 0o644,
+    );
+  } catch (err) {
+    throw err;
+  }
+
+  try {
+    assertOpenedWithinProject(tfd, tempPath);
+    writeBufferToFd(tfd, contents);
+  } finally {
+    closeSync(tfd);
+  }
+
+  // Re-verify parent before rename (pathname still used for the destination).
+  try {
+    const parentAgain = assertOpenedWithinProject(parentFd, parentOpenPath);
+    if (parentAgain !== parentReal && !isPathWithinRoot(root, parentAgain)) {
+      try {
+        rmSync(tempPath);
+      } catch {
+        // ignore
+      }
+      throw new SecurityValidationError(
+        "Access outside the project directory is not allowed.",
+      );
+    }
+  } catch (err) {
+    try {
+      rmSync(tempPath);
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
+
+  if (options.exclusive && existsSync(dest)) {
+    try {
+      rmSync(tempPath);
+    } catch {
+      // ignore
+    }
+    const err = new Error(`File already exists: ${base}`) as NodeJS.ErrnoException;
+    err.code = "EEXIST";
+    throw err;
+  }
+
+  try {
+    renameSync(tempPath, dest);
+  } catch (err) {
+    try {
+      rmSync(tempPath);
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
+
+  // Post-rename containment check. If a junction race placed the object
+  // outside the project, remove *our* object and refuse.
+  try {
+    const finalReal = realpathSync(dest);
+    if (!isPathWithinRoot(root, finalReal)) {
+      try {
+        rmSync(dest);
+      } catch {
+        // ignore
+      }
+      throw new SecurityValidationError(
+        "Access outside the project directory is not allowed.",
+      );
+    }
+    return {
+      resolvedPath: finalReal,
+      bytesWritten: Buffer.byteLength(contents, "utf-8"),
+    };
+  } catch (err) {
+    if (err instanceof SecurityValidationError) throw err;
+    // dest may not resolve; clean up temp if rename left it
+    try {
+      if (existsSync(tempPath)) rmSync(tempPath);
+    } catch {
+      // ignore
+    }
+    throw new SecurityValidationError(
+      `Could not verify written path stays inside the project: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 export function writeFileWithinProject(
   inputPath: string,
   contents: string,
@@ -1062,15 +1242,22 @@ export function writeFileWithinProject(
   }
 
   try {
+    if (process.platform !== "linux") {
+      return writeFileWithinProjectWindows(
+        root,
+        parentFd,
+        parentOpenPath,
+        base,
+        contents,
+        options,
+      );
+    }
+
     const parentReal = assertOpenedWithinProject(parentFd, parentOpenPath);
 
-    // Race-resistant open relative to the pinned parent on Linux.
-    const fileOpenPath =
-      process.platform === "linux"
-        ? `/proc/self/fd/${parentFd}/${base}`
-        : join(parentReal, base);
+    // Linux: openat-style via the pinned parent descriptor.
+    const fileOpenPath = `/proc/self/fd/${parentFd}/${base}`;
 
-    // No O_TRUNC on open — truncation only after the fd is verified in-project.
     let flags =
       fsConstants.O_RDWR |
       fsConstants.O_CREAT |
@@ -1094,15 +1281,8 @@ export function writeFileWithinProject(
 
     try {
       const resolvedPath = assertOpenedWithinProject(fd, fileOpenPath);
-      // Safe to truncate now — descriptor is confirmed inside the project.
-      ftruncateSync(fd, 0);
-      const buffer = Buffer.from(contents, "utf-8");
-      let offset = 0;
-      while (offset < buffer.length) {
-        const n = writeSync(fd, buffer, offset, buffer.length - offset, offset);
-        offset += n;
-      }
-      return { resolvedPath, bytesWritten: buffer.length };
+      const bytesWritten = writeBufferToFd(fd, contents);
+      return { resolvedPath, bytesWritten };
     } finally {
       closeSync(fd);
     }
