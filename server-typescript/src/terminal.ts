@@ -147,28 +147,95 @@ export function isForbiddenPrefix(prefix: string): boolean {
 
   if (!normalized) return true;
 
-  if (FORBIDDEN_BROAD_EXECUTABLE_PREFIXES.has(normalized)) {
+  // Path-qualified executables must never be added to the allowlist.
+  if (
+    normalized.includes("/") ||
+    normalized.includes("\\") ||
+    normalized.includes("..") ||
+    /^[a-z]:[\\/]/.test(normalized) ||
+    normalized.startsWith("\\\\")
+  ) {
     return true;
   }
 
-  // Reject exact matches and prefixes that would expand to a forbidden
-  // command. Both directions must be checked so that a broad prefix such
-  // as "git" is rejected (it would permit "git push", "git reset", etc.)
-  // while a safe prefix such as "git status" is still accepted.
+  if (DANGEROUS_COMMAND_CHARACTERS.some((character) => normalized.includes(character))) {
+    return true;
+  }
+
+  // Explicit denylist prefixes (git push, rm, wsl, uv run, …).
   const hasForbiddenMatch = FORBIDDEN_ALLOWED_COMMAND_PREFIXES.some(
     (forbidden) =>
       normalized === forbidden ||
       normalized.startsWith(`${forbidden} `) ||
       forbidden.startsWith(`${normalized} `),
   );
-
   if (hasForbiddenMatch) {
     return true;
   }
 
-  return DANGEROUS_COMMAND_CHARACTERS.some((character) =>
-    normalized.includes(character),
+  // Intentional narrow defaults that use tools which are otherwise broad
+  // execution surfaces. These must remain addable/persistable.
+  const safeDefaults = new Set(
+    DEFAULT_ALLOWED_COMMAND_PREFIXES.map((item) => item.toLowerCase()),
   );
+  if (safeDefaults.has(normalized)) {
+    return false;
+  }
+
+  // Leading executable token (strip common Windows extensions).
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  const rawExe = tokens[0] ?? "";
+  const exe = rawExe.replace(/\.(exe|cmd|bat)$/i, "");
+
+  if (FORBIDDEN_BROAD_EXECUTABLE_PREFIXES.has(rawExe) || FORBIDDEN_BROAD_EXECUTABLE_PREFIXES.has(exe)) {
+    // Bare interpreter / package manager — always forbidden.
+    if (tokens.length === 1) {
+      return true;
+    }
+
+    // Dangerous interpreter / shell flags enable arbitrary code execution.
+    const rest = tokens.slice(1).join(" ");
+    const dangerousFlag =
+      /^(-e|--eval|-p|--print|-c|-r|--run|\/c|\/k|-command|-encodedcommand)\b/.test(
+        rest,
+      );
+    if (dangerousFlag) {
+      return true;
+    }
+
+    // npx / npm exec / npm explore always escalate to arbitrary packages/scripts.
+    if (exe === "npx" || (exe === "npm" && (tokens[1] === "exec" || tokens[1] === "explore"))) {
+      return true;
+    }
+
+    // Bare "npm run" (without a known safe script) allows any package.json script.
+    if (exe === "npm" && tokens[1] === "run") {
+      const npmRunPrefix = tokens.slice(0, 3).join(" ");
+      const safeNpmRun = new Set(["npm run test", "npm run build", "npm run lint"]);
+      if (!safeNpmRun.has(npmRunPrefix)) {
+        return true;
+      }
+      return false;
+    }
+
+    // "python -m X" only safe for pytest (default allowlist).
+    if ((exe === "python" || exe === "python3" || exe === "py") && tokens[1] === "-m") {
+      if (tokens[2] === "pytest") {
+        return false;
+      }
+      return true;
+    }
+
+    // Version probes that match the spirit of the defaults.
+    if (rest === "--version" || rest === "-v" || rest === "-V") {
+      return false;
+    }
+
+    // Any other use of a broad executable as an allowlist prefix is rejected.
+    return true;
+  }
+
+  return false;
 }
 
 function loadAllowedCommandsFromConfig(): string[] | null {
@@ -659,6 +726,47 @@ function capOutput(value: string): {
   };
 }
 
+/** Environment variable names that must not be inherited by terminal
+ * subprocesses. Project-controlled scripts (npm lifecycle, pytest plugins,
+ * etc.) must not observe provider API keys from the server process. */
+const SENSITIVE_ENV_VAR_NAMES = new Set([
+  "GOOGLE_API_KEY",
+  "GEMINI_API_KEY",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "XAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "KILO_API_KEY",
+  "API_AUTH_TOKEN",
+  "AI_TERMINAL_CHAT_HEALTH_TOKEN",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SESSION_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "NPM_TOKEN",
+  "NODE_AUTH_TOKEN",
+]);
+
+function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of SENSITIVE_ENV_VAR_NAMES) {
+    delete env[name];
+  }
+  for (const key of Object.keys(env)) {
+    const upper = key.toUpperCase();
+    if (
+      upper.endsWith("_API_KEY") ||
+      upper.endsWith("_SECRET") ||
+      upper.endsWith("_TOKEN") ||
+      upper.includes("PASSWORD")
+    ) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 /** Execute one allowlisted command in the configured project root. */
 export async function runCommand(
   command: string,
@@ -770,6 +878,7 @@ export async function runCommand(
         windowsHide: true,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
         encoding: "utf8",
+        env: sanitizedTerminalEnv(),
       },
     );
 

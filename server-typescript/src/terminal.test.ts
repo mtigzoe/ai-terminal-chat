@@ -645,3 +645,93 @@ test("runCommand: bare node is rejected", async () => {
   assert.ok(isToolError(result), "bare node must be rejected");
   assert.ok(result.error.includes("not allowed"), "error must mention not allowed");
 });
+
+// ---------------------------------------------------------------------------
+// Allowlist elevation: POST /allowed-commands must not accept interpreter
+// prefixes that enable arbitrary code execution (node -e, python -c, …).
+// ---------------------------------------------------------------------------
+
+test("isForbiddenPrefix rejects interpreter code-execution flags", () => {
+  for (const prefix of [
+    "node -e",
+    "node --eval",
+    "node -p",
+    "nodejs -e",
+    "python -c",
+    "python3 -c",
+    "python -m http.server",
+    "python3 -m http.server",
+    "py -c",
+    "bash -c",
+    "sh -c",
+    "zsh -c",
+    "cmd /c",
+    "cmd.exe /c",
+    "powershell -Command",
+    "pwsh -c",
+    "perl -e",
+    "ruby -e",
+    "php -r",
+    "npx",
+    "npx evil-package",
+    "npm exec",
+    "npm exec something",
+    "npm explore",
+    "npm run",
+    "npm run evil",
+  ]) {
+    assert.equal(
+      isForbiddenPrefix(prefix),
+      true,
+      `must forbid elevating allowlist with: ${prefix}`,
+    );
+    assert.throws(
+      () => addAllowedCommand(prefix),
+      /not permitted for safety reasons/,
+      `addAllowedCommand must reject: ${prefix}`,
+    );
+  }
+});
+
+test("isForbiddenPrefix rejects path-qualified executables", () => {
+  for (const prefix of [
+    "/usr/bin/node -e",
+    "./node -e",
+    "../node -e",
+    "C:\\\\node -e",
+    "C:/Windows/System32/cmd /c",
+  ]) {
+    assert.equal(isForbiddenPrefix(prefix), true, prefix);
+  }
+});
+
+test("isForbiddenPrefix still allows intentional narrow defaults", () => {
+  for (const prefix of [
+    "npm test",
+    "npm run build",
+    "npm run lint",
+    "npm install",
+    "npm ci",
+    "python --version",
+    "python3 --version",
+    "node --version",
+    "python -m pytest",
+    "python3 -m pytest",
+    "pytest",
+    "pip install -r requirements.txt",
+  ]) {
+    assert.equal(
+      isForbiddenPrefix(prefix),
+      false,
+      `must allow intentional default: ${prefix}`,
+    );
+  }
+});
+
+test("addAllowedCommand cannot elevate to node -e then run code", async () => {
+  __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
+  assert.throws(() => addAllowedCommand("node -e"), /not permitted/);
+  assert.equal(isCommandAllowed("node -e \"console.log(1)\""), false);
+  const result = await runCommand("node -e \"console.log(1)\"");
+  assert.ok(isToolError(result));
+});
