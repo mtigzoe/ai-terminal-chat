@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 import { gitAdd, gitCommit, gitDiff, gitStatus } from "../src/git.ts";
-import { setProjectRoot } from "../src/security.ts";
+import { __setProjectRootForTests } from "../src/security.ts";
 
 function runGit(dir: string, args: string[]) {
   return spawnSync("git", args, { cwd: dir, encoding: "utf8", stdio: "ignore" });
@@ -45,15 +45,15 @@ describe("Git repository configuration isolation", () => {
 
   beforeEach(() => {
     repoDir = createRepo();
-    setProjectRoot(repoDir);
+    // Use the test-only in-memory override so this fixture cannot persist a
+    // temporary project root into shared application configuration.
+    __setProjectRootForTests(repoDir);
   });
 
   afterEach(() => {
-    // Do not restore an arbitrary temporary project root from another test.
-    // Other test suites can remove their temp roots before this suite runs,
-    // which makes setProjectRoot() fail during teardown/setup. The repository
-    // working directory is stable for the duration of this test process.
-    setProjectRoot(process.cwd());
+    // Reset to the stable test working directory rather than restoring a
+    // temporary root that another test may already have removed.
+    __setProjectRootForTests(process.cwd());
     rmSync(repoDir, { recursive: true, force: true });
   });
 
