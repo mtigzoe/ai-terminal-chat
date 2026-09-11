@@ -319,3 +319,52 @@ test("writeFileWithinProject does not truncate outside file when parent is repla
   rmSync(project, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 });
+
+test("Windows: write uses handle path so junction at parent name cannot capture create", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows-only junction race model");
+    return;
+  }
+
+  const { project, outside } = makeProject();
+  const outsideDir = join(outside, "junction-target");
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(join(outsideDir, "preexisting.txt"), "KEEP\n", "utf8");
+
+  mkdirSync(join(project, "subdir"), { recursive: true });
+
+  // Model the attack: replace subdir with a junction to outside while a
+  // handle to the original directory would still be held during write.
+  // Here we replace before write — the open of parent must pin the real
+  // directory object; create must not land outside.
+  const { execFileSync } = await import("node:child_process");
+  try {
+    // Remove empty subdir and create a directory junction to outside.
+    rmSync(join(project, "subdir"), { recursive: true, force: true });
+    execFileSync(
+      "cmd",
+      ["/c", "mklink", "/J", join(project, "subdir"), outsideDir],
+      { stdio: "ignore" },
+    );
+  } catch {
+    // mklink /J may fail without privileges in some CI images.
+    rmSync(project, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+    t.skip("mklink /J not available");
+    return;
+  }
+
+  assert.throws(
+    () =>
+      writeFileWithinProject("subdir/created.txt", "PWNED\n", {
+        exclusive: true,
+      }),
+    (e: unknown) => e instanceof SecurityValidationError,
+  );
+
+  assert.equal(existsSync(join(outsideDir, "created.txt")), false);
+  assert.equal(readFileSync(join(outsideDir, "preexisting.txt"), "utf8"), "KEEP\n");
+
+  rmSync(project, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+});

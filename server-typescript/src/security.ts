@@ -42,8 +42,10 @@ import {
   ftruncateSync,
   lstatSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
+import {
+  windowsPathFromFd,
+} from "./windows-handle-path.ts";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -905,9 +907,10 @@ export function readFileWithinProject(inputPath: string, maxBytes: number): {
 
 /**
  * Ensure `absDir` exists as a real directory chain under PROJECT_ROOT.
- * Creates missing segments one at a time and verifies each with an
- * O_DIRECTORY|O_NOFOLLOW open so recursive mkdir cannot follow an
- * attacker-controlled parent symlink/junction outside the project.
+ * Creates missing segments one at a time. On Linux each segment is verified
+ * with O_DIRECTORY|O_NOFOLLOW. On Windows, after pinning a parent handle,
+ * mkdir uses GetFinalPathNameByHandleW so a concurrent name→junction swap
+ * cannot redirect directory creation outside the project.
  */
 function ensureDirectoryWithinProject(absDir: string): string {
   const root = getProjectRoot();
@@ -919,20 +922,6 @@ function ensureDirectoryWithinProject(absDir: string): string {
   }
 
   const target = resolve(absDir);
-  // Lexical containment before any creation.
-  if (!isPathWithinRoot(rootReal, target) && target !== rootReal) {
-    // target may not exist yet; check lexical join from root via relative
-    const relTry = relative(rootReal, target);
-    if (relTry.startsWith("..") || relTry === "" && target !== rootReal) {
-      // relative() returns ".." paths when outside
-      if (relTry.startsWith("..")) {
-        throw new SecurityValidationError(
-          "Access outside the project directory is not allowed.",
-        );
-      }
-    }
-  }
-
   const rel = relative(rootReal, target);
   if (rel.startsWith("..")) {
     throw new SecurityValidationError(
@@ -951,29 +940,22 @@ function ensureDirectoryWithinProject(absDir: string): string {
         "Access outside the project directory is not allowed.",
       );
     }
-    const next = join(current, part);
-    if (!existsSync(next)) {
-      try {
-        mkdirSync(next);
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST") throw err;
-      }
-    }
+
     const dirFlags =
       fsConstants.O_RDONLY |
       (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
       noFollowFlag();
-    let dfd: number;
+
+    // Pin current before creating the next segment under it.
+    let currentFd: number;
     try {
-      dfd = openSync(next, dirFlags);
+      currentFd = openSync(current, dirFlags);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ELOOP" || code === "EINVAL") {
-        // Final component of next is a symlink — only allow in-project targets.
         let real: string;
         try {
-          real = realpathSync(next);
+          real = realpathSync(current);
         } catch {
           throw new SecurityValidationError(
             "Refusing to follow a symbolic link or reparse point in a parent directory.",
@@ -984,17 +966,69 @@ function ensureDirectoryWithinProject(absDir: string): string {
             "Access outside the project directory is not allowed.",
           );
         }
-        dfd = openSync(real, dirFlags);
-        current = assertOpenedWithinProject(dfd, real);
-        closeSync(dfd);
-        continue;
+        currentFd = openSync(real, dirFlags);
+        current = assertOpenedWithinProject(currentFd, real);
+      } else {
+        throw err;
       }
-      throw err;
     }
+
     try {
-      current = assertOpenedWithinProject(dfd, next);
+      current = assertOpenedWithinProject(currentFd, current);
+
+      // Path of the pinned parent — stable against concurrent name replacement.
+      let createUnder = current;
+      if (process.platform === "win32") {
+        try {
+          createUnder = windowsPathFromFd(currentFd);
+        } catch (err) {
+          throw new SecurityValidationError(
+            err instanceof Error
+              ? err.message
+              : "Windows handle-path resolution failed while creating directories.",
+          );
+        }
+      } else if (process.platform === "linux") {
+        createUnder = `/proc/self/fd/${currentFd}`;
+      }
+
+      const next = join(createUnder, part);
+      if (!existsSync(next)) {
+        try {
+          mkdirSync(next);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== "EEXIST") throw err;
+        }
+      }
+
+      // Open the new segment and verify containment.
+      let nextFd: number;
+      try {
+        // Prefer open relative to pinned parent on Linux.
+        const openNext =
+          process.platform === "linux"
+            ? `/proc/self/fd/${currentFd}/${part}`
+            : process.platform === "win32"
+              ? join(createUnder, part)
+              : join(current, part);
+        nextFd = openSync(openNext, dirFlags);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ELOOP" || code === "EINVAL") {
+          throw new SecurityValidationError(
+            "Refusing to follow a symbolic link or reparse point in a parent directory.",
+          );
+        }
+        throw err;
+      }
+      try {
+        current = assertOpenedWithinProject(nextFd, next);
+      } finally {
+        closeSync(nextFd);
+      }
     } finally {
-      closeSync(dfd);
+      closeSync(currentFd);
     }
   }
   return current;
@@ -1008,23 +1042,16 @@ function ensureDirectoryWithinProject(absDir: string): string {
  * `/proc/self/fd/<parentFd>/<basename>` (openat semantics) so a concurrent
  * parent→symlink swap cannot redirect the create/write.
  *
- * Windows / non-Linux: Node has no openat equivalent. O_CREAT must never use
- * a pathname under an untrusted parent (that could be replaced with a
- * junction). Instead:
- *   - Existing targets: open without O_CREAT, verify, ftruncate, write.
- *   - New files: O_CREAT|O_EXCL only under the project root (safe basename
- *     temp file), write content, rename into place, then verify the final
- *     path is still inside PROJECT_ROOT and delete the misplaced object if
- *     a race moved it outside.
+ * Windows: Node has no openat. We pin the parent directory handle, resolve
+ * that handle to a path with GetFinalPathNameByHandleW (the path of the
+ * open directory *object*, stable across concurrent name→junction swaps of
+ * the original path), then open/create the file under *that* path. O_CREAT
+ * therefore targets the pinned directory, not a replaced junction.
+ * Requires the optional `koffi` dependency on Windows; if unavailable, new
+ * file creates fail closed rather than falling back to unsafe pathname O_CREAT.
  *
- * Residual Windows limitation: between existsSync(dest) and rename, a
- * concurrent junction install can cause rename to place or replace a file
- * outside the project. We detect via post-rename realpath and best-effort
- * unlink of *our* temp content; a pre-existing outside file that Node's
- * rename overwrites remains a residual risk without a native openat.
- * Do not claim full Windows race resistance for that window.
- *
- * All platforms: never open with O_TRUNC before containment is verified.
+ * Existing files (all platforms): open without O_CREAT, verify, ftruncate, write.
+ * Never open with O_TRUNC before containment is verified.
  */
 function writeBufferToFd(fd: number, contents: string): number {
   ftruncateSync(fd, 0);
@@ -1037,6 +1064,10 @@ function writeBufferToFd(fd: number, contents: string): number {
   return buffer.length;
 }
 
+/**
+ * Windows write: create/open relative to the pinned parent handle path.
+ * Does not use renameSync into a pathname under an untrusted parent name.
+ */
 function writeFileWithinProjectWindows(
   root: string,
   parentFd: number,
@@ -1045,21 +1076,48 @@ function writeFileWithinProjectWindows(
   contents: string,
   options: { exclusive?: boolean; mode?: number },
 ): { resolvedPath: string; bytesWritten: number } {
-  const parentReal = assertOpenedWithinProject(parentFd, parentOpenPath);
-  const dest = join(parentReal, base);
+  // Confirm the open parent descriptor is still inside the project.
+  assertOpenedWithinProject(parentFd, parentOpenPath);
 
-  // Refuse final-component symlink/junction at dest when it already exists.
-  if (existsSync(dest)) {
+  let parentFromHandle: string;
+  try {
+    parentFromHandle = windowsPathFromFd(parentFd);
+  } catch (err) {
+    throw new SecurityValidationError(
+      err instanceof Error
+        ? err.message
+        : "Windows handle-path resolution failed for parent directory.",
+    );
+  }
+
+  // Normalize \\?\ prefix for containment checks.
+  const parentNormalized = parentFromHandle.replace(/^\\\\\?\\/i, "");
+  let parentReal: string;
+  try {
+    parentReal = realpathSync(parentFromHandle);
+  } catch {
+    parentReal = parentNormalized;
+  }
+  if (!isPathWithinRoot(root, parentReal) && !isPathWithinRoot(root, parentNormalized)) {
+    throw new SecurityValidationError(
+      "Access outside the project directory is not allowed.",
+    );
+  }
+
+  // Open/create under the *handle* path — not under the original lexical name
+  // that an attacker could replace with a junction.
+  const destOnHandle = join(parentFromHandle, base);
+
+  if (existsSync(destOnHandle)) {
     if (options.exclusive) {
       const err = new Error(`File already exists: ${base}`) as NodeJS.ErrnoException;
       err.code = "EEXIST";
       throw err;
     }
-    // Open existing object without O_CREAT — cannot create outside.
-    let flags = fsConstants.O_RDWR | noFollowFlag();
+    // Existing file: no O_CREAT, verify, then truncate/write.
     let fd: number;
     try {
-      fd = openSync(dest, flags);
+      fd = openSync(destOnHandle, fsConstants.O_RDWR | noFollowFlag());
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ELOOP" || code === "EINVAL") {
@@ -1070,7 +1128,7 @@ function writeFileWithinProjectWindows(
       throw err;
     }
     try {
-      const resolvedPath = assertOpenedWithinProject(fd, dest);
+      const resolvedPath = assertOpenedWithinProject(fd, destOnHandle);
       const bytesWritten = writeBufferToFd(fd, contents);
       return { resolvedPath, bytesWritten };
     } finally {
@@ -1078,116 +1136,34 @@ function writeFileWithinProjectWindows(
     }
   }
 
-  // New file: O_CREAT only under the project root (not under parentReal).
-  let rootReal: string;
-  try {
-    rootReal = realpathSync(root);
-  } catch {
-    throw new SecurityValidationError("Project root is not accessible.");
-  }
-  if (!isPathWithinRoot(rootReal, rootReal)) {
-    throw new SecurityValidationError("Project root is not accessible.");
+  // New file: O_CREAT under the pinned handle path only.
+  let flags =
+    fsConstants.O_RDWR |
+    fsConstants.O_CREAT |
+    noFollowFlag();
+  if (options.exclusive) {
+    flags |= fsConstants.O_EXCL;
   }
 
-  const tempName = `.ai-w-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`;
-  if (tempName.includes("/") || tempName.includes("\\") || tempName.includes("..")) {
-    throw new SecurityValidationError("Invalid temporary file name.");
-  }
-  const tempPath = join(rootReal, tempName);
-
-  let tfd: number;
+  let fd: number;
   try {
-    tfd = openSync(
-      tempPath,
-      fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag(),
-      options.mode ?? 0o644,
-    );
+    fd = openSync(destOnHandle, flags, options.mode ?? 0o644);
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EINVAL") {
+      throw new SecurityValidationError(
+        "Refusing to follow a symbolic link or reparse point at the final path component.",
+      );
+    }
     throw err;
   }
 
   try {
-    assertOpenedWithinProject(tfd, tempPath);
-    writeBufferToFd(tfd, contents);
+    const resolvedPath = assertOpenedWithinProject(fd, destOnHandle);
+    const bytesWritten = writeBufferToFd(fd, contents);
+    return { resolvedPath, bytesWritten };
   } finally {
-    closeSync(tfd);
-  }
-
-  // Re-verify parent before rename (pathname still used for the destination).
-  try {
-    const parentAgain = assertOpenedWithinProject(parentFd, parentOpenPath);
-    if (parentAgain !== parentReal && !isPathWithinRoot(root, parentAgain)) {
-      try {
-        rmSync(tempPath);
-      } catch {
-        // ignore
-      }
-      throw new SecurityValidationError(
-        "Access outside the project directory is not allowed.",
-      );
-    }
-  } catch (err) {
-    try {
-      rmSync(tempPath);
-    } catch {
-      // ignore
-    }
-    throw err;
-  }
-
-  if (options.exclusive && existsSync(dest)) {
-    try {
-      rmSync(tempPath);
-    } catch {
-      // ignore
-    }
-    const err = new Error(`File already exists: ${base}`) as NodeJS.ErrnoException;
-    err.code = "EEXIST";
-    throw err;
-  }
-
-  try {
-    renameSync(tempPath, dest);
-  } catch (err) {
-    try {
-      rmSync(tempPath);
-    } catch {
-      // ignore
-    }
-    throw err;
-  }
-
-  // Post-rename containment check. If a junction race placed the object
-  // outside the project, remove *our* object and refuse.
-  try {
-    const finalReal = realpathSync(dest);
-    if (!isPathWithinRoot(root, finalReal)) {
-      try {
-        rmSync(dest);
-      } catch {
-        // ignore
-      }
-      throw new SecurityValidationError(
-        "Access outside the project directory is not allowed.",
-      );
-    }
-    return {
-      resolvedPath: finalReal,
-      bytesWritten: Buffer.byteLength(contents, "utf-8"),
-    };
-  } catch (err) {
-    if (err instanceof SecurityValidationError) throw err;
-    // dest may not resolve; clean up temp if rename left it
-    try {
-      if (existsSync(tempPath)) rmSync(tempPath);
-    } catch {
-      // ignore
-    }
-    throw new SecurityValidationError(
-      `Could not verify written path stays inside the project: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+    closeSync(fd);
   }
 }
 
@@ -1208,7 +1184,7 @@ export function writeFileWithinProject(
     ensureDirectoryWithinProject(parentLexical);
   }
 
-  // Pin the parent directory inode.
+  // Pin the parent directory inode/handle.
   const dirFlags =
     fsConstants.O_RDONLY |
     (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
@@ -1242,7 +1218,7 @@ export function writeFileWithinProject(
   }
 
   try {
-    if (process.platform !== "linux") {
+    if (process.platform === "win32") {
       return writeFileWithinProjectWindows(
         root,
         parentFd,
@@ -1253,11 +1229,15 @@ export function writeFileWithinProject(
       );
     }
 
-    const parentReal = assertOpenedWithinProject(parentFd, parentOpenPath);
+    // Linux (and other POSIX with /proc): openat-style via pinned parent.
+    assertOpenedWithinProject(parentFd, parentOpenPath);
+    const fileOpenPath =
+      process.platform === "linux"
+        ? `/proc/self/fd/${parentFd}/${base}`
+        : join(assertOpenedWithinProject(parentFd, parentOpenPath), base);
 
-    // Linux: openat-style via the pinned parent descriptor.
-    const fileOpenPath = `/proc/self/fd/${parentFd}/${base}`;
-
+    // Non-Linux POSIX fallback without /proc: use handle-verified parent path
+    // only after re-asserting containment (no Windows junction semantics).
     let flags =
       fsConstants.O_RDWR |
       fsConstants.O_CREAT |
