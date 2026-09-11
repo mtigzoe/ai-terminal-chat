@@ -19,8 +19,15 @@ port = int(os.getenv("PORT", "9000"))
 is_loopback = host.lower() in LOOPBACK_HOSTS
 api_auth_token = os.getenv("API_AUTH_TOKEN", "").strip()
 
-if not is_loopback and not api_auth_token:
-    raise RuntimeError("API_AUTH_TOKEN is required when HOST is not a loopback address.")
+
+def validate_network_config(bind_host: str, auth_token: str) -> None:
+    """Reject network-facing configuration without an API bearer token."""
+
+    if bind_host.strip().lower() not in LOOPBACK_HOSTS and not auth_token.strip():
+        raise RuntimeError("API_AUTH_TOKEN is required when HOST is not a loopback address.")
+
+
+validate_network_config(host, api_auth_token)
 
 configured_origins = [
     origin.strip()
