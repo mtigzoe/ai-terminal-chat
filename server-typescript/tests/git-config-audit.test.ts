@@ -150,12 +150,11 @@ describe("Git repository-config code execution audit", () => {
   });
 
   describe("core.hooksPath - Hook redirection", () => {
-    it("commit: core.hooksPath can redirect to malicious hooks", async () => {
-      // Create a malicious hook directory
+    it("commit: repository-controlled hooks are blocked", async () => {
+      const marker = resolve(repoDir, "hook-executed.txt");
       const hooksDir = resolve(repoDir, "malicious_hooks");
       mkdirSync(hooksDir, { recursive: true });
-      writeFileSync(resolve(hooksDir, "pre-commit"), `#!/bin/sh\necho "EXECUTED_PRE_COMMIT_HOOK" > /tmp/hook_executed.txt\nexit 0\n`);
-      // Make executable
+      writeFileSync(resolve(hooksDir, "pre-commit"), `#!/bin/sh\necho "EXECUTED_PRE_COMMIT_HOOK" > "${marker}"\nexit 0\n`);
       const { chmodSync } = require("node:fs");
       chmodSync(resolve(hooksDir, "pre-commit"), 0o755);
 
@@ -164,14 +163,16 @@ describe("Git repository-config code execution audit", () => {
     hooksPath = ${hooksDir}
 `);
 
-      // Need to set up a repo with a file to commit
       writeFileSync(join(repoDir, "test.txt"), "test");
       await gitAdd("test.txt", true);
 
       const result = await gitCommit("test commit", true);
-      // Should be BLOCKED by -c core.hooksPath= override
-      // commit fails because -c core.hooksPath= overrides the config
-      expect(result.error).toContain("fatal: bad config line");
+      // The repository-local configuration is isolated, so the malicious
+      // hooksPath must not be honored. Commit may fail because the isolated
+      // Git configuration has no user identity, but the hook must never run.
+      expect(result.error).toBeDefined();
+      const { existsSync } = require("node:fs");
+      expect(existsSync(marker)).toBe(false);
     });
   });
 
@@ -288,7 +289,7 @@ describe("Git repository-config code execution audit", () => {
     });
   });
 
-  describe("Pre-push hooks", () => {
+  describe("Pre-push hooks", () =>
     it("push: .git/hooks/pre-push executes on push", async () => {
       const hooksDir = resolve(repoDir, ".git", "hooks");
       mkdirSync(hooksDir, { recursive: true });
@@ -311,7 +312,7 @@ describe("Git repository-config code execution audit", () => {
     });
   });
 
-  describe("Pre-merge hooks (invoked by pull)", () => {
+  describe("Pre-merge hooks (invoked by pull)", () =>
     it("pull: merge hooks can execute", async () => {
       const hooksDir = resolve(repoDir, ".git", "hooks");
       mkdirSync(hooksDir, { recursive: true });
