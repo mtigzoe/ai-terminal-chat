@@ -1153,8 +1153,6 @@ function writeFileWithinProjectWindows(
       create: true,
       exclusive: options.exclusive === true,
       write: true,
-      // Prefer open-if for non-exclusive overwrite; we ftruncate after verify.
-      truncate: false,
     });
   } catch (err) {
     if (err instanceof WindowsHandlePathError) {
