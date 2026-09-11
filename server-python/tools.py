@@ -868,23 +868,71 @@ def run_command(command: str, confirm: bool = False) -> dict:
 
 # Defense-in-depth -c overrides so repository-local configuration cannot
 # supply command-executing settings (hooks, credential helpers, proxies).
+# Local .git/config and .git/config.worktree ARE still loaded by Git.
+# GIT_CONFIG does not disable them. These -c overrides are the process-
+# execution / network boundary (mirrors server-typescript GIT_CONFIG_OVERRIDES).
 _GIT_CONFIG_OVERRIDES = [
     "-c", "core.hooksPath=",
     "-c", "core.fsmonitor=",
     "-c", "core.fsmonitorHook=",
-    "-c", "merge.*.command=",
-    "-c", "merge.*.driver=",
+    "-c", "core.useBuiltinFSMonitor=false",
+    "-c", "core.editor=true",
+    "-c", "sequence.editor=true",
+    "-c", "core.askPass=",
+    "-c", "core.gitProxy=none",
+    "-c", "core.sshCommand=",
+    "-c", "core.pager=cat",
+    "-c", "pager.status=cat",
+    "-c", "pager.diff=cat",
+    "-c", "pager.log=cat",
+    "-c", "pager.show=cat",
+    "-c", "pager.branch=cat",
+    "-c", "pager.tag=cat",
+    "-c", "interactive.diffFilter=",
+    "-c", "diff.external=",
+    "-c", "diff.tool=",
+    "-c", "diff.guitool=",
+    "-c", "diff.mnemonicPrefix=false",
+    "-c", "merge.tool=",
+    "-c", "merge.guitool=",
+    "-c", "mergetool.prompt=false",
     "-c", "gpg.program=",
+    "-c", "gpg.ssh.program=",
+    "-c", "commit.gpgsign=false",
+    "-c", "tag.gpgsign=false",
+    "-c", "credential.helper=",
+    "-c", "credential.useHttpPath=false",
     "-c", "sendemail.smtpserver=",
     "-c", "sendemail.smtpencryption=",
     "-c", "sendemail.smtpuser=",
     "-c", "sendemail.smtppass=",
     "-c", "sendemail.smtpdomain=",
-    "-c", "http.extraHeader=",
+    "-c", "sendemail.smtpServer=",
     "-c", "http.proxy=",
-    "-c", "http.postBuffer=",
-    "-c", "credential.helper=",
-    "-c", "core.gitProxy=none",
+    "-c", "http.https.proxy=",
+    "-c", "http.extraHeader=",
+    "-c", "http.proxyAuthMethod=",
+    "-c", "remote.helper=",
+    "-c", "alias.status=",
+    "-c", "alias.stat=",
+    "-c", "alias.st=",
+    "-c", "alias.diff=",
+    "-c", "alias.log=",
+    "-c", "alias.branch=",
+    "-c", "alias.show=",
+    "-c", "alias.remote=",
+    "-c", "alias.fetch=",
+    "-c", "alias.pull=",
+    "-c", "alias.push=",
+    "-c", "alias.add=",
+    "-c", "alias.commit=",
+    "-c", "alias.restore=",
+    "-c", "alias.checkout=",
+    "-c", "alias.reset=",
+    "-c", "alias.rev-parse=",
+    "-c", "trace2.normalTarget=",
+    "-c", "trace2.perfTarget=",
+    "-c", "trace2.eventTarget=",
 ]
 
 
@@ -902,9 +950,8 @@ def _run_git(
 ) -> subprocess.CompletedProcess:
     """Run git with config/SSH isolation matching the TypeScript backend.
 
-    Uses an empty temporary GIT_CONFIG, disables system/global config,
-    isolates SSH, and applies -c overrides that neutralize
-    command-executing settings from repository config.
+    Local .git/config is still loaded by Git; GIT_CONFIG does not replace it.
+    Process isolation relies on -c overrides, SSH env, and pager env.
     """
     isolation = tempfile.mkdtemp(prefix="git-isolation-")
     empty_config = os.path.join(isolation, "config")
@@ -932,6 +979,8 @@ def _run_git(
             "SSH_ASKPASS": "",
             "GIT_SSH_COMMAND": _git_ssh_command(),
             "GIT_PROXY_COMMAND": "none",
+            "GIT_PAGER": "cat",
+            "PAGER": "cat",
         }
     )
 

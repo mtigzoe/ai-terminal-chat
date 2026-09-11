@@ -16,59 +16,121 @@ import { resolveTrustedExecutable } from "./trusted-exec.ts";
 const execFileAsync = promisify(execFile);
 
 /**
- * Git configuration overrides for settings that can execute external commands
- * or otherwise weaken the application's Git execution boundary.
+ * Git configuration overrides applied via `git -c key=value` on every
+ * isolated invocation.
  *
- * Repository configuration is isolated separately with GIT_CONFIG pointing at
- * a temporary empty file. These -c values provide defense in depth and keep
- * hooks/known command-execution settings disabled even if configuration
- * isolation changes in a future Git version.
+ * IMPORTANT — isolation model (not optional):
+ * Git always loads repository-local `.git/config` and, when enabled,
+ * `.git/config.worktree`. Environment variables such as `GIT_CONFIG`,
+ * `GIT_CONFIG_GLOBAL`, and `GIT_CONFIG_NOSYSTEM` do **not** disable those
+ * files. `GIT_CONFIG` only affects the `git config` file used by some
+ * plumbing; it is NOT a sandbox for ordinary commands.
+ *
+ * Therefore the security boundary is:
+ * 1. High-priority `-c` overrides for every setting known to execute a
+ *    process, change network/credential behavior, or rewrite URLs.
+ * 2. Process environment (`GIT_SSH_COMMAND`, `GIT_PAGER`, no
+ *    `GIT_EXTERNAL_DIFF`, etc.).
+ * 3. Explicit argv flags (`--no-ext-diff`, `--no-textconv`) on diff paths.
+ * 4. Trusted git executable resolution (no project-root shims).
+ *
+ * Repository config that only affects presentation or identity and cannot
+ * run a process may still apply. Anything that can run a process or open
+ * a network channel must be overridden here.
  */
 export const GIT_CONFIG_OVERRIDES: string[] = [
-  // Hooks - disable all hooks
+  // --- process execution ---
   "-c", "core.hooksPath=",
-
-  // FS monitor hooks
   "-c", "core.fsmonitor=",
   "-c", "core.fsmonitorHook=",
-
-  // Pagers (can execute arbitrary viewer commands)
+  "-c", "core.useBuiltinFSMonitor=false",
+  "-c", "core.editor=true",
+  "-c", "sequence.editor=true",
+  "-c", "core.askPass=",
+  "-c", "core.gitProxy=none",
+  "-c", "core.sshCommand=",
   "-c", "core.pager=cat",
   "-c", "pager.status=cat",
   "-c", "pager.diff=cat",
   "-c", "pager.log=cat",
   "-c", "pager.show=cat",
   "-c", "pager.branch=cat",
-
-  // External diff / text conversion (command-valued)
+  "-c", "pager.tag=cat",
+  "-c", "interactive.diffFilter=",
   "-c", "diff.external=",
+  "-c", "diff.tool=",
+  "-c", "diff.guitool=",
   "-c", "diff.mnemonicPrefix=false",
-
-  // Merge drivers - can execute arbitrary commands
-  "-c", "merge.*.command=",
-  "-c", "merge.*.driver=",
-
-  // GPG
+  "-c", "merge.tool=",
+  "-c", "merge.guitool=",
+  "-c", "mergetool.prompt=false",
+  // GPG / signing programs
   "-c", "gpg.program=",
-
-  // Email/sendemail
+  "-c", "gpg.ssh.program=",
+  "-c", "commit.gpgsign=false",
+  "-c", "tag.gpgsign=false",
+  // Credential helpers (empty resets multi-valued helpers)
+  "-c", "credential.helper=",
+  "-c", "credential.useHttpPath=false",
+  // Send-email / SMTP
   "-c", "sendemail.smtpserver=",
   "-c", "sendemail.smtpencryption=",
   "-c", "sendemail.smtpuser=",
   "-c", "sendemail.smtppass=",
   "-c", "sendemail.smtpdomain=",
-
-  // HTTP configuration that can affect outbound requests
-  "-c", "http.extraHeader=",
+  "-c", "sendemail.smtpServer=",
+  // HTTP / proxy / extra headers
   "-c", "http.proxy=",
-  "-c", "http.postBuffer=",
+  "-c", "http.https.proxy=",
+  "-c", "http.extraHeader=",
+  "-c", "http.proxyAuthMethod=",
+  "-c", "http.version=",
+  "-c", "http.lowSpeedLimit=0",
+  "-c", "http.lowSpeedTime=0",
+  // Transfer / protocol helpers
+  "-c", "remote.helper=",
+  // Break shell aliases for every subcommand this process invokes.
+  // `git -c alias.status=!evil status` must not run the alias.
+  "-c", "alias.status=",
+  "-c", "alias.stat=",
+  "-c", "alias.st=",
+  "-c", "alias.diff=",
+  "-c", "alias.log=",
+  "-c", "alias.branch=",
+  "-c", "alias.show=",
+  "-c", "alias.remote=",
+  "-c", "alias.fetch=",
+  "-c", "alias.pull=",
+  "-c", "alias.push=",
+  "-c", "alias.add=",
+  "-c", "alias.commit=",
+  "-c", "alias.restore=",
+  "-c", "alias.checkout=",
+  "-c", "alias.reset=",
+  "-c", "alias.rev-parse=",
+  "-c", "alias.ls-files=",
+  "-c", "alias.ls-tree=",
+  // Trace / debug hooks that can write or exec
+  "-c", "trace2.normalTarget=",
+  "-c", "trace2.perfTarget=",
+  "-c", "trace2.eventTarget=",
+] as const;
 
-  // Credential helpers can execute shell commands. An empty value resets
-  // inherited/multi-valued helpers.
-  "-c", "credential.helper=",
-
-  // Git protocol proxy command can execute an external program.
-  "-c", "core.gitProxy=none",
+/** Subcommands the application may invoke (for docs / tests). */
+export const ISOLATED_GIT_SUBCOMMANDS = [
+  "status",
+  "diff",
+  "log",
+  "branch",
+  "show",
+  "remote",
+  "fetch",
+  "pull",
+  "push",
+  "add",
+  "commit",
+  "restore",
+  "rev-parse",
 ] as const;
 
 /**
@@ -275,8 +337,8 @@ export async function runIsolatedGit(
         delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
         return {
           ...env,
-          // GIT_CONFIG selects the only configuration file Git reads for this
-          // subprocess. The file is empty and lives outside the repository.
+          // Empty GIT_CONFIG reduces some plumbing defaults; it does NOT
+          // block .git/config or .git/config.worktree (see GIT_CONFIG_OVERRIDES).
           GIT_CONFIG: emptyConfigPath,
           GIT_CONFIG_NOSYSTEM: "1",
           GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",

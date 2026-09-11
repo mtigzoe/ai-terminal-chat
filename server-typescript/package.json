@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && vitest run",
-    "test:unit": "tsx --test src/config.test.ts src/filesystem.test.ts src/git.test.ts src/security.test.ts src/terminal.test.ts src/terminal.git-isolation.test.ts src/trusted-exec.test.ts src/filesystem.toctou.test.ts src/write-tools.apply-patch.test.ts src/windows-handle-path.test.ts src/safe-fetch.test.ts",
+    "test:unit": "tsx --test src/config.test.ts src/filesystem.test.ts src/git.test.ts src/security.test.ts src/terminal.test.ts src/terminal.git-isolation.test.ts src/trusted-exec.test.ts src/filesystem.toctou.test.ts src/write-tools.apply-patch.test.ts src/windows-handle-path.test.ts src/safe-fetch.test.ts src/git.config-isolation.test.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
