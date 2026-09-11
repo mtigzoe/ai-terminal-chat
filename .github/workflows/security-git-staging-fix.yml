@@ -45,7 +45,7 @@ jobs:
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Install TypeScript dependencies
-        run: npm ci --ignore-scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
       - name: Verify TypeScript
         run: npx tsc --noEmit -p server-typescript/tsconfig.json
       - name: Verify Python syntax
