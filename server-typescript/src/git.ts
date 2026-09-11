@@ -195,6 +195,17 @@ async function getSafeCommitIdentity(): Promise<{ name?: string; email?: string 
   return { name, email };
 }
 
+/**
+ * Use SSH without loading the user's SSH config. Git operations can
+ * reach attacker-controlled repositories, so user SSH configuration
+ * must not provide ProxyCommand/ProxyJump execution paths.
+ */
+export function getGitSshCommand(): string {
+  return process.platform === "win32"
+    ? "ssh -F NUL -o ProxyCommand=none -o ProxyJump=none"
+    : "ssh -F /dev/null -o ProxyCommand=none -o ProxyJump=none";
+}
+
 async function runGit(args: string[], timeout: number): Promise<{
   code: number;
   stdout: string;
@@ -231,7 +242,7 @@ async function runGit(args: string[], timeout: number): Promise<{
         GIT_EXTERNAL_DIFF: "",
         GIT_ASKPASS: "",
         SSH_ASKPASS: "",
-        GIT_SSH_COMMAND: "ssh",
+        GIT_SSH_COMMAND: getGitSshCommand(),
         GIT_PROXY_COMMAND: "none",
       },
     });
