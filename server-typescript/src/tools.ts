@@ -60,7 +60,7 @@ export const TOOL_SCHEMAS: ToolSchemas = {
   },
   run_command: {
     description:
-      "Runs one of the explicitly allowed development commands inside the local project directory: read-only git inspection (status, log, diff, branch), directory listings, tool versions, installing dependencies, and running tests/builds/linters. Use this when the user asks you to run the tests, install dependencies, build the project, or check something the dedicated tools don't cover. It cannot run destructive, system-level, or credential-exposing commands.",
+      "Runs an explicitly allowed development command in the project directory. Inspection commands (git status/log/diff, directory listings, tool --version) run immediately. Commands that can execute project or dependency code (npm test/install/run, pytest, pip install, linters) require confirm=true after the user agrees. Cannot run destructive or credential-exposing commands.",
     parameters: {
       type: "object",
       properties: {
@@ -68,6 +68,11 @@ export const TOOL_SCHEMAS: ToolSchemas = {
           type: "string",
           description:
             "An allowed command such as 'pytest', 'npm test', 'npm install', 'git log -n 5', or 'npm run build'.",
+        },
+        confirm: {
+          type: "boolean",
+          description:
+            "Must be true to run execution-risk commands (tests, installs, builds, linters). Omit or false to only request confirmation.",
         },
       },
       required: ["command"],

@@ -30,7 +30,6 @@ export const READ_ONLY_TOOL_NAMES = [
   "list_files",
   "read_file",
   "search_files",
-  "run_command",
   "git_status",
   "git_diff",
   "git_log",
@@ -107,6 +106,11 @@ export type RunCommandResult =
       stderr: string;
       truncated: boolean;
       truncation_note?: string;
+    }
+  | {
+      requires_confirmation: true;
+      command: string;
+      message: string;
     }
   | ToolError;
 

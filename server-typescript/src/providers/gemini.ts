@@ -1,5 +1,6 @@
 import { Provider, ProviderCapabilities, ProviderResponse, ToolCall } from "./base.ts";
 import { CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION } from "../prompts.ts";
+import { safeFetch } from "../safe-fetch.ts";
 import { buildToolSchemas } from "../tools.ts";
 
 interface GeminiPart {
@@ -263,12 +264,17 @@ export class GeminiProvider extends Provider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
     try {
-      return await fetch(url, {
-        ...options,
-        method,
-        headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string> | undefined) },
-        signal: controller.signal,
-      });
+      const hostname = new URL(url).hostname;
+      return await safeFetch(
+        url,
+        {
+          ...options,
+          method,
+          headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string> | undefined) },
+          signal: controller.signal,
+        },
+        { originalHostname: hostname },
+      );
     } catch (exc) {
       if (exc instanceof Error && exc.name === "AbortError") {
         throw new Error("Gemini request timed out.");

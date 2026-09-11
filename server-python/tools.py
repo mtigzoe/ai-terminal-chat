@@ -303,6 +303,38 @@ DEFAULT_ALLOWED_COMMAND_PREFIXES = (
 # Runtime allowlist. Starts as the defaults and is updated from the
 # persisted configuration (and via the Settings UI / API). Always keep
 # this as a list so mutations are visible to is_command_allowed().
+
+# Commands that can execute repository/dependency-controlled code and require
+# explicit confirmation (mirrors server-typescript EXECUTION_RISK_COMMAND_PREFIXES).
+EXECUTION_RISK_COMMAND_PREFIXES = (
+    "npm test",
+    "npm run test",
+    "npm run build",
+    "npm run lint",
+    "npm install",
+    "npm ci",
+    "pip install",
+    "pip3 install",
+    "pytest",
+    "python -m pytest",
+    "python3 -m pytest",
+    "black --check",
+    "black",
+    "ruff check",
+    "ruff",
+    "flake8",
+)
+
+
+def is_execution_risk_command(command: str) -> bool:
+    normalized = (command or "").strip().lower()
+    if not normalized:
+        return False
+    for prefix in EXECUTION_RISK_COMMAND_PREFIXES:
+        if normalized == prefix or normalized.startswith(prefix + " "):
+            return True
+    return False
+
 ALLOWED_COMMAND_PREFIXES: list[str] = list(DEFAULT_ALLOWED_COMMAND_PREFIXES)
 
 # Characters/sequences that enable chaining, piping, redirection, or
@@ -713,7 +745,7 @@ def is_command_allowed(command: str) -> bool:
     )
 
 
-def run_command(command: str) -> dict:
+def run_command(command: str, confirm: bool = False) -> dict:
     """Run an allowlisted development command in the project directory.
 
     Covers read-only inspection (git status/log/diff/branch, directory
@@ -758,6 +790,17 @@ def run_command(command: str) -> dict:
                 f"Command not allowed: '{command}'. Allowed command "
                 f"prefixes: {sorted(ALLOWED_COMMAND_PREFIXES)}"
             )
+        }
+
+    if is_execution_risk_command(command) and not confirm:
+        return {
+            "requires_confirmation": True,
+            "command": command.strip(),
+            "message": (
+                f"Command '{command.strip()}' can execute project or dependency "
+                f"code (scripts, tests, install hooks, or plugins). It was NOT run. "
+                f"Ask the user to confirm, then call run_command again with confirm=true."
+            ),
         }
 
     permission_error = _run_command_respects_read_permissions(command)

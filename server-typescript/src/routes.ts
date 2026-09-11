@@ -519,7 +519,7 @@ app.post("/terminal/run", async (c) => {
   if (!command) {
     return c.json({ error: "command is required." }, 400 as any);
   }
-  const result = await runCommand(command);
+  const result = await runCommand(command, true);  // HTTP API: operator-initiated
   if (result && typeof result === "object" && "error" in result) {
     return c.json(result, 400 as any);
   }
@@ -946,7 +946,7 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>) => u
     read_file: (args) => readFile(String(args.path || "")),
     search_files: (args) =>
       searchFiles(String(args.query || ""), String(args.path || ".")),
-    run_command: (args) => runCommand(String(args.command || "")),
+    run_command: (args) => runCommand(String(args.command || ""), Boolean(args.confirm)),
     git_status: () => gitStatusSummary(),
     git_committed_file_count: () => gitCommittedFileCount(),
     git_diff: (args) =>

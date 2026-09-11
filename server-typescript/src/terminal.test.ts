@@ -386,7 +386,7 @@ test("read-only git branch --list is allowed", async () => {
     await runWithAllowedReadPaths([], async () => {
       const result = await runCommand("git branch --list");
       assert.ok(!isToolError(result), "git branch --list must be allowed (read-only)");
-      assert.equal(typeof result.stdout, "string");
+      assert.ok("stdout" in result && typeof result.stdout === "string");
     });
   } finally {
     setProjectRoot(originalRoot);
@@ -410,7 +410,7 @@ test("read-only git branch --show-current is allowed", async () => {
     await runWithAllowedReadPaths([], async () => {
       const result = await runCommand("git branch --show-current");
       assert.ok(!isToolError(result), "git branch --show-current must be allowed (read-only)");
-      assert.ok(typeof result.stdout === "string" && result.stdout.trim().length > 0);
+      assert.ok("stdout" in result && typeof result.stdout === "string" && result.stdout.trim().length > 0);
     });
   } finally {
     setProjectRoot(originalRoot);
@@ -734,4 +734,34 @@ test("addAllowedCommand cannot elevate to node -e then run code", async () => {
   assert.equal(isCommandAllowed("node -e \"console.log(1)\""), false);
   const result = await runCommand("node -e \"console.log(1)\"");
   assert.ok(isToolError(result));
+});
+
+test("isExecutionRiskCommand classifies install/test/build commands", async () => {
+  const { isExecutionRiskCommand } = await import("./terminal.ts");
+  assert.equal(isExecutionRiskCommand("npm test"), true);
+  assert.equal(isExecutionRiskCommand("npm run build"), true);
+  assert.equal(isExecutionRiskCommand("pytest -q"), true);
+  assert.equal(isExecutionRiskCommand("pip install -r requirements.txt"), true);
+  assert.equal(isExecutionRiskCommand("git status"), false);
+  assert.equal(isExecutionRiskCommand("node --version"), false);
+  assert.equal(isExecutionRiskCommand("ls"), false);
+});
+
+test("runCommand requires confirmation for execution-risk commands", async () => {
+  const { runCommand } = await import("./terminal.ts");
+  const preview = await runCommand("npm test", false);
+  assert.ok(preview && typeof preview === "object");
+  assert.equal((preview as { requires_confirmation?: boolean }).requires_confirmation, true);
+  // Must not have executed (no returncode from a real npm run)
+  assert.equal((preview as { returncode?: number }).returncode, undefined);
+});
+
+test("runCommand allows inspection without confirmation", async () => {
+  const { runCommand } = await import("./terminal.ts");
+  // git status may fail without a repo but should not return requires_confirmation
+  const result = await runCommand("git status", false);
+  assert.equal(
+    (result as { requires_confirmation?: boolean }).requires_confirmation,
+    undefined,
+  );
 });

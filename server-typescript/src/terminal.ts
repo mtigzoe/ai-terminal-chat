@@ -138,6 +138,40 @@ const MAX_OUTPUT_CHARS = 20_000;
 
 let allowedCommandPrefixes: string[] = [...DEFAULT_ALLOWED_COMMAND_PREFIXES];
 
+/**
+ * Allowlisted commands that can execute repository-controlled code
+ * (package scripts, tests, install hooks, linter plugins). These require
+ * explicit user confirmation before the process is spawned.
+ */
+export const EXECUTION_RISK_COMMAND_PREFIXES = [
+  "npm test",
+  "npm run test",
+  "npm run build",
+  "npm run lint",
+  "npm install",
+  "npm ci",
+  "pip install",
+  "pip3 install",
+  "pytest",
+  "python -m pytest",
+  "python3 -m pytest",
+  "black --check",
+  "black",
+  "ruff check",
+  "ruff",
+  "flake8",
+] as const;
+
+/** True when the command can run project/dependency-controlled code. */
+export function isExecutionRiskCommand(command: string): boolean {
+  const normalized = (command ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  return EXECUTION_RISK_COMMAND_PREFIXES.some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix} `),
+  );
+}
+
+
 function normalizePrefix(prefix: string): string {
   return (prefix ?? "").trim();
 }
@@ -773,6 +807,7 @@ function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
 /** Execute one allowlisted command in the configured project root. */
 export async function runCommand(
   command: string,
+  confirm = false,
 ): Promise<RunCommandResult> {
   if (!command || !command.trim()) {
     return { error: "No command was provided." };
@@ -790,6 +825,18 @@ export async function runCommand(
       error:
         `Command not allowed: '${normalized}'. ` +
         `Allowed command prefixes: ${JSON.stringify(getAllowedCommands())}`,
+    };
+  }
+
+
+  if (isExecutionRiskCommand(normalized) && !confirm) {
+    return {
+      requires_confirmation: true,
+      command: normalized,
+      message:
+        `Command '${normalized}' can execute project or dependency code ` +
+        `(scripts, tests, install hooks, or plugins). It was NOT run. ` +
+        `Ask the user to confirm, then call run_command again with confirm=true.`,
     };
   }
 

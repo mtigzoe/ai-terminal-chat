@@ -1,5 +1,6 @@
 import { Provider, ProviderCapabilities, ProviderResponse, ToolCall } from "./base.ts";
 import { CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION } from "../prompts.ts";
+import { safeFetch } from "../safe-fetch.ts";
 import { buildToolSchemas } from "../tools.ts";
 
 interface AnthropicContentBlock {
@@ -198,17 +199,22 @@ export class AnthropicProvider extends Provider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
     try {
-      return await fetch(url, {
-        ...options,
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": this.apiKey || "",
-          "anthropic-version": "2023-06-01",
-          ...(options.headers as Record<string, string> | undefined),
+      const hostname = new URL(url).hostname;
+      return await safeFetch(
+        url,
+        {
+          ...options,
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": this.apiKey || "",
+            "anthropic-version": "2023-06-01",
+            ...(options.headers as Record<string, string> | undefined),
+          },
+          signal: controller.signal,
         },
-        signal: controller.signal,
-      });
+        { originalHostname: hostname },
+      );
     } catch (exc) {
       if (exc instanceof Error && exc.name === "AbortError") {
         throw new Error("Anthropic request timed out.");

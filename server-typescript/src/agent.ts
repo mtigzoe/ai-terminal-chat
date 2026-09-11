@@ -1,3 +1,4 @@
+import { isExecutionRiskCommand } from "./terminal.ts";
 import { Provider, ProviderResponse, ToolCall } from "./providers/base.ts";
 import type { PendingAction, ResumeState } from "./pending.ts";
 
@@ -768,9 +769,13 @@ async function* agentLoopCore(
       }
 
       let result: unknown;
+      const isExecutionConfirm =
+        functionName === "run_command" &&
+        isExecutionRiskCommand(String(functionArgs.command || ""));
       const isWriteTool =
         WRITE_TOOL_NAMES.has(functionName) ||
-        GIT_CONFIRM_TOOL_NAMES.has(functionName);
+        GIT_CONFIRM_TOOL_NAMES.has(functionName) ||
+        isExecutionConfirm;
 
       if (isWriteTool) {
         const previewArgs = { ...functionArgs, confirm: false };
@@ -826,7 +831,10 @@ async function* agentLoopCore(
           } else if (path?.trim()) {
             confirmMessage = `Waiting for confirmation to modify ${path}`;
           } else {
-            confirmMessage = `Waiting for confirmation for ${functionName}`;
+            confirmMessage =
+              functionName === "run_command"
+                ? `Waiting for confirmation to run: ${String(functionArgs.command || "").slice(0, 80)}`
+                : `Waiting for confirmation for ${functionName}`;
           }
 
           yield {
