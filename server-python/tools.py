@@ -1585,6 +1585,34 @@ def git_add(path: str, confirm: bool = False) -> dict:
     return {"path": rel_path, "staged": True}
 
 
+
+def _validate_git_remote_name(remote: str) -> str:
+    """Validate a remote name before passing it to Git as an argv value."""
+    value = (remote or "").strip()
+    if not value:
+        return ""
+    if value.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
+        raise ValueError("Invalid Git remote name.")
+    return value
+
+
+def _validate_git_branch_name(branch: str) -> str:
+    """Validate a branch name before passing it to Git as an argv value."""
+    value = (branch or "").strip()
+    if not value:
+        return ""
+    if (
+        value.startswith("-")
+        or value.startswith("/")
+        or value.endswith("/")
+        or value.endswith(".lock")
+        or ".." in value
+        or re.search(r"[\s~^:?*[\\]", value)
+    ):
+        raise ValueError("Invalid Git branch name.")
+    return value
+
+
 def git_fetch(remote: str = "") -> dict:
     """Fetch changes from a remote without merging.
 
@@ -1596,9 +1624,10 @@ def git_fetch(remote: str = "") -> dict:
     """
 
     try:
+        validated_remote = _validate_git_remote_name(remote)
         args = ["git", "fetch"]
-        if remote:
-            args.append(remote)
+        if validated_remote:
+            args.append(validated_remote)
         result = _run_git(args[1:], timeout=GIT_FETCH_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
@@ -1653,11 +1682,13 @@ def git_pull(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
         }
 
     try:
+        validated_remote = _validate_git_remote_name(remote)
+        validated_branch = _validate_git_branch_name(branch)
         args = ["git", "pull"]
-        if remote:
-            args.append(remote)
-        if branch:
-            args.append(branch)
+        if validated_remote:
+            args.append(validated_remote)
+        if validated_branch:
+            args.append(validated_branch)
         result = _run_git(args[1:], timeout=GIT_PULL_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
@@ -1854,11 +1885,13 @@ def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
         }
 
     try:
+        validated_remote = _validate_git_remote_name(remote)
+        validated_branch = _validate_git_branch_name(branch)
         args = ["git", "push"]
-        if remote:
-            args.append(remote)
-        if branch:
-            args.append(branch)
+        if validated_remote:
+            args.append(validated_remote)
+        if validated_branch:
+            args.append(validated_branch)
         result = _run_git(args[1:], timeout=GIT_PUSH_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
