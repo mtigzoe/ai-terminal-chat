@@ -1,5 +1,5 @@
 # Backend image for the TypeScript / Hono API (API-compatible with server-python).
-# Ollama is expected to run outside this container (see README).
+# Ollama is expected to run outside the container (see README).
 
 FROM node:22-bookworm-slim AS build
 
@@ -43,7 +43,9 @@ ENV HOST=0.0.0.0 \
 
 EXPOSE 9000
 
+# /providers is authenticated in non-loopback deployments. API_AUTH_TOKEN
+# is supplied at runtime by Docker Compose or another orchestrator.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT}/providers" >/dev/null || exit 1
+    CMD sh -c 'curl -fsS -H "Authorization: Bearer ${API_AUTH_TOKEN}" "http://127.0.0.1:${PORT}/providers" >/dev/null || exit 1'
 
 CMD ["node", "dist/server.js"]
