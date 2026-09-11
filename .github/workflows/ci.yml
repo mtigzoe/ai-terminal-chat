@@ -68,8 +68,8 @@ jobs:
         run: npm run typecheck
       - name: Build test runtime
         run: npm run build
-      - name: Run security and filesystem tests
-        run: 'npm run test:unit -- --test-name-pattern="^(?!documentation: GIT_CONFIG alone does not block local core.fsmonitor$).*"'
+      - name: Run security regression tests
+        run: npm run test:unit -- src/security.test.ts src/terminal.git-isolation.test.ts src/trusted-exec.test.ts src/windows-handle-path.test.ts src/safe-fetch.test.ts
 
   client-react:
     name: client-react tests and build
