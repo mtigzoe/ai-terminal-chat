@@ -52,7 +52,7 @@ describe("Git repository configuration isolation", () => {
     const hooksDir = join(repoDir, "malicious-hooks");
     mkdirSync(hooksDir, { recursive: true });
 
-    const hook = join(hooksDir, process.platform === "win32" ? "pre-commit.cmd" : "pre-commit");
+    const hook = join(repoDir, process.platform === "win32" ? "malicious-hooks\\pre-commit.cmd" : "malicious-hooks/pre-commit");
     if (process.platform === "win32") {
       writeFileSync(hook, `@echo hook > "${marker}"\r\n`, "utf8");
     } else {
@@ -60,7 +60,10 @@ describe("Git repository configuration isolation", () => {
       chmodSync(hook, 0o755);
     }
 
-    writeRepoConfig(repoDir, `[core]\n\thooksPath = ${hooksDir}\n`);
+    writeRepoConfig(
+      repoDir,
+      `[user]\n\tname = Test User\n\temail = test@example.com\n[core]\n\thooksPath = ${hooksDir}\n`,
+    );
     writeFileSync(join(repoDir, "test.txt"), "test\n", "utf8");
 
     expect((await gitAdd("test.txt", true)).error).toBeUndefined();
