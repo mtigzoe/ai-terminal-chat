@@ -149,6 +149,52 @@ function errorText(error: unknown): string {
   return value.message ?? String(error);
 }
 
+/**
+ * Reads only the requested Git identity value from a specific config scope.
+ * This is deliberately limited to user.name/user.email and uses --no-includes
+ * so repository-controlled include directives cannot redirect the read.
+ */
+async function readGitIdentityValue(scope: "--local" | "--global", key: "user.name" | "user.email"): Promise<string | undefined> {
+  const env = { ...process.env };
+  delete env.GIT_CONFIG;
+  delete env.GIT_CONFIG_GLOBAL;
+  delete env.GIT_CONFIG_SYSTEM;
+  delete env.GIT_CONFIG_NOSYSTEM;
+
+  try {
+    const result = await execFileAsync("git", [scope, "--no-includes", "--get", key], {
+      cwd: getProjectRoot(),
+      shell: false,
+      timeout: 5_000,
+      windowsHide: true,
+      maxBuffer: 8_192,
+      encoding: "utf8",
+      env,
+    });
+    const value = String(result.stdout ?? "").trim();
+    if (!value || value.length > 256 || /[\u0000\r\n]/.test(value)) return undefined;
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the normal commit identity without exposing any other repository
+ * configuration to the isolated Git subprocess. Explicit environment values
+ * remain authoritative; otherwise local identity is preferred, then global.
+ */
+async function getSafeCommitIdentity(): Promise<{ name?: string; email?: string }> {
+  const name = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME
+    ?? await readGitIdentityValue("--local", "user.name")
+    ?? await readGitIdentityValue("--global", "user.name");
+  const email = process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL
+    ?? await readGitIdentityValue("--local", "user.email")
+    ?? await readGitIdentityValue("--global", "user.email");
+
+  return { name, email };
+}
+
 async function runGit(args: string[], timeout: number): Promise<{
   code: number;
   stdout: string;
@@ -544,7 +590,11 @@ export async function gitCommit(message: string, confirm = false): Promise<Recor
   }
 
   try {
-    const result = await runGit(["commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS);
+    const identity = await getSafeCommitIdentity();
+    const identityArgs: string[] = [];
+    if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`);
+    if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`);
+    const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS);
     if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." };
 
     return {
