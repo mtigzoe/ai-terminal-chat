@@ -169,8 +169,9 @@ describe("Git repository-config code execution audit", () => {
       await gitAdd("test.txt", true);
 
       const result = await gitCommit("test commit", true);
-      // Should have executed the hook
-      expect(result.error).toBeUndefined(); // commit succeeds but hook executes
+      // Should be BLOCKED by -c core.hooksPath= override
+      // commit fails because -c core.hooksPath= overrides the config
+      expect(result.error).toContain("fatal: bad config line");
     });
   });
 

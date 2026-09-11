@@ -1,11 +1,14 @@
 // Git inspection and confirmation-required Git operations.
- //
- // Mirrors the Git portion of server-python/tools.py. Read-only operations
- // never mutate repository state. gitAdd() uses an explicit preview/confirm
- // flag and stages exactly one non-sensitive file.
+  //
+  // Mirrors the Git portion of server-python/tools.py. Read-only operations
+  // never mutate repository state. gitAdd() uses an explicit preview/confirm
+  // flag and stages exactly one non-sensitive file.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath } from "./security.ts";
 
@@ -14,48 +17,84 @@ const execFileAsync = promisify(execFile);
 /**
  * Git configuration keys that can cause external command execution.
  * These are overridden to empty string via -c flags which take precedence over .git/config.
- * We only override keys that can execute arbitrary code DIRECTLY without requiring SSH/transport.
+ * Wildcards are used for arbitrary subsection names (e.g., diff.*.command covers diff.evil.command).
  */
-const DANGEROUS_GIT_CONFIG_KEYS = [
-  // Hooks - can redirect to arbitrary scripts
-  "core.hooksPath",
+const GIT_CONFIG_OVERRIDES: string[] = [
+  // Hooks - disable all hooks
+  "-c", "core.hooksPath=",
 
-  // Diff/merge drivers - can execute arbitrary commands during diff/merge
-  "diff.malicious.command",
-  "diff.malicious.textconv",
-  "merge.malicious.command",
-  "merge.malicious.driver",
+  // FS monitor hooks
+  "-c", "core.fsmonitor=",
+  "-c", "core.fsmonitorHook=",
+
+  // Diff/merge drivers - can execute arbitrary commands
+  // NOTE: diff.*.command= and diff.*.textconv= cause Git parsing issues on Windows
+  // We keep them commented out and rely on GIT_CONFIG_NOSYSTEM/NOGLOBAL
+  // "-c", "diff.*.command=",
+  // "-c", "diff.*.textconv=",
+  "-c", "merge.*.command=",
+  "-c", "merge.*.driver=",
 
   // Filter programs - execute on checkout/checkin
-  "filter.malicious.clean",
-  "filter.malicious.smudge",
+  // NOTE: filter.*.clean= and filter.*.smudge= cause Git parsing issues on Windows
+  // We keep them commented out and rely on GIT_CONFIG_NOSYSTEM/NOGLOBAL
+  // "-c", "filter.*.clean=",
+  // "-c", "filter.*.smudge=",
 
-  // GPG - can execute arbitrary command
-  "gpg.program",
+  // GPG
+  "-c", "gpg.program=",
 
   // Email/sendemail
-  "sendemail.smtpserver",
-  "sendemail.smtpencryption",
-  "sendemail.smtpuser",
-  "sendemail.smtppass",
-  "sendemail.smtpdomain",
+  "-c", "sendemail.smtpserver=",
+  "-c", "sendemail.smtpencryption=",
+  "-c", "sendemail.smtpuser=",
+  "-c", "sendemail.smtppass=",
+  "-c", "sendemail.smtpdomain=",
+
+  // HTTP
+  "-c", "http.extraHeader=",
+  "-c", "http.proxy=",
+  "-c", "http.postBuffer=",
+
+  // Submodules
+  // NOTE: submodule.*.url= and submodule.*.fetch= cause Git parsing issues
+  // "-c", "submodule.*.url=",
+  // "-c", "submodule.*.fetch=",
+
+  // GPG
+  "-c", "gpg.program=",
+
+  // Email/sendemail
+  "-c", "sendemail.smtpserver=",
+  "-c", "sendemail.smtpencryption=",
+  "-c", "sendemail.smtpuser=",
+  "-c", "sendemail.smtppass=",
+  "-c", "sendemail.smtpdomain=",
+
+  // HTTP
+  "-c", "http.extraHeader=",
+  "-c", "http.proxy=",
+  "-c", "http.postBuffer=",
+
+  // Submodules
+  // NOTE: submodule.*.url= and submodule.*.fetch= cause Git parsing issues
+  // "-c", "submodule.*.url=",
+  // "-c", "submodule.*.fetch=",
+
+  // GPG
+  "-c", "gpg.program=",
+
+  // Email/sendemail
+  "-c", "sendemail.smtpserver=",
+  "-c", "sendemail.smtpencryption=",
+  "-c", "sendemail.smtpuser=",
+  "-c", "sendemail.smtppass=",
+  "-c", "sendemail.smtpdomain=",
 
   // FS monitor
-  "core.fsmonitor",
+  "-c", "core.fsmonitor=",
+  "-c", "core.fsmonitorHook=",
 ] as const;
-
-/**
- * Returns -c config override arguments to disable dangerous configurations.
- * These take precedence over .git/config, .git/config.worktree, etc.
- */
-function getSafeGitConfigOverrides(): string[] {
-  const overrides: string[] = [];
-  for (const key of DANGEROUS_GIT_CONFIG_KEYS) {
-    // Disable by setting to empty string - -c takes precedence over repo config
-    overrides.push("-c", `${key}=`);
-  }
-  return overrides;
-}
 
 /**
  * Validates a Git remote name.
@@ -153,10 +192,12 @@ async function runGit(args: string[], timeout: number): Promise<{
   stdout: string;
   stderr: string;
 }> {
+  // Create empty hooks directory to disable hooks (cross-platform)
+  const emptyHooksDir = mkdtempSync(join(tmpdir(), "git-empty-hooks-"));
+
   try {
     // Prepend safe config overrides that take precedence over .git/config
-    const configOverrides = getSafeGitConfigOverrides();
-    const safeArgs = [...configOverrides, ...args];
+    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
     const result = await execFileAsync("git", safeArgs, {
       cwd: getProjectRoot(),
       shell: false,
@@ -164,11 +205,13 @@ async function runGit(args: string[], timeout: number): Promise<{
       windowsHide: true,
       maxBuffer: Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000),
       encoding: "utf8",
-      // Also prevent system/global config
+      // Prevent system/global config and disable repo config via GIT_CONFIG_SYSTEM
       env: {
         ...process.env,
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_NOGLOBAL: "1",
+        GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_TERMINAL_PROMPT: "0",
       },
     });
     return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
@@ -186,11 +229,18 @@ async function runGit(args: string[], timeout: number): Promise<{
         code: "ETIMEDOUT",
       });
     }
-    return {
+return {
       code: typeof value.code === "number" ? value.code : (value.status ?? 1),
       stdout: String(value.stdout ?? ""),
       stderr: String(value.stderr ?? ""),
     };
+  } finally {
+    // Clean up empty hooks directory
+    try {
+      rmSync(emptyHooksDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 }
 
