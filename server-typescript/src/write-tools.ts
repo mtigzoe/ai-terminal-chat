@@ -614,6 +614,33 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
   }
 }
 
+function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string): void {
+  const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  let payload: Buffer;
+  let mode = "100644";
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory.");
+    mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";
+    payload = Buffer.alloc(st.size);
+    let offset = 0;
+    while (offset < st.size) {
+      const n = fs.readSync(fd, payload, offset, st.size - offset, offset);
+      if (n === 0) break;
+      offset += n;
+    }
+    if (offset < st.size) payload = payload.subarray(0, offset);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const hashed = runGit(["hash-object", "-w", "--stdin", "--no-filters"], payload.toString("utf8"));
+  if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
+  const oid = hashed.stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
+  const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
+  if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+}
+
 export function git_add(relPath: string, confirm = false): Record<string, unknown> {
   let filePath: string;
   try {
@@ -649,11 +676,10 @@ export function git_add(relPath: string, confirm = false): Record<string, unknow
     };
   }
 
-  const result = runGit(["add", "--", rel]);
-  if (result.code !== 0) {
-    return {
-      error: `git add failed: ${result.stderr.trim() || result.stdout.trim()}`,
-    };
+  try {
+    stageFileWithoutFiltersForWriteTool(rel, filePath);
+  } catch (exc) {
+    return { error: `git add failed: ${exc instanceof Error ? exc.message : String(exc)}` };
   }
 
   return { path: rel, staged: true };

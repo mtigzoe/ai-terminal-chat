@@ -1554,21 +1554,33 @@ def git_add(path: str, confirm: bool = False) -> dict:
         }
 
     try:
-        result = _run_git(["add", "--", rel_path], timeout=15)
+        # Never invoke `git add` here: repository .gitattributes can attach
+        # arbitrary filter.clean/filter.process commands. Hash the exact file
+        # bytes with --no-filters and update the index directly instead.
+        mode = "100755" if (file_path.stat().st_mode & 0o111) else "100644"
+        payload = file_path.read_bytes()
+        hashed = _run_git(
+            ["hash-object", "-w", "--stdin", "--no-filters"],
+            timeout=15,
+            input_text=payload.decode("utf-8", errors="surrogateescape"),
+        )
+        if hashed.returncode != 0:
+            return {"error": f"git add failed: {hashed.stderr.strip() or hashed.stdout.strip()}"}
+        oid = hashed.stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40,64}", oid, re.IGNORECASE):
+            return {"error": "git add failed: unexpected hash-object output."}
+        indexed = _run_git(
+            ["update-index", "--add", "--cacheinfo", f"{mode},{oid},{rel_path}"],
+            timeout=15,
+        )
+        if indexed.returncode != 0:
+            return {"error": f"git add failed: {indexed.stderr.strip() or indexed.stdout.strip()}"}
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
         return {"error": "Staging the file timed out."}
     except Exception as exc:
         return {"error": f"Could not stage file: {exc}"}
-
-    if result.returncode != 0:
-        return {
-            "error": (
-                f"git add failed: "
-                f"{result.stderr.strip() or result.stdout.strip()}"
-            )
-        }
 
     return {"path": rel_path, "staged": True}
 
