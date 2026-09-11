@@ -724,6 +724,48 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
 
 
 
+def _validate_directory_command_paths(command: str, args: list[str]) -> dict | None:
+    """Keep directory-inspection commands inside PROJECT_ROOT.
+
+    `run_command` executes with PROJECT_ROOT as cwd, but commands such as
+    `ls /tmp` or `dir C:/Users` can otherwise enumerate outside that root.
+    `pwd` also must not accept a path argument because its only purpose here
+    is to report the current project directory.
+    """
+
+    if not args:
+        return None
+
+    command_name = args[0].lower()
+    if command_name == "pwd":
+        if len(args) != 1:
+            return {"error": "pwd does not accept a path argument."}
+        return None
+
+    if command_name not in {"ls", "dir"}:
+        return None
+
+    # Keep this intentionally small: directory listings need no switches for
+    # the agent's supported workflow. Reject switches rather than allowing a
+    # future shell-specific option to reinterpret a path outside the project.
+    path_args = args[1:]
+    for value in path_args:
+        if value == "--":
+            return {
+                "error": "Directory listing options are not supported; use a project-relative path.",
+            }
+        if value.startswith("-") or value.startswith("/"):
+            return {
+                "error": f"Directory listing path must stay inside the project: {value}",
+            }
+        try:
+            safe_path(value)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+    return None
+
+
 def is_command_allowed(command: str) -> bool:
     """True if the command matches one of the allowed dev-command prefixes.
 
@@ -808,7 +850,11 @@ def run_command(command: str, confirm: bool = False) -> dict:
 
     try:
         args = shlex.split(command, posix=False)
-        
+
+        boundary_error = _validate_directory_command_paths(command, args)
+        if boundary_error is not None:
+            return boundary_error
+
         # `pwd` is not a standalone executable on Windows.
         # Translate to `cmd /c cd`, which prints the current directory.
         if os.name == "nt" and args and args[0].lower() == "pwd":
