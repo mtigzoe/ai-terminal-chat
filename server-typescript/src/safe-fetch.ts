@@ -67,7 +67,8 @@ function isIpv4(str: string): boolean {
 }
 
 function isIpv6(str: string): boolean {
-  return str.includes(":") && !str.includes(".");
+  // Accept both pure IPv6 and IPv4-mapped forms (::ffff:192.168.1.1 / ::ffff:c0a8:0101)
+  return str.includes(":");
 }
 
 function isLoopbackIpv4(ip: string): boolean {
@@ -117,6 +118,38 @@ export function blockedAddressReason(
       return null;
     }
     const normalized = ip.toLowerCase();
+
+    // IPv4-mapped IPv6 (must be checked before generic prefix rules;
+    // "ffff" would otherwise match the multicast prefix check).
+    // Handles both dotted-decimal (::ffff:192.168.1.1) and hex (::ffff:c0a8:0101).
+    const mappedMatch = normalized.match(/^::ffff:([0-9a-f:.]+)$/);
+    if (mappedMatch) {
+      const mappedPart = mappedMatch[1]!;
+
+      // Hex form: ::ffff:c0a8:0101 or ::ffff:c0a8:101
+      if (mappedPart.includes(":") && !mappedPart.includes(".")) {
+        const hexParts = mappedPart.split(":");
+        if (hexParts.length === 2) {
+          const high = parseInt(hexParts[0]!, 16);
+          const low = parseInt(hexParts[1]!, 16);
+          if (!Number.isNaN(high) && !Number.isNaN(low)) {
+            const ipv4 = [
+              (high >> 8) & 0xff,
+              high & 0xff,
+              (low >> 8) & 0xff,
+              low & 0xff,
+            ].join(".");
+            return blockedAddressReason(ipv4, allowLoopback);
+          }
+        }
+      }
+
+      // Dotted form: ::ffff:192.168.1.1
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(mappedPart)) {
+        return blockedAddressReason(mappedPart, allowLoopback);
+      }
+    }
+
     if (
       normalized === "::" ||
       normalized.startsWith("fe80:") ||
@@ -125,11 +158,6 @@ export function blockedAddressReason(
       normalized.startsWith("ff")
     ) {
       return "Resolved IP is a private/reserved IPv6 address";
-    }
-    // IPv4-mapped
-    const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) {
-      return blockedAddressReason(mapped[1]!, allowLoopback);
     }
     return null;
   }
