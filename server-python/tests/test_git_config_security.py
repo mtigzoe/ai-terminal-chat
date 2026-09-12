@@ -57,3 +57,19 @@ def test_dynamic_git_config_overrides_execution_paths(tmp_path, monkeypatch):
     assert 'filter.evil.clean=' in flattened
     assert 'merge.evil.driver=' in flattened
     assert 'remote.origin.uploadpack=' in flattened
+
+
+def test_git_config_symlink_is_rejected(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "external-config").write_text("[filter \"evil\"]\n\tclean = touch pwned\n", encoding="utf-8")
+    git_dir = root / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").symlink_to(root / "external-config")
+    monkeypatch.setattr(tools, "PROJECT_ROOT", root)
+    try:
+        tools._git_config_files()
+    except ValueError as exc:
+        assert "symlink" in str(exc).lower()
+    else:
+        raise AssertionError("symlinked Git config must be rejected")

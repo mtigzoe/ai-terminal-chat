@@ -938,14 +938,21 @@ def _git_config_files() -> list[Path]:
     paths: list[Path] = []
     for name in ("config", "config.worktree"):
         path = git_dir / name
+        if path.is_symlink():
+            raise ValueError("Git config path must not be a symlink.")
         try:
             resolved = path.resolve(strict=True)
-            resolved.relative_to(git_dir)
-            if path.is_symlink() or not path.is_file():
-                continue
-            paths.append(path)
-        except (OSError, ValueError):
+        except FileNotFoundError:
             continue
+        except OSError as exc:
+            raise ValueError(f"Could not inspect Git config path: {exc}") from exc
+        try:
+            resolved.relative_to(git_dir)
+        except ValueError as exc:
+            raise ValueError("Git config path escapes the Git directory.") from exc
+        if not path.is_file():
+            raise ValueError("Git config path must be a regular file.")
+        paths.append(path)
     return paths
 
 
