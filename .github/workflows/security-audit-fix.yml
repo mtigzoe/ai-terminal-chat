@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   fix-git-config-isolation:
-    if: github.sha == 'bb6256492086b6bf780b18ae27472ddd65d39c58'
+    if: github.sha == '281d85636d6106ddc1614bb17b77cfda09f83d9a'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,11 +63,9 @@ jobs:
               } else {
                 throw new Error(".git must be a directory or gitfile.");
               }
-
               const configPaths = [join(gitDir, "config")];
               const worktreeConfig = join(gitDir, "config.worktree");
               if (existsSync(worktreeConfig)) configPaths.push(worktreeConfig);
-
               const originals: Array<{ path: string; content: string; sanitized: string }> = [];
               for (const configPath of configPaths) {
                 const stat = lstatSync(configPath);
@@ -80,7 +78,6 @@ jobs:
                 const original = readFileSync(configPath, "utf8");
                 originals.push({ path: configPath, content: original, sanitized: stripDangerousGitConfig(original) });
               }
-
               const changed = originals.filter((entry) => entry.sanitized !== entry.content);
               if (changed.length === 0) return fn();
               for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
