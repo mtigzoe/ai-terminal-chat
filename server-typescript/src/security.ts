@@ -569,7 +569,7 @@ export function isSensitivePath(filePath: string): boolean {
   }
 
   const relParts = filePath === root ? [] : filePath.slice(root.length + 1).split(sep);
-  if (relParts.includes(".git")) {
+  if (relParts.some((part) => part.toLowerCase() === ".git")) {
     return true;
   }
 
