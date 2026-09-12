@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   fix-git-config-isolation:
-    if: github.sha == 'f927d704927b76af33b3ad59c52aadd149e2f51c'
+    if: github.sha == '29db1e60e793ee439b83b3bab7c287f90310cf03'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
