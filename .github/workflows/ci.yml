@@ -86,7 +86,27 @@ jobs:
           node-version: 24
       - name: Install dependencies
         run: npm ci
+      - name: Run Electron security regression tests
+        run: |
+          node tests/external-url.test.cjs
+          node tests/project-path.test.cjs
       - name: Run tests
         run: npm test -- --run
       - name: Build
         run: npm run build
+
+  electron-security-windows:
+    name: Electron security tests on Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run Electron security regression tests
+        working-directory: client-react
+        run: |
+          node tests/external-url.test.cjs
+          node tests/project-path.test.cjs
