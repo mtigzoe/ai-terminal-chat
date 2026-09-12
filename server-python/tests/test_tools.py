@@ -122,9 +122,8 @@ def test_is_forbidden_prefix_blocks_broad_git_prefix():
     # space must still be accepted.
     assert _is_forbidden_prefix("git status") is False
     assert _is_forbidden_prefix("git log") is False
-    # npm is intentionally not forbidden (safe subcommands include
-    # npm test, npm run build, npm install, etc.).
-    assert _is_forbidden_prefix("npm") is False
+    # npm is an execution-risk prefix and must require confirmation.
+    assert _is_forbidden_prefix("npm") is True
 
 
 def test_command_allowlist_rejects_unknown_commands():

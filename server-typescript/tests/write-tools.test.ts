@@ -187,7 +187,7 @@ describe("apply_patch", () => {
 +hello world
 `;
 
-  it("requires a git repository", () => {
+  it("does not require a git repository", () => {
     const nonGitDir = path.join(os.tmpdir(), `non-git-${Date.now()}`);
     fs.mkdirSync(nonGitDir, { recursive: true });
     const originalRoot = getProjectRoot();
@@ -195,8 +195,8 @@ describe("apply_patch", () => {
     fs.writeFileSync(path.join(nonGitDir, "greeting.txt"), "hello\n");
 
     const result = apply_patch(SAMPLE_PATCH, false);
-    expect((result as { error: string }).error).toBeDefined();
-    expect((result as { error: string }).error.toLowerCase()).toContain("git repository");
+    expect((result as { error?: string }).error).toBeUndefined();
+    expect((result as { requires_confirmation?: boolean }).requires_confirmation).toBe(true);
 
     setProjectRoot(originalRoot);
     fs.rmSync(nonGitDir, { recursive: true, force: true });

@@ -100,8 +100,14 @@ def _resolve_ollama_executable() -> str | None:
     try:
         resolved = Path(executable).resolve(strict=True)
         root = get_project_root().resolve()
+    except (OSError, RuntimeError):
+        return None
+
+    try:
         resolved.relative_to(root)
-    except (OSError, RuntimeError, ValueError):
+    except ValueError:
+        pass
+    else:
         return None
 
     if platform.system() == "Windows" and resolved.suffix.lower() not in {".exe", ".com", ".cmd", ".bat"}:
