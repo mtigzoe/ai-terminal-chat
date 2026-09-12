@@ -22,36 +22,40 @@ jobs:
           s = s.replace('  "-c", "merge.*.command=",\n  "-c", "merge.*.driver=",\n', '')
           p.write_text(s)
 
-          # safe-fetch.ts: keep Undici DNS pinning in production, but allow
-          # tests/providers that mock global fetch to intercept requests.
-          # Use an injectable fetch implementation with global fetch as default.
+          # safe-fetch.ts: use the global fetch implementation so provider
+          # tests can intercept requests; Node's global fetch supports a
+          # custom Undici dispatcher, preserving the DNS pin.
           p = Path('server-typescript/src/safe-fetch.ts')
           s = p.read_text()
-          s = s.replace('import { Agent, fetch as undiciFetch } from "undici";', 'import { Agent } from "undici";')
-          s = s.replace('import type { RequestInit as UndiciRequestInit } from "undici";\n', '')
-          s = s.replace('  /** Follow one safe redirect (default false — manual only). */\n  followRedirects?: boolean;\n', '  /** Follow one safe redirect (default false — manual only). */\n  followRedirects?: boolean;\n  /** Fetch implementation; defaults to the global fetch implementation. */\n  fetchImpl?: typeof globalThis.fetch;\n')
-          s = s.replace('    const response = await undiciFetch(url, {\n      ...(safeInit as UndiciRequestInit),\n      dispatcher: agent,\n    });', '    const fetchImpl = options.fetchImpl ?? globalThis.fetch;\n    const response = await fetchImpl(url, {\n      ...safeInit,\n      dispatcher: agent,\n    });')
+          s = s.replace('  /** Fetch implementation; defaults to the global fetch implementation. */\n  fetchImpl?: typeof globalThis.fetch;\n  /** Fetch implementation; defaults to the global fetch implementation. */\n  fetchImpl?: typeof globalThis.fetch;\n', '  /** Fetch implementation; defaults to the global fetch implementation. */\n  fetchImpl?: typeof globalThis.fetch;\n')
+          s = s.replace('const response = await fetchImpl(url, {', 'const response = await fetchImpl(url.toString(), {')
           p.write_text(s)
 
-          # Python Ollama resolver: reject project-local executable shims but
-          # accept trusted executables outside the project.
+          # Python Ollama: accept trusted executables outside the project and
+          # reject only project-local executables.
           p = Path('server-python/ollama.py')
           s = p.read_text()
-          old = '''    resolved = Path(found).resolve(strict=True)\n    try:\n        resolved.relative_to(PROJECT_ROOT.resolve())\n    except ValueError:\n        pass\n    return str(resolved)'''
-          new = '''    resolved = Path(found).resolve()\n    try:\n        resolved.relative_to(PROJECT_ROOT.resolve())\n    except ValueError:\n        return str(resolved)\n    return None'''
-          if old in s:
-              s = s.replace(old, new)
+          old = '''    try:\n        resolved = Path(executable).resolve(strict=True)\n        root = get_project_root().resolve()\n        resolved.relative_to(root)\n    except (OSError, RuntimeError, ValueError):\n        return None\n\n    if platform.system() == "Windows" and resolved.suffix.lower() not in {".exe", ".com", ".cmd", ".bat"}:\n        return None\n\n    return str(resolved)'''
+          new = '''    try:\n        resolved = Path(executable).resolve(strict=True)\n        root = get_project_root().resolve()\n    except (OSError, RuntimeError):\n        return None\n\n    try:\n        resolved.relative_to(root)\n    except ValueError:\n        pass\n    else:\n        return None\n\n    if platform.system() == "Windows" and resolved.suffix.lower() not in {".exe", ".com", ".cmd", ".bat"}:\n        return None\n\n    return str(resolved)'''
+          if old not in s: raise SystemExit('ollama resolver pattern missing')
+          p.write_text(s.replace(old, new))
+
+          # Keep Python security test aligned with the execution-risk policy.
+          p = Path('server-python/tests/test_tools.py')
+          s = p.read_text().replace('assert _is_forbidden_prefix("npm") is False', 'assert _is_forbidden_prefix("npm") is True')
+          s = s.replace('# npm is intentionally not forbidden (safe subcommands include\n    # npm test, npm run build, npm install, etc.).', '# npm is an execution-risk prefix and must require confirmation.')
           p.write_text(s)
 
-          # apply_patch is now an in-process filesystem operation and no longer
-          # requires a Git repository; update the stale regression assertion.
+          # apply_patch no longer invokes git, so it works in a non-Git project.
           p = Path('server-typescript/tests/write-tools.test.ts')
           s = p.read_text()
-          s = s.replace('''  it("requires a git repository", () => {\n    const result = apply_patch(SAMPLE_PATCH, false);\n    expect((result as { error: string }).error).toBeDefined();\n    expect((result as { error: string }).error.toLowerCase()).toContain("git");\n  });''', '''  it("does not require a git repository", () => {\n    const result = apply_patch(SAMPLE_PATCH, false);\n    expect((result as { error?: string }).error).not.toContain("git");\n  });''')
-          p.write_text(s)
+          old = '''  it("requires a git repository", () => {\n    const nonGitDir = path.join(os.tmpdir(), `non-git-${Date.now()}`);\n    fs.mkdirSync(nonGitDir, { recursive: true });\n    const originalRoot = getProjectRoot();\n    setProjectRoot(nonGitDir);\n    fs.writeFileSync(path.join(nonGitDir, "greeting.txt"), "hello\\n");\n\n    const result = apply_patch(SAMPLE_PATCH, false);\n    expect((result as { error: string }).error).toBeDefined();\n    expect((result as { error: string }).error.toLowerCase()).toContain("git repository");\n\n    setProjectRoot(originalRoot);\n    fs.rmSync(nonGitDir, { recursive: true, force: true });\n  });'''
+          new = '''  it("does not require a git repository", () => {\n    const nonGitDir = path.join(os.tmpdir(), `non-git-${Date.now()}`);\n    fs.mkdirSync(nonGitDir, { recursive: true });\n    const originalRoot = getProjectRoot();\n    setProjectRoot(nonGitDir);\n    fs.writeFileSync(path.join(nonGitDir, "greeting.txt"), "hello\\n");\n\n    const result = apply_patch(SAMPLE_PATCH, false);\n    expect((result as { error?: string }).error).toBeUndefined();\n    expect((result as { requires_confirmation?: boolean }).requires_confirmation).toBe(true);\n\n    setProjectRoot(originalRoot);\n    fs.rmSync(nonGitDir, { recursive: true, force: true });\n  });'''
+          if old not in s: raise SystemExit('apply_patch test pattern missing')
+          p.write_text(s.replace(old, new))
           PY
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add server-typescript/src/write-tools.ts server-typescript/src/safe-fetch.ts server-python/ollama.py server-typescript/tests/write-tools.test.ts
-          git diff --cached --quiet || git commit -m "test: restore security-hardened test compatibility"
+          git add server-typescript/src/write-tools.ts server-typescript/src/safe-fetch.ts server-python/ollama.py server-python/tests/test_tools.py server-typescript/tests/write-tools.test.ts
+          git diff --cached --quiet || git commit -m "test: align regressions with security hardening"
           git push
