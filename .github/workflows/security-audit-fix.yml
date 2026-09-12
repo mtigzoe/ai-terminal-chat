@@ -18,29 +18,28 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
           p = Path('server-typescript/src/git.ts')
           s = p.read_text()
-          old = '''              const configPaths = [join(gitDir, "config")];
-              const worktreeConfig = join(gitDir, "config.worktree");
-              if (existsSync(worktreeConfig)) configPaths.push(worktreeConfig);
-              const originals: Array<{ path: string; content: string; sanitized: string }> = [];'''
-          new = '''              let commonDir = gitDir;
-              const commondirPath = join(gitDir, "commondir");
-              if (existsSync(commondirPath)) {
-                const commonRef = readFileSync(commondirPath, "utf8").trim();
-                if (!commonRef) throw new Error("Invalid Git commondir file.");
-                commonDir = realpathSync(
-                  /^[A-Za-z]:[\\\\/]/.test(commonRef) || commonRef.startsWith("/")
-                    ? commonRef
-                    : join(gitDir, commonRef),
-                );
-              }
-              const configPaths = [join(commonDir, "config")];
-              const worktreeConfig = join(gitDir, "config.worktree");
-              if (existsSync(worktreeConfig)) configPaths.push(worktreeConfig);
-              const originals: Array<{ path: string; content: string; sanitized: string }> = [];'''
-          if old not in s: raise SystemExit('target config path block not found')
-          p.write_text(s.replace(old, new), encoding='utf-8')
+          pattern = r'''(?m)^    const configPaths = \[join\(gitDir, "config"\)\];\n    const worktreeConfig = join\(gitDir, "config\.worktree"\);\n    if \(existsSync\(worktreeConfig\)\) configPaths\.push\(worktreeConfig\);\n    const originals: Array<\{ path: string; content: string; sanitized: string \}> = \[\];'''
+          replacement = '''    let commonDir = gitDir;
+    const commondirPath = join(gitDir, "commondir");
+    if (existsSync(commondirPath)) {
+      const commonRef = readFileSync(commondirPath, "utf8").trim();
+      if (!commonRef) throw new Error("Invalid Git commondir file.");
+      commonDir = realpathSync(
+        /^[A-Za-z]:[\\\\/]/.test(commonRef) || commonRef.startsWith("/")
+          ? commonRef
+          : join(gitDir, commonRef),
+      );
+    }
+    const configPaths = [join(commonDir, "config")];
+    const worktreeConfig = join(gitDir, "config.worktree");
+    if (existsSync(worktreeConfig)) configPaths.push(worktreeConfig);
+    const originals: Array<{ path: string; content: string; sanitized: string }> = [];'''
+          updated, count = re.subn(pattern, replacement, s)
+          if count != 1: raise SystemExit(f'target config block not found or ambiguous: {count}')
+          p.write_text(updated, encoding='utf-8')
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
