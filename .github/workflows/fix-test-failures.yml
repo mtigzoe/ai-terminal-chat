@@ -10,32 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fix test mocks
+      - name: Fix final syntax issue
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          p = Path('server-python/tests/test_ollama_install.py')
-          s = p.read_text()
-          old = '''def test_launch_ollama_run_opens_console_on_windows():\n    fake_process = Mock(pid=1111)\n    with patch("ollama.shutil.which", return_value="C:\\\\ollama\\\\ollama.exe"),'''
-          new = '''def test_launch_ollama_run_opens_console_on_windows(tmp_path):\n    fake_process = Mock(pid=1111)\n    fake_ollama = tmp_path / "ollama.exe"\n    fake_ollama.write_text("stub")\n    with patch("ollama.shutil.which", return_value=str(fake_ollama)),'''
-          if old not in s: raise SystemExit('python Windows test pattern missing')
-          p.write_text(s.replace(old, new))
-
-          # The write tool now depends on the shared SSH isolation helper;
-          # provide it in the existing Git module mock.
-          p = Path('server-typescript/tests/api.test.ts')
-          s = p.read_text().replace('''  gitBranch: vi.fn(),\n}));''', '''  gitBranch: vi.fn(),\n  getGitSshCommand: vi.fn(() => "ssh -o BatchMode=yes"),\n}));''')
-          p.write_text(s)
-
-          # Production intentionally resolves the trusted PowerShell absolute
-          # path; assert its executable name rather than the test temp prefix.
-          p = Path('server-typescript/tests/ollama-cli.test.ts')
-          s = p.read_text().replace('expect(capturedCommand?.[0]).toBe("powershell.exe");', 'expect(capturedCommand?.[0]?.toLowerCase()).toMatch(/powershell\\.exe$/);')
+          p = Path('server-typescript/src/write-tools.ts')
+          s = p.read_text().replace('''  return;\n\nexport function git_add''', '''  return;\n}\n\nexport function git_add''')
           p.write_text(s)
           PY
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add server-python/tests/test_ollama_install.py server-typescript/tests/api.test.ts server-typescript/tests/ollama-cli.test.ts
-          git diff --cached --quiet || git commit -m "test: update mocks for trusted executable isolation"
+          git add server-typescript/src/write-tools.ts
+          git diff --cached --quiet || git commit -m "fix: close git staging helper"
           git push
