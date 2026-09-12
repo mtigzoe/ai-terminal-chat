@@ -197,6 +197,16 @@ describe("searchFiles", () => {
     assert.equal(result.matches[0]?.path, "hit.txt");
   });
 
+  test("does not descend into case-variant .git directories", () => {
+    mkdirSync(join(projectRoot, ".GIT"));
+    writeFileSync(join(projectRoot, ".GIT", "config"), "sensitive-remote-token");
+
+    const result = searchFiles("sensitive-remote-token", ".");
+    assert.ok(!isToolError(result));
+    if (isToolError(result)) return;
+    assert.equal(result.matches.length, 0);
+  });
+
   test("skips binary files without erroring", () => {
     writeFileSync(join(projectRoot, "bin.dat"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
     writeFileSync(join(projectRoot, "text.txt"), "findme");
