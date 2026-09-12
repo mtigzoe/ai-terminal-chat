@@ -313,7 +313,7 @@ describe("launchOllamaRun on Windows", () => {
     const result = await launchOllamaRun("llama3.1");
 
     expect(result).toEqual({ started: true, model: "llama3.1", pid: 4242 });
-    expect(capturedCommand?.[0]).toBe("powershell.exe");
+    expect(capturedCommand?.[0]?.toLowerCase()).toMatch(/powershell\.exe$/);
     expect(capturedCommand).toContain("-NoProfile");
     expect(capturedCommand?.some((arg) => arg.includes("Start-Process"))).toBe(true);
     // The actual bug this guards against: launching used to re-resolve the

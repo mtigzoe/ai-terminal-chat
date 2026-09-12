@@ -44,6 +44,7 @@ vi.mock("../src/git.ts", () => ({
   gitDiff: vi.fn(),
   gitLog: vi.fn(),
   gitBranch: vi.fn(),
+  getGitSshCommand: vi.fn(() => "ssh -o BatchMode=yes"),
 }));
 
 vi.mock("../src/ollama-cli.ts", () => ({

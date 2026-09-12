@@ -91,9 +91,11 @@ def test_launch_ollama_run_starts_detached_process_on_posix():
     assert "creationflags" not in kwargs
 
 
-def test_launch_ollama_run_opens_console_on_windows():
+def test_launch_ollama_run_opens_console_on_windows(tmp_path):
     fake_process = Mock(pid=1111)
-    with patch("ollama.shutil.which", return_value="C:\\ollama\\ollama.exe"), patch(
+    fake_ollama = tmp_path / "ollama.exe"
+    fake_ollama.write_text("stub")
+    with patch("ollama.shutil.which", return_value=str(fake_ollama)), patch(
         "ollama.platform.system", return_value="Windows"
     ), patch("ollama.subprocess.Popen", return_value=fake_process) as popen, patch(
         "ollama.subprocess.CREATE_NEW_CONSOLE", 0x00000010, create=True
