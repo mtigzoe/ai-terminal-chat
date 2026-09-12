@@ -2,110 +2,54 @@
   "name": "chat-app",
   "version": "0.2.0",
   "private": true,
-  "type": "module",
   "main": "electron/main.cjs",
-  "dependencies": {
-    "@fortawesome/fontawesome-svg-core": "^6.6.0",
-    "@fortawesome/free-solid-svg-icons": "^6.6.0",
-    "@fortawesome/react-fontawesome": "^0.2.2",
-    "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.3.1",
-    "@testing-library/user-event": "^14.5.2",
-    "@vitejs/plugin-react": "^4.3.1",
-    "axe-core": "^4.10.2",
-    "axios": "^1.7.4",
-    "jest-axe": "^10.0.0",
-    "jest-environment-jsdom": "^30.1.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-markdown": "^9.0.1",
-    "vitest": "^2.1.8",
-    "web-vitals": "^2.1.4"
-  },
   "scripts": {
-    "start": "vite --port 3000",
+    "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "serve": "vite --port 3000",
-    "dev": "vite --port 3000",
     "test": "vitest run",
-    "test:watch": "vitest",
     "electron": "npm run build && electron . --production",
     "electron:dev": "electron . --dev",
     "electron:build:win": "npm run build && node scripts/prepare-server.cjs && npx --yes electron-builder@26.15.3 --win nsis",
     "electron:build:win:portable": "npm run build && node scripts/prepare-server.cjs && npx --yes electron-builder@26.15.3 --win portable"
   },
+  "dependencies": {
+    "@ai-sdk/openai": "^1.3.24",
+    "@vitejs/plugin-react": "^4.3.3",
+    "axios": "^1.8.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.3",
+    "remark-gfm": "^4.0.1",
+    "vite": "^5.4.21"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@vitest/coverage-v8": "^2.1.9",
+    "@vitest/ui": "^2.1.9",
+    "babel-plugin-macros": "^3.1.0",
+    "electron": "^44.3.0",
+    "jsdom": "^24.1.3",
+    "vitest": "^2.1.9"
+  },
   "build": {
-    "appId": "io.spendmoney.ai-terminal-chat",
+    "appId": "com.mtigzoe.ai-terminal-chat",
     "productName": "AI Terminal Chat",
-    "directories": {
-      "output": "release"
-    },
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "build/server/**/*"
     ],
-    "extraResources": [
-      {
-        "from": "build/server/dist",
-        "to": "server-typescript/dist",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "build/server/package.json",
-        "to": "server-typescript/package.json"
-      },
-      {
-        "from": "build/server/package-lock.json",
-        "to": "server-typescript/package-lock.json"
-      },
-      {
-        "from": "build/server/node_modules",
-        "to": "server-typescript/node_modules",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
     "win": {
       "target": [
-        "nsis"
-      ],
-      "artifactName": "AI-Terminal-Chat-Setup-${version}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    },
-    "portable": {
-      "artifactName": "AI-Terminal-Chat-Portable-${version}.${ext}"
+        "nsis",
+        "portable"
+      ]
     }
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  },
-  "devDependencies": {
-    "babel-plugin-macros": "^3.1.0",
-    "electron": "^33.2.0",
-    "jsdom": "^24.1.3"
   }
 }
