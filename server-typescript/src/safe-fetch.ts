@@ -255,10 +255,11 @@ export async function safeFetch(
   try {
     const safeInit = createSafeRequestInit(init);
     const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-    const response = await fetchImpl(url.toString(), {
+    const pinnedInit = {
       ...safeInit,
       dispatcher: agent,
-    });
+    } as RequestInit & { dispatcher: Agent };
+    const response = await fetchImpl(url.toString(), pinnedInit);
 
     // Manual redirect handling: validate + optional single hop with re-pin.
     const status = response.status;
