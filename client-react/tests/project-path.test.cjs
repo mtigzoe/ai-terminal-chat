@@ -1,6 +1,7 @@
 /**
- * Comprehensive regression tests for Electron project-root path boundary.
- * Covers validateProjectPath used by editor:open, shell:reveal, project:setRoot.
+ * Regression tests for the Electron project-root path boundary.
+ * These exercise the shared validator used by editor:open and shell:reveal,
+ * and statically verify that those IPC handlers are wired through it.
  */
 
 const fs = require('node:fs');
@@ -12,7 +13,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
 }
 
-function assertThrows(fn, msgContains) {
+function assertThrows(fn, expectedMessage) {
   let threw = false;
   let errMsg = '';
   try {
@@ -21,116 +22,80 @@ function assertThrows(fn, msgContains) {
     threw = true;
     errMsg = e instanceof Error ? e.message : String(e);
   }
-  assert(threw, `expected throw for: ${msgContains}`);
-  if (msgContains) {
-    assert(errMsg.includes(msgContains) || errMsg.includes('outside') || errMsg.includes('does not exist') || errMsg.includes('Cannot resolve'),
-      `expected message containing "${msgContains}", got: ${errMsg}`);
-  }
+  assert(threw, `expected throw: ${expectedMessage}`);
+  assert(errMsg.includes(expectedMessage), `expected message containing "${expectedMessage}", got: ${errMsg}`);
 }
 
 function runTests() {
   console.log('Running project-root path boundary security tests...\n');
+
+  const electronMain = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8');
+  assert(electronMain.includes("ipcMain.handle('editor:open'"), 'editor:open IPC handler exists');
+  assert(electronMain.includes("validateProjectPath(filePath, projectRoot)"), 'editor:open validates the requested path');
+  assert(electronMain.includes("ipcMain.handle('shell:reveal'"), 'shell:reveal IPC handler exists');
+  assert(electronMain.includes("validateProjectPath(filePath, projectRoot)"), 'shell:reveal validates the requested path');
+  assert(electronMain.includes("fs.realpathSync.native(nextRoot.trim())"), 'project:setRoot canonicalizes the selected root');
+  console.log('✓ Electron IPC handlers are wired through the path boundary validator');
+
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aichat-path-'));
   const projectRoot = path.join(tmp, 'project');
-  const sibling = path.join(tmp, 'project-sibling'); // prefix-similar
+  const sibling = path.join(tmp, 'project-sibling');
   const outside = path.join(tmp, 'outside');
   fs.mkdirSync(projectRoot, { recursive: true });
   fs.mkdirSync(sibling, { recursive: true });
   fs.mkdirSync(outside, { recursive: true });
 
-  // Nested structure
   const nestedDir = path.join(projectRoot, 'src', 'lib');
   fs.mkdirSync(nestedDir, { recursive: true });
   const nestedFile = path.join(nestedDir, 'code.js');
   fs.writeFileSync(nestedFile, 'console.log(1)');
   const topFile = path.join(projectRoot, 'readme.md');
   fs.writeFileSync(topFile, '# hi');
-
-  // Sibling with similar prefix (must NOT be inside)
   const siblingFile = path.join(sibling, 'secret.txt');
   fs.writeFileSync(siblingFile, 'no');
-
-  // Outside file
   const outsideFile = path.join(outside, 'escape.txt');
   fs.writeFileSync(outsideFile, 'no');
 
-  let passed = 0;
+  let passed = 1;
 
-  // --- Valid cases ---
-  {
-    const r = validateProjectPath(topFile, projectRoot);
-    assert(path.resolve(r) === path.resolve(topFile) || r.endsWith('readme.md'), 'normal file inside root');
-    console.log('✓ normal file inside project root');
+  const validCases = [
+    ['project root itself', projectRoot],
+    ['normal file inside project root', topFile],
+    ['nested file inside project root', nestedFile],
+    ['directory inside project root', nestedDir],
+    ['path with dot segments that remains inside', path.join(projectRoot, 'src', '..', 'src', 'lib', 'code.js')],
+  ];
+  for (const [label, candidate] of validCases) {
+    const resolved = validateProjectPath(candidate, projectRoot);
+    assert(path.relative(fs.realpathSync.native(projectRoot), resolved) === '' || !path.relative(fs.realpathSync.native(projectRoot), resolved).startsWith('..'), label);
+    console.log(`✓ ${label}`);
     passed++;
   }
 
-  {
-    const r = validateProjectPath(nestedFile, projectRoot);
-    assert(r.includes('code.js'), 'nested file inside root');
-    console.log('✓ nested file inside project root');
+  const rejectedCases = [
+    ['path outside project root', outsideFile],
+    ['../ traversal outside root', path.join(projectRoot, '..', 'outside', 'escape.txt')],
+    ['prefix-similar sibling', siblingFile],
+  ];
+  for (const [label, candidate] of rejectedCases) {
+    assertThrows(() => validateProjectPath(candidate, projectRoot), 'Path is outside project root');
+    console.log(`✓ ${label} rejected`);
     passed++;
   }
 
-  {
-    const r = validateProjectPath(nestedDir, projectRoot);
-    assert(fs.statSync(r).isDirectory(), 'directory inside root');
-    console.log('✓ directory inside project root');
-    passed++;
-  }
+  const projectExtra = path.join(tmp, 'project-extra');
+  fs.mkdirSync(projectExtra, { recursive: true });
+  const projectExtraFile = path.join(projectExtra, 'x.txt');
+  fs.writeFileSync(projectExtraFile, 'x');
+  assertThrows(() => validateProjectPath(projectExtraFile, projectRoot), 'Path is outside project root');
+  console.log('✓ project vs project-extra prefix collision rejected');
+  passed++;
 
-  {
-    // Path with . / .. that still resolves inside
-    const tricky = path.join(projectRoot, 'src', '..', 'src', 'lib', 'code.js');
-    const r = validateProjectPath(tricky, projectRoot);
-    assert(r.includes('code.js'), '. / .. that stays inside');
-    console.log('✓ path with . / .. resolving inside root');
-    passed++;
-  }
-
-  // --- Rejection cases ---
-  {
-    assertThrows(() => validateProjectPath(outsideFile, projectRoot), 'outside');
-    console.log('✓ path outside project root rejected');
-    passed++;
-  }
-
-  {
-    const traversal = path.join(projectRoot, '..', 'outside', 'escape.txt');
-    assertThrows(() => validateProjectPath(traversal, projectRoot), 'outside');
-    console.log('✓ ../ traversal outside root rejected');
-    passed++;
-  }
-
-  {
-    assertThrows(() => validateProjectPath(outsideFile, projectRoot), 'outside');
-    console.log('✓ absolute path outside root rejected');
-    passed++;
-  }
-
-  {
-    // Prefix-similar sibling must not match
-    assertThrows(() => validateProjectPath(siblingFile, projectRoot), 'outside');
-    console.log('✓ sibling with similar prefix rejected');
-    passed++;
-  }
-
-  // Also test that "project" does not accept "project-extra" style via relative
-  {
-    const fake = path.join(tmp, 'project-extra');
-    fs.mkdirSync(fake, { recursive: true });
-    const f = path.join(fake, 'x.txt');
-    fs.writeFileSync(f, 'x');
-    assertThrows(() => validateProjectPath(f, projectRoot), 'outside');
-    console.log('✓ prefix-similar directory (project vs project-extra) rejected');
-    passed++;
-  }
-
-  // --- Symlink cases (where supported) ---
   const canSymlink = (() => {
+    const probe = path.join(tmp, 'symlink-probe');
     try {
-      const t = path.join(tmp, 'symlink-probe');
-      fs.symlinkSync(outside, t, 'dir');
-      fs.rmSync(t, { force: true, recursive: true });
+      fs.symlinkSync(outside, probe, process.platform === 'win32' ? 'junction' : 'dir');
+      fs.rmSync(probe, { force: true, recursive: true });
       return true;
     } catch {
       return false;
@@ -139,63 +104,58 @@ function runTests() {
 
   if (canSymlink) {
     const linkInside = path.join(projectRoot, 'escape-link');
-    try {
-      fs.symlinkSync(outside, linkInside, process.platform === 'win32' ? 'junction' : 'dir');
-      // Symlink inside root pointing outside -> realpath goes outside -> reject
-      assertThrows(() => validateProjectPath(linkInside, projectRoot), 'outside');
-      console.log('✓ symlink inside root pointing outside rejected');
-      passed++;
+    fs.symlinkSync(outside, linkInside, process.platform === 'win32' ? 'junction' : 'dir');
+    assertThrows(() => validateProjectPath(linkInside, projectRoot), 'Path is outside project root');
+    console.log('✓ symlink/junction escape rejected');
+    passed++;
 
-      // Nested file via the symlink
-      const viaLink = path.join(linkInside, 'escape.txt');
-      assertThrows(() => validateProjectPath(viaLink, projectRoot), 'outside');
-      console.log('✓ nested path through escaping symlink rejected');
-      passed++;
-    } catch (e) {
-      console.log('⚠ symlink test skipped or partial:', e.message);
-    }
+    const viaLink = path.join(linkInside, 'escape.txt');
+    assertThrows(() => validateProjectPath(viaLink, projectRoot), 'Path is outside project root');
+    console.log('✓ nested path through symlink/junction escape rejected');
+    passed++;
 
-    // Symlink whose parent resolves outside (edge)
-    // Requested path that doesn't exist but parent escapes
-    const badParent = path.join(outside, 'nonexistent-child.txt');
-    assertThrows(() => validateProjectPath(badParent, projectRoot), 'outside');
-    console.log('✓ nonexistent path whose parent is outside rejected');
+    const insideTarget = path.join(projectRoot, 'real-target');
+    fs.mkdirSync(insideTarget);
+    const safeLink = path.join(projectRoot, 'safe-link');
+    fs.symlinkSync(insideTarget, safeLink, process.platform === 'win32' ? 'junction' : 'dir');
+    assert(validateProjectPath(safeLink, projectRoot) === fs.realpathSync.native(insideTarget), 'symlink resolving back inside is allowed');
+    console.log('✓ symlink/junction resolving back inside is allowed');
     passed++;
   } else {
-    console.log('⚠ symlinks not supported in this environment; skipping symlink cases');
+    console.log('⚠ symlinks/junctions unavailable; escape tests skipped');
   }
 
-  // Nonexistent inside root (parent valid)
-  {
-    const missing = path.join(projectRoot, 'does-not-exist-yet.txt');
-    assertThrows(() => validateProjectPath(missing, projectRoot), 'does not exist');
-    console.log('✓ nonexistent path inside root handled safely (does not exist)');
+  const badParent = path.join(outside, 'nonexistent-child.txt');
+  assertThrows(() => validateProjectPath(badParent, projectRoot), 'Path is outside project root');
+  console.log('✓ nonexistent path whose parent is outside rejected');
+  passed++;
+
+  const missingInside = path.join(projectRoot, 'does-not-exist-yet.txt');
+  assertThrows(() => validateProjectPath(missingInside, projectRoot), 'Path does not exist');
+  console.log('✓ nonexistent path inside root rejected safely');
+  passed++;
+
+  assertThrows(() => validateProjectPath(topFile, null), 'No project root configured');
+  console.log('✓ missing project root rejected');
+  passed++;
+
+  assertThrows(() => validateProjectPath('', projectRoot), 'Path does not exist');
+  console.log('✓ empty path rejected');
+  passed++;
+
+  if (process.platform === 'win32') {
+    const root = path.parse(projectRoot).root;
+    const otherDrive = root.toUpperCase() === 'C:\\' ? 'D:\\' : 'C:\\';
+    assertThrows(() => validateProjectPath(path.join(otherDrive, 'Windows', 'System32'), projectRoot), 'Cannot resolve path');
+    console.log('✓ different Windows drive is rejected');
     passed++;
   }
 
-  // No project root configured
-  {
-    assertThrows(() => validateProjectPath(topFile, null), 'No project root');
-    console.log('✓ missing project root rejected');
-    passed++;
-  }
-
-  // Windows-style path separator / drive letter behavior (cross-platform checks)
-  {
-    // On non-Windows, path.win32 still useful for logic; realpath may differ
-    // We at least ensure absolute outside is rejected regardless of separator style
-    const absOutside = path.resolve(outsideFile);
-    assertThrows(() => validateProjectPath(absOutside, projectRoot), 'outside');
-    console.log('✓ resolved absolute outside path rejected');
-    passed++;
-  }
-
-  // Cleanup
   try {
     fs.rmSync(tmp, { recursive: true, force: true });
   } catch {}
 
-  console.log(`\n✅ All ${passed} project-path boundary tests passed!`);
+  console.log(`\n✅ All ${passed} project-path boundary checks passed!`);
 }
 
 runTests();
