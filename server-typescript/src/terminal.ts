@@ -379,6 +379,28 @@ export function isCommandAllowed(command: string): boolean {
     normalized = command.trim();
   }
 
+  const pipRequirementDefault = "pip install -r requirements.txt";
+
+  if (allowedCommandPrefixes.includes(pipRequirementDefault)) {
+    try {
+      const tokens = tokenizeCommand(command);
+
+      if (
+        tokens.length === 4 &&
+        tokens[0].toLowerCase() === "pip" &&
+        tokens[1].toLowerCase() === "install" &&
+        tokens[2] === "-r" &&
+        tokens[3].trim() !== "" &&
+        !tokens[3].startsWith("-") &&
+        !/^[a-z][a-z0-9+.-]*:\/\//i.test(tokens[3])
+      ) {
+        return true;
+      }
+    } catch {
+      // Fall through to normal allowlist handling.
+    }
+  }
+
   return allowedCommandPrefixes.some(
     (prefix) =>
       normalized === prefix || normalized.startsWith(`${prefix} `),
@@ -802,6 +824,214 @@ function directoryListingPermissionError(command: string): string | null {
   return null;
 }
 
+function looksLikeLocalPath(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+
+  if (trimmed.startsWith("file:")) return true;
+  if (isAbsoluteOnAnyPlatform(trimmed)) return true;
+  if (trimmed === "." || trimmed === "..") return true;
+  if (trimmed.startsWith("./") || trimmed.startsWith("../")) return true;
+  if (trimmed.startsWith(".\\") || trimmed.startsWith("..\\")) return true;
+  if (trimmed.includes("/") || trimmed.includes("\\")) return true;
+
+  return false;
+}
+
+function executionPathError(root: string, rawPath: string): string | null {
+  let candidate = rawPath.trim();
+
+  if (candidate.startsWith("file:")) {
+    candidate = candidate.slice(5);
+    if (candidate.startsWith("//")) {
+      candidate = candidate.slice(2);
+    }
+  }
+
+  if (!looksLikeLocalPath(candidate)) {
+    candidate = join(root, candidate);
+  }
+
+  try {
+    const absoluteCandidate = isAbsoluteOnAnyPlatform(candidate)
+      ? candidate
+      : join(root, candidate);
+
+    const resolvedCandidate = resolveFollowingSymlinks(absoluteCandidate);
+
+    if (!isPathWithinRoot(root, resolvedCandidate)) {
+      return `Access denied: execution path is outside the project root: ${rawPath}`;
+    }
+  } catch {
+    return `Access denied: could not safely validate execution path: ${rawPath}`;
+  }
+
+  return null;
+}
+
+function executionPathPermissionError(command: string): string | null {
+  let tokens: string[];
+
+  try {
+    tokens = tokenizeCommand(command);
+  } catch {
+    return "Access denied: could not safely parse execution command paths.";
+  }
+
+  if (tokens.length === 0) return null;
+
+  const root = getProjectRoot();
+  const executable = tokens[0].toLowerCase();
+
+  const isPytest =
+    executable === "pytest" ||
+    ((executable === "python" ||
+      executable === "python3" ||
+      executable === "python.exe" ||
+      executable === "python3.exe") &&
+      tokens.length >= 3 &&
+      tokens[1] === "-m" &&
+      tokens[2].toLowerCase() === "pytest");
+
+  if (
+    isPytest ||
+    executable === "black" ||
+    executable === "ruff" ||
+    executable === "flake8"
+  ) {
+    const pathOptions = new Set([
+      "-c",
+      "--confcutdir",
+      "--rootdir",
+      "--basetemp",
+      "--config",
+    ]);
+
+    const startIndex =
+      isPytest &&
+      (tokens[1] === "-m" || tokens[1] === "--module")
+        ? 3
+        : 1;
+
+    for (let i = startIndex; i < tokens.length; i += 1) {
+      const token = tokens[i];
+
+      if (pathOptions.has(token)) {
+        const value = tokens[i + 1];
+
+        if (value) {
+          const error = executionPathError(root, value);
+          if (error) return error;
+          i += 1;
+        }
+
+        continue;
+      }
+
+      const option = [...pathOptions].find(
+        (candidate) => token.startsWith(`${candidate}=`),
+      );
+
+      if (option) {
+        const error = executionPathError(
+          root,
+          token.slice(option.length + 1),
+        );
+
+        if (error) return error;
+        continue;
+      }
+
+      if (token.startsWith("-")) continue;
+
+      const target = token.split("::", 1)[0];
+
+      if (looksLikeLocalPath(target)) {
+        const error = executionPathError(root, target);
+        if (error) return error;
+      }
+    }
+  }
+
+  if (executable === "npm") {
+    for (let i = 1; i < tokens.length; i += 1) {
+      const token = tokens[i];
+
+      if (token === "--prefix" || token === "--workspace") {
+        const value = tokens[i + 1];
+
+        if (value) {
+          const error = executionPathError(root, value);
+          if (error) return error;
+          i += 1;
+        }
+
+        continue;
+      }
+
+      for (const option of ["--prefix", "--workspace"]) {
+        if (token.startsWith(`${option}=`)) {
+          const error = executionPathError(
+            root,
+            token.slice(option.length + 1),
+          );
+
+          if (error) return error;
+        }
+      }
+    }
+  }
+
+  if (executable === "pip" || executable === "pip3") {
+    for (let i = 1; i < tokens.length; i += 1) {
+      const token = tokens[i];
+
+      if (
+        token === "-r" ||
+        token === "--requirement" ||
+        token === "-e" ||
+        token === "--editable"
+      ) {
+        const value = tokens[i + 1];
+
+        if (!value) {
+          return `Access denied: missing path for ${token}.`;
+        }
+
+        const error = executionPathError(root, value);
+        if (error) return error;
+
+        i += 1;
+        continue;
+      }
+
+      for (const option of [
+        "--requirement",
+        "--editable",
+        "-r",
+        "-e",
+      ]) {
+        if (token.startsWith(`${option}=`)) {
+          const value = token.slice(option.length + 1);
+
+          if (!value) {
+            return `Access denied: missing path for ${option}.`;
+          }
+
+          const error = executionPathError(root, value);
+          if (error) return error;
+        }
+      }
+
+      if (!token.startsWith("-") && looksLikeLocalPath(token)) {
+        const error = executionPathError(root, token);
+        if (error) return error;
+      }
+    }
+  }
+
+  return null;
+}
 function executableForCommand(args: string[]): {
   file: string;
   args: string[];
@@ -910,6 +1140,13 @@ export async function runCommand(
   const dirListingError = directoryListingPermissionError(normalized);
   if (dirListingError) {
     return { error: dirListingError };
+  }
+
+  const executionPathErrorResult =
+    executionPathPermissionError(normalized);
+
+  if (executionPathErrorResult) {
+    return { error: executionPathErrorResult };
   }
 
   if (isExecutionRiskCommand(normalized) && !confirm) {

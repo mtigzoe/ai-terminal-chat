@@ -552,14 +552,14 @@ test("isCommandAllowed: 'npm install' and 'npm ci' allow package args (intention
   assert.equal(isCommandAllowed("npm install express"), true);
 });
 
-test("isCommandAllowed: 'pip install -r requirements.txt' is specific, allows requirements.txt path arg", () => {
+test("isCommandAllowed: 'pip install -r' allows a requirements path", () => {
   __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
   assert.equal(isCommandAllowed("pip install -r requirements.txt"), true);
   assert.equal(isCommandAllowed("pip list"), true);
   assert.equal(isCommandAllowed("pip show package"), true);
-  // Prefix matching is exact: "pip install -r requirements.txt" only matches that specific prefix
-  // Different paths like "/path/to/reqs.txt" are different arguments and don't match
-  assert.equal(isCommandAllowed("pip install -r /path/to/reqs.txt"), false);
+  // The narrow default allows a single requirements-file path after -r.
+  // Execution-time path validation separately enforces the project-root boundary.
+  assert.equal(isCommandAllowed("pip install -r /path/to/reqs.txt"), true);
   // Bare pip or pip install without -r is not allowed
   assert.equal(isCommandAllowed("pip install arbitrary-package"), false);
 });
