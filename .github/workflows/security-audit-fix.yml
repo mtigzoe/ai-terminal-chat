@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   fix-git-config-isolation:
-    if: github.sha == 'cbbf8ec1e5bf9bd466023a63fa64153cfb354641'
+    if: github.sha == 'bb6256492086b6bf780b18ae27472ddd65d39c58'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,6 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path('server-typescript/src/git.ts')
           s = p.read_text()
           old = '''async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
@@ -51,10 +50,6 @@ jobs:
               const { readFileSync, writeFileSync, existsSync, lstatSync, realpathSync } = await import("node:fs");
               const root = getProjectRoot();
               const gitEntry = join(root, ".git");
-
-              // Resolve the actual Git directory without trusting a symlinked
-              // config path. Linked worktrees use a .git file that points to
-              // their private Git directory, so support that layout explicitly.
               let gitDir: string;
               const gitStat = lstatSync(gitEntry);
               if (gitStat.isDirectory()) {
@@ -64,30 +59,20 @@ jobs:
                 const match = gitFile.match(/^gitdir:\s*(.+)\s*$/im);
                 if (!match) throw new Error("Invalid .git gitfile.");
                 const target = match[1]!.trim();
-                gitDir = realpathSync(
-                  /^[A-Za-z]:[\\\\/]/.test(target) || target.startsWith("/")
-                    ? target
-                    : join(root, target),
-                );
+                gitDir = realpathSync(/^[A-Za-z]:[\\\\/]/.test(target) || target.startsWith("/") ? target : join(root, target));
               } else {
                 throw new Error(".git must be a directory or gitfile.");
               }
 
               const configPaths = [join(gitDir, "config")];
-              // Git worktree configuration is loaded after the common config
-              // and therefore must be sanitized during network operations too.
               const worktreeConfig = join(gitDir, "config.worktree");
               if (existsSync(worktreeConfig)) configPaths.push(worktreeConfig);
 
               const originals: Array<{ path: string; content: string; sanitized: string }> = [];
               for (const configPath of configPaths) {
                 const stat = lstatSync(configPath);
-                if (stat.isSymbolicLink()) {
-                  throw new Error(`Git config path must not be a symlink: ${configPath}`);
-                }
-                if (!stat.isFile()) {
-                  throw new Error(`Git config path must be a regular file: ${configPath}`);
-                }
+                if (stat.isSymbolicLink()) throw new Error(`Git config path must not be a symlink: ${configPath}`);
+                if (!stat.isFile()) throw new Error(`Git config path must be a regular file: ${configPath}`);
                 const resolved = realpathSync(configPath);
                 if (resolved !== configPath && resolved.toLowerCase() !== configPath.toLowerCase()) {
                   throw new Error(`Git config path must resolve to itself: ${configPath}`);
@@ -98,64 +83,21 @@ jobs:
 
               const changed = originals.filter((entry) => entry.sanitized !== entry.content);
               if (changed.length === 0) return fn();
-
               for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
               try {
                 return await fn();
               } finally {
                 for (const entry of changed) {
-                  try {
-                    writeFileSync(entry.path, entry.content, "utf8");
-                  } catch {
-                    // Preserve the original best-effort restoration behavior.
-                  }
+                  try { writeFileSync(entry.path, entry.content, "utf8"); } catch { /* best effort */ }
                 }
               }
             });
           }'''
-          if old not in s:
-              raise SystemExit('target function not found')
+          if old not in s: raise SystemExit('target function not found')
           p.write_text(s.replace(old, new), encoding='utf-8')
           PY
-
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('server-typescript/tests/git.test.ts')
-          if not p.exists():
-              raise SystemExit('git.test.ts not found')
-          s = p.read_text()
-          marker = '\n\n' + 'describe("Git configuration isolation"'
-          if marker in s:
-              insert = '''
-
-test("git config sanitizer rejects symlinked config files", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "git-config-security-"));
-  const root = path.join(tmp, "repo");
-  const gitDir = path.join(root, ".git");
-  const external = path.join(tmp, "external-config");
-  await fs.mkdir(gitDir, { recursive: true });
-  await fs.writeFile(external, '[url "https://evil.example/"]\\n\\tinsteadOf = https://example.com/\\n', "utf8");
-  await fs.symlink(external, path.join(gitDir, "config"));
-  // The production helper is intentionally not exported; this regression is
-  // covered by the public fetch/pull boundary, which must fail closed.
-  expect(true).toBe(true);
-  await fs.rm(tmp, { recursive: true, force: true });
-});
-'''
-              s = s.replace(marker, insert + marker)
-              p.write_text(s, encoding='utf-8')
-          PY
-
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add server-typescript/src/git.ts server-typescript/tests/git.test.ts
-          git diff --cached --quiet || git commit -m 'security: harden Git worktree config isolation'
-          git push
-
-          rm -f .github/workflows/security-audit-fix.yml
-          git add -u .github/workflows/security-audit-fix.yml
-          git commit -m 'chore: remove temporary security audit workflow'
+          git add server-typescript/src/git.ts
+          git commit -m 'security: harden Git worktree config isolation'
           git push
