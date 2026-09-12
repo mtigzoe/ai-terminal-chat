@@ -645,6 +645,7 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
     try { fs.unlinkSync(hashInput); } catch { /* best effort */ }
   }
   return;
+}
 
 export function git_add(relPath: string, confirm = false): Record<string, unknown> {
   let filePath: string;
