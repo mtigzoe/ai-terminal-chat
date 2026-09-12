@@ -15,6 +15,8 @@ import re
 import shlex
 import subprocess
 import tempfile
+import threading
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -917,6 +919,71 @@ def run_command(command: str, confirm: bool = False) -> dict:
 # Local .git/config and .git/config.worktree ARE still loaded by Git.
 # GIT_CONFIG does not disable them. These -c overrides are the process-
 # execution / network boundary (mirrors server-typescript GIT_CONFIG_OVERRIDES).
+_GIT_OPERATION_LOCK = threading.RLock()
+
+
+def _git_config_files() -> list[Path]:
+    """Return local/worktree Git config files without following config symlinks."""
+    git_path = PROJECT_ROOT / ".git"
+    if git_path.is_dir():
+        git_dir = git_path.resolve()
+    elif git_path.is_file():
+        try:
+            line = next(line for line in git_path.read_text(encoding="utf-8").splitlines() if line.lower().startswith("gitdir:"))
+            git_dir = (git_path.parent / line.split(":", 1)[1].strip()).resolve()
+        except (OSError, UnicodeDecodeError, StopIteration):
+            return []
+    else:
+        return []
+    paths: list[Path] = []
+    for name in ("config", "config.worktree"):
+        path = git_dir / name
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(git_dir)
+            if path.is_symlink() or not path.is_file():
+                continue
+            paths.append(path)
+        except (OSError, ValueError):
+            continue
+    return paths
+
+
+def _strip_dangerous_git_config(content: str) -> str:
+    """Remove URL/filter/include sections before network Git operations."""
+    out: list[str] = []
+    skipping = False
+    for raw in content.splitlines(keepends=True):
+        stripped = raw.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip().lower()
+            skipping = (section == "url" or section.startswith("url ") or section == "filter" or section.startswith("filter ") or section == "include" or section.startswith("includeif "))
+        if not skipping:
+            out.append(raw)
+    return "".join(out)
+
+
+@contextmanager
+def _sanitized_git_config():
+    """Temporarily remove URL/filter/include config under the Git operation lock."""
+    with _GIT_OPERATION_LOCK:
+        backups: list[tuple[Path, str]] = []
+        try:
+            for path in _git_config_files():
+                original = path.read_text(encoding="utf-8")
+                sanitized = _strip_dangerous_git_config(original)
+                if sanitized != original:
+                    path.write_text(sanitized, encoding="utf-8")
+                    backups.append((path, original))
+            yield
+        finally:
+            for path, original in reversed(backups):
+                try:
+                    path.write_text(original, encoding="utf-8")
+                except OSError:
+                    pass
+
+
 _GIT_CONFIG_OVERRIDES = [
     "-c", "core.hooksPath=",
     "-c", "core.fsmonitor=",
@@ -982,6 +1049,36 @@ _GIT_CONFIG_OVERRIDES = [
 ]
 
 
+DYNAMIC_GIT_CONFIG_KEY_RE = re.compile(
+    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$",
+    re.IGNORECASE,
+)
+
+
+def _dynamic_git_config_overrides() -> list[str]:
+    overrides: list[str] = []
+    for path in _git_config_files():
+        try:
+            section = ""
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or line.startswith(";"):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    body = line[1:-1].strip()
+                    match = re.match(r'^(\S+)\s+"(.*)"$', body)
+                    section = f"{match.group(1).lower()}.{match.group(2)}" if match else body.lower()
+                    continue
+                match = re.match(r"^([^=]+)=", line)
+                if match and section:
+                    key = f"{section}.{match.group(1).strip().lower()}"
+                    if DYNAMIC_GIT_CONFIG_KEY_RE.fullmatch(key):
+                        overrides.extend(["-c", f"{key}="])
+        except (OSError, UnicodeDecodeError):
+            continue
+    return overrides
+
+
 def _git_ssh_command() -> str:
     """SSH without loading user config (blocks ProxyCommand/ProxyJump)."""
     if os.name == "nt":
@@ -1030,7 +1127,7 @@ def _run_git(
         }
     )
 
-    safe_args = list(_GIT_CONFIG_OVERRIDES) + list(args)
+    safe_args = list(_GIT_CONFIG_OVERRIDES) + _dynamic_git_config_overrides() + list(args)
     try:
         return subprocess.run(
             ["git", *safe_args],
@@ -1329,7 +1426,7 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
         A dictionary with the diff text.
     """
 
-    args = ["git", "diff"]
+    args = ["git", "diff", "--no-ext-diff", "--no-textconv"]
 
     if staged:
         args.append("--staged")
@@ -1628,7 +1725,8 @@ def git_fetch(remote: str = "") -> dict:
         args = ["git", "fetch"]
         if validated_remote:
             args.append(validated_remote)
-        result = _run_git(args[1:], timeout=GIT_FETCH_TIMEOUT)
+        with _sanitized_git_config():
+            result = _run_git(args[1:], timeout=GIT_FETCH_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1689,7 +1787,8 @@ def git_pull(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
             args.append(validated_remote)
         if validated_branch:
             args.append(validated_branch)
-        result = _run_git(args[1:], timeout=GIT_PULL_TIMEOUT)
+        with _sanitized_git_config():
+            result = _run_git(args[1:], timeout=GIT_PULL_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
@@ -1892,7 +1991,8 @@ def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
             args.append(validated_remote)
         if validated_branch:
             args.append(validated_branch)
-        result = _run_git(args[1:], timeout=GIT_PUSH_TIMEOUT)
+        with _sanitized_git_config():
+            result = _run_git(args[1:], timeout=GIT_PUSH_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:

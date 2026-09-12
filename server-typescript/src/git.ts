@@ -362,7 +362,7 @@ export function isGitOperationLockHeldForTests(): boolean {
 
 /** Attacker-controlled key *names* that cannot live in a static -c list. */
 const DYNAMIC_OVERRIDE_KEY_RE =
-  /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path)$/i;
+  /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$/i;
 
 /**
  * Parse Git config file(s) into dotted keys. Avoids `git config --local`,
