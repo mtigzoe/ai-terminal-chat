@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   fix-git-config-isolation:
-    if: github.event.head_commit.message == 'security: activate final Git config isolation fix'
+    if: "github.event.head_commit.message == 'security: activate final Git config isolation fix'"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
