@@ -94,7 +94,7 @@ function runGit(
     return {
       code: result.status ?? (result.error ? 1 : 0),
       stdout: result.stdout || "",
-      stderr: result.stderr || "",
+      stderr: result.stderr || (result.error ? result.error.message : ""),
     };
   } catch (exc) {
     const message = exc instanceof Error ? exc.message : String(exc);
@@ -632,13 +632,19 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
   } finally {
     fs.closeSync(fd);
   }
-  const hashed = runGit(["hash-object", "-w", "--stdin", "--no-filters"], payload.toString("utf8"));
-  if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
-  const oid = hashed.stdout.trim();
-  if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
-  const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
-  if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
-}
+  const hashInput = path.join(tmpdir(), `git-add-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+  try {
+    fs.writeFileSync(hashInput, payload, { mode: 0o600 });
+    const hashed = runGit(["hash-object", "-w", "--no-filters", hashInput]);
+    if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
+    const oid = hashed.stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
+    const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
+    if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+  } finally {
+    try { fs.unlinkSync(hashInput); } catch { /* best effort */ }
+  }
+  return;
 
 export function git_add(relPath: string, confirm = false): Record<string, unknown> {
   let filePath: string;

@@ -28,6 +28,14 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 from ollama import is_ollama_cli_installed, launch_ollama_run  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolated_project_root(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("AI_TERMINAL_PROJECT_ROOT", str(root))
+    return root
+
+
 # ---------------------------------------------------------------------
 # is_ollama_cli_installed
 # ---------------------------------------------------------------------

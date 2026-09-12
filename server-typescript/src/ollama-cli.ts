@@ -7,11 +7,11 @@
 // itself, which can be installed even while the background server
 // (`ollama serve`) is not yet running.
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { getProjectRoot } from "./security.ts";
+import { getProjectRoot, isPathWithinRoot } from "./security.ts";
 import { resolveTrustedExecutable, TrustedExecutableError } from "./trusted-exec.ts";
 
 /**
@@ -20,6 +20,32 @@ import { resolveTrustedExecutable, TrustedExecutableError } from "./trusted-exec
  * winning executable resolution merely because the project is the current
  * working directory.
  */
+function resolveTrustedAbsoluteExecutable(candidate: string): string | null {
+  try {
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) return null;
+    const resolved = realpathSync(candidate);
+    const projectRoot = realpathSync(getProjectRoot());
+    if (isPathWithinRoot(projectRoot, resolved)) return null;
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePowerShellExecutable(): string | null {
+  try {
+    return resolveTrustedExecutable("powershell", { projectRoot: getProjectRoot() });
+  } catch {
+    const pathEnv = process.env.Path || process.env.PATH || "";
+    for (const dir of pathEnv.split(";")) {
+      if (!dir.trim()) continue;
+      const resolved = resolveTrustedAbsoluteExecutable(join(dir.trim(), "powershell.exe"));
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+}
+
 function resolveOllamaExecutable(): string | null {
   try {
     return resolveTrustedExecutable("ollama", { projectRoot: getProjectRoot() });
@@ -41,10 +67,7 @@ function resolveOllamaExecutable(): string | null {
     );
     if (existsSync(candidate)) {
       try {
-        return resolveTrustedExecutable(candidate, {
-          projectRoot: getProjectRoot(),
-          allowAbsolutePath: true,
-        });
+        return resolveTrustedAbsoluteExecutable(candidate);
       } catch (exc) {
         if (!(exc instanceof TrustedExecutableError)) {
           throw exc;
@@ -117,9 +140,8 @@ export async function launchOllamaRun(model: string): Promise<LaunchOllamaRunRes
 
     let powershell: string;
     try {
-      powershell = resolveTrustedExecutable("powershell", {
-        projectRoot: getProjectRoot(),
-      });
+      powershell = resolvePowerShellExecutable() || "";
+      if (!powershell) throw new TrustedExecutableError("powershell is not installed or not on PATH outside the project root.");
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : String(exc);
       return { error: `Could not resolve trusted PowerShell: ${message}` };
