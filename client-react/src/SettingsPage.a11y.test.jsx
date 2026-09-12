@@ -152,4 +152,140 @@ describe('SettingsPage accessibility', () => {
     await renderLoaded();
     expect(screen.getByRole('heading', { name: /allowed commands/i })).toBeInTheDocument();
   });
+
+  test('custom model input has an accessible name when model list is empty', async () => {
+    axiosInstance.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers?probe=0`) {
+        return Promise.resolve({
+          data: { providers: ['gemini', 'ollama'], name: 'ollama', model: '' },
+        });
+      }
+      if (url === `${HOST}/project-root`) {
+        return Promise.resolve({ data: { path: '/tmp/project' } });
+      }
+      if (url === `${HOST}/allowed-commands`) {
+        return Promise.resolve({ data: { commands: [] } });
+      }
+      if (url === `${HOST}/providers/ollama/status`) {
+        return Promise.resolve({ data: { cli_installed: true } });
+      }
+      if (url.startsWith(`${HOST}/providers/`) && url.endsWith('/models')) {
+        return Promise.resolve({ data: { models: [], supports_listing: true } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    const custom = document.getElementById('settings-model-custom');
+    expect(custom).toBeTruthy();
+    // Accessible name via label association or aria-label / aria-labelledby
+    const name =
+      custom.getAttribute('aria-label') ||
+      (custom.getAttribute('aria-labelledby') &&
+        document.getElementById(custom.getAttribute('aria-labelledby'))?.textContent) ||
+      (custom.labels && custom.labels[0] && custom.labels[0].textContent);
+    expect(name && String(name).trim().length > 0).toBe(true);
+  });
+
+  test('model control exposes aria-busy while models are loading', async () => {
+    let resolveModels;
+    const modelsPromise = new Promise((resolve) => {
+      resolveModels = resolve;
+    });
+
+    axiosInstance.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers?probe=0`) {
+        return Promise.resolve({
+          data: { providers: ['gemini'], name: 'gemini', model: 'gemini-3.6-flash' },
+        });
+      }
+      if (url === `${HOST}/project-root`) {
+        return Promise.resolve({ data: { path: '/tmp/project' } });
+      }
+      if (url === `${HOST}/allowed-commands`) {
+        return Promise.resolve({ data: { commands: [] } });
+      }
+      if (url.startsWith(`${HOST}/providers/`) && url.endsWith('/models')) {
+        return modelsPromise;
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    // Switch provider to trigger a fresh loadModels while we control the promise
+    const select = screen.getByLabelText(/ai provider/i);
+    // Keep same provider list but force change via ollama then back is hard; instead
+    // check after initial load starts - loadingModels is set true during loadModels.
+    // Initial loadModels may already have completed if models promise was not pending
+    // at first paint. Re-trigger by changing provider once models endpoint is pending.
+    fireEvent.change(select, { target: { value: 'gemini' } });
+
+    await waitFor(() => {
+      const modelControl =
+        document.getElementById('settings-model') ||
+        screen.queryByLabelText(/model/i);
+      expect(modelControl).toBeTruthy();
+      expect(modelControl.getAttribute('aria-busy')).toBe('true');
+    });
+
+    resolveModels({ data: { models: [{ id: 'm1' }], supports_listing: true } });
+
+    await waitFor(() => {
+      const modelControl =
+        document.getElementById('settings-model') ||
+        screen.getByLabelText(/model/i);
+      const busy = modelControl.getAttribute('aria-busy');
+      expect(busy === null || busy === 'false').toBe(true);
+    });
+  });
+
+  test('Ollama install-check status is exposed via a live region', async () => {
+    let resolveStatus;
+    const statusPromise = new Promise((resolve) => {
+      resolveStatus = resolve;
+    });
+
+    axiosInstance.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers?probe=0`) {
+        return Promise.resolve({
+          data: { providers: ['ollama'], name: 'ollama', model: 'llama3' },
+        });
+      }
+      if (url === `${HOST}/project-root`) {
+        return Promise.resolve({ data: { path: '/tmp/project' } });
+      }
+      if (url === `${HOST}/allowed-commands`) {
+        return Promise.resolve({ data: { commands: [] } });
+      }
+      if (url === `${HOST}/providers/ollama/status`) {
+        return statusPromise;
+      }
+      if (url.startsWith(`${HOST}/providers/`) && url.endsWith('/models')) {
+        return Promise.resolve({ data: { models: [{ id: 'llama3' }], supports_listing: true } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    resolveStatus({ data: { cli_installed: true } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/ollama is installed/i)).toBeInTheDocument();
+    });
+
+    const statusText = screen.getByText(/ollama is installed/i);
+    // Prefer an ancestor or self that is a live status region
+    const live =
+      statusText.closest('[role="status"]') ||
+      statusText.closest('[aria-live]') ||
+      (statusText.getAttribute('role') === 'status' ? statusText : null) ||
+      (statusText.getAttribute('aria-live') ? statusText : null);
+    expect(live).toBeTruthy();
+  });
 });
