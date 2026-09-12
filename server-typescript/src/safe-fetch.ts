@@ -220,6 +220,8 @@ export type SafeFetchOptions = {
   followRedirects?: boolean;
   /** Fetch implementation; defaults to the global fetch implementation. */
   fetchImpl?: typeof globalThis.fetch;
+  /** Fetch implementation; defaults to the global fetch implementation. */
+  fetchImpl?: typeof globalThis.fetch;
 };
 
 /**
