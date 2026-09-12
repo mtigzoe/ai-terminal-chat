@@ -67,7 +67,8 @@ function runTests() {
   ];
   for (const [label, candidate] of validCases) {
     const resolved = validateProjectPath(candidate, projectRoot);
-    assert(path.relative(fs.realpathSync.native(projectRoot), resolved) === '' || !path.relative(fs.realpathSync.native(projectRoot), resolved).startsWith('..'), label);
+    const relative = path.relative(fs.realpathSync.native(projectRoot), resolved);
+    assert(relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)), label);
     console.log(`✓ ${label}`);
     passed++;
   }
@@ -139,7 +140,7 @@ function runTests() {
   console.log('✓ missing project root rejected');
   passed++;
 
-  assertThrows(() => validateProjectPath('', projectRoot), 'Path does not exist');
+  assertThrows(() => validateProjectPath('', projectRoot), 'Path is outside project root');
   console.log('✓ empty path rejected');
   passed++;
 
