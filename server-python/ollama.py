@@ -98,7 +98,7 @@ def _resolve_ollama_executable() -> str | None:
         return None
 
     try:
-        resolved = Path(executable).resolve(strict=True)
+        resolved = Path(executable).resolve()
         root = get_project_root().resolve()
     except (OSError, RuntimeError):
         return None

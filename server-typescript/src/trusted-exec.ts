@@ -11,7 +11,7 @@
  */
 
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 import { isPathWithinRoot } from "./security.ts";
 
@@ -42,7 +42,8 @@ function windowsExtensions(): string[] {
 
 function pathDirectories(): string[] {
   const pathEnv = process.env.Path || process.env.PATH || "";
-  return pathEnv.split(delimiter).map((dir) => dir.trim()).filter(Boolean);
+  const pathDelimiter = process.platform === "win32" ? ";" : delimiter;
+  return pathEnv.split(pathDelimiter).map((dir) => dir.trim()).filter(Boolean);
 }
 
 function tryResolveFile(candidate: string): string | null {
@@ -70,17 +71,21 @@ function tryResolveFile(candidate: string): string | null {
  */
 export function resolveTrustedExecutable(
   commandName: string,
-  options: { projectRoot?: string | null } = {},
+  options: { projectRoot?: string | null; allowAbsolutePath?: boolean } = {},
 ): string {
   const name = (commandName ?? "").trim();
   if (!name) {
     throw new TrustedExecutableError("Executable name is required.");
   }
 
+  let pathQualifiedName: string | null = null;
   if (looksLikePath(name)) {
-    throw new TrustedExecutableError(
-      `Refusing path-qualified executable '${name}'. Use a bare command name from PATH.`,
-    );
+    if (!options.allowAbsolutePath) {
+      throw new TrustedExecutableError(
+        `Refusing path-qualified executable '${name}'. Use a bare command name from PATH.`,
+      );
+    }
+    pathQualifiedName = name;
   }
 
   let projectRootResolved: string | null = null;
@@ -90,6 +95,17 @@ export function resolveTrustedExecutable(
     } catch {
       projectRootResolved = resolve(options.projectRoot);
     }
+  }
+
+  if (pathQualifiedName) {
+    const resolved = tryResolveFile(pathQualifiedName);
+    if (!resolved) {
+      throw new TrustedExecutableError(`Executable '${pathQualifiedName}' does not exist.`);
+    }
+    if (projectRootResolved && isPathWithinRoot(projectRootResolved, resolved)) {
+      throw new TrustedExecutableError(`Executable '${pathQualifiedName}' resolves inside the project root.`);
+    }
+    return resolved;
   }
 
   const dirs = pathDirectories();

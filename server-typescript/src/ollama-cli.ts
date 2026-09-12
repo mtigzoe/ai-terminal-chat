@@ -43,6 +43,7 @@ function resolveOllamaExecutable(): string | null {
       try {
         return resolveTrustedExecutable(candidate, {
           projectRoot: getProjectRoot(),
+          allowAbsolutePath: true,
         });
       } catch (exc) {
         if (!(exc instanceof TrustedExecutableError)) {

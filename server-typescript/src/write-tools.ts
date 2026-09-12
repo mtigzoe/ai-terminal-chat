@@ -96,8 +96,9 @@ function runGit(
       stdout: result.stdout || "",
       stderr: result.stderr || "",
     };
-  } catch {
-    return { code: 1, stdout: "", stderr: "git command failed" };
+  } catch (exc) {
+    const message = exc instanceof Error ? exc.message : String(exc);
+    return { code: 1, stdout: "", stderr: `git command failed: ${message}` };
   } finally {
     try {
       fs.rmSync(isolationDir, { recursive: true, force: true });

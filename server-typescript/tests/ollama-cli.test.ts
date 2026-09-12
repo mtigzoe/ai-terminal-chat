@@ -20,6 +20,11 @@ function setTestPath(newPath: string) {
   process.env.Path = newPath;
 }
 
+function joinTestPath(...dirs: string[]): string {
+  const delimiter = process.platform === "win32" ? ";" : path.delimiter;
+  return dirs.join(delimiter);
+}
+
 function saveOriginalPath() {
   return {
     PATH: process.env.PATH,
@@ -175,7 +180,7 @@ describe("launchOllamaRun validation", () => {
       }));
 
       fs.writeFileSync(path.join(fakeBinDir, "ollama"), "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
-      setTestPath(`${fakeBinDir}${path.delimiter}${originalPath.PATH}`);
+      setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));
       try {
         const { launchOllamaRun } = await import("../src/ollama-cli.ts");
         const result = await launchOllamaRun("gpt-oss:20b:cloud");
@@ -236,7 +241,7 @@ describe("launchOllamaRun on POSIX", () => {
       `#!/bin/sh\necho "$@" > "${markerFile}"\nsleep 5\n`,
       { mode: 0o755 }
     );
-    setTestPath(`${fakeBinDir}${path.delimiter}${originalPath.PATH}`);
+    setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));
   });
 
   afterEach(() => {
@@ -284,7 +289,8 @@ describe("launchOllamaRun on Windows", () => {
 
     const fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), "ollama-cli-win-"));
     fs.writeFileSync(path.join(fakeBinDir, "ollama.exe"), "stub");
-    setTestPath(`${fakeBinDir}${path.delimiter}${originalPath.PATH}`);
+    fs.writeFileSync(path.join(fakeBinDir, "powershell.exe"), "stub");
+    setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));
     process.env.PATHEXT = ".exe;.cmd;.bat";
 
     let capturedCommand: string[] | undefined;
@@ -338,6 +344,7 @@ describe("launchOllamaRun on Windows", () => {
     fs.writeFileSync(path.join(ollamaDir, "ollama.exe"), "stub");
 
     const emptyPathDir = fs.mkdtempSync(path.join(os.tmpdir(), "ollama-cli-win-emptypath-"));
+    fs.writeFileSync(path.join(emptyPathDir, "powershell.exe"), "stub");
     setTestPath(emptyPathDir);
     process.env.LOCALAPPDATA = fakeLocalAppData;
 
@@ -375,7 +382,8 @@ describe("launchOllamaRun on Windows", () => {
 
     const fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), "ollama-cli-win-"));
     fs.writeFileSync(path.join(fakeBinDir, "ollama.exe"), "stub");
-    setTestPath(`${fakeBinDir}${path.delimiter}${originalPath.PATH}`);
+    fs.writeFileSync(path.join(fakeBinDir, "powershell.exe"), "stub");
+    setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));
     process.env.PATHEXT = ".exe;.cmd;.bat";
 
     vi.doMock("node:child_process", () => ({
