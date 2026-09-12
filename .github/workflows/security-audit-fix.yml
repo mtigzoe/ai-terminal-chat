@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   fix-git-config-isolation:
-    if: github.sha == '281d85636d6106ddc1614bb17b77cfda09f83d9a'
+    if: github.sha == '1b47513449714101ca7472f9fca902b908b3a067'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,18 +72,15 @@ jobs:
                 if (stat.isSymbolicLink()) throw new Error(`Git config path must not be a symlink: ${configPath}`);
                 if (!stat.isFile()) throw new Error(`Git config path must be a regular file: ${configPath}`);
                 const resolved = realpathSync(configPath);
-                if (resolved !== configPath && resolved.toLowerCase() !== configPath.toLowerCase()) {
-                  throw new Error(`Git config path must resolve to itself: ${configPath}`);
-                }
+                if (resolved !== configPath && resolved.toLowerCase() !== configPath.toLowerCase()) throw new Error(`Git config path must resolve to itself: ${configPath}`);
                 const original = readFileSync(configPath, "utf8");
                 originals.push({ path: configPath, content: original, sanitized: stripDangerousGitConfig(original) });
               }
               const changed = originals.filter((entry) => entry.sanitized !== entry.content);
               if (changed.length === 0) return fn();
               for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
-              try {
-                return await fn();
-              } finally {
+              try { return await fn(); }
+              finally {
                 for (const entry of changed) {
                   try { writeFileSync(entry.path, entry.content, "utf8"); } catch { /* best effort */ }
                 }
