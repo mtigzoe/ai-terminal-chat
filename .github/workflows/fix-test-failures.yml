@@ -10,65 +10,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fix final regressions
+      - name: Fix test mocks
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-
-          # Avoid stdin handling for git hash-object: capture the file bytes
-          # through the protected fd, write them to a private temp file, then
-          # hash that private file with --no-filters. This keeps the safe
-          # no-filter staging boundary while avoiding child-process stdin edge
-          # cases.
-          p = Path('server-typescript/src/write-tools.ts')
-          s = p.read_text()
-          old = '''  const hashed = runGit(["hash-object", "-w", "--stdin", "--no-filters"], payload.toString("utf8"));\n  if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");'''
-          new = '''  const hashInput = path.join(tmpdir(), `git-add-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);\n  try {\n    fs.writeFileSync(hashInput, payload, { mode: 0o600 });\n    const hashed = runGit(["hash-object", "-w", "--no-filters", hashInput]);\n    if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");\n    const oid = hashed.stdout.trim();\n    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");\n    const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);\n    if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");\n  } finally {\n    try { fs.unlinkSync(hashInput); } catch { /* best effort */ }\n  }\n  return;'''
-          if old not in s: raise SystemExit('write-tools hash pattern missing')
-          # Replace the whole duplicated hash/update block after the hash call.
-          start = s.index(old)
-          end_marker = '''  if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");\n}'''
-          end = s.index(end_marker, start) + len(end_marker)
-          s = s[:start] + new + s[end:]
-          # Preserve actual spawn errors in diagnostics.
-          s = s.replace('stderr: result.stderr || "",', 'stderr: result.stderr || (result.error ? result.error.message : ""),')
-          p.write_text(s)
-
-          # TS Ollama: use a small trusted absolute-path helper for the
-          # documented LOCALAPPDATA fallback and PowerShell lookup. This keeps
-          # the project-root boundary but avoids relying on a mocked platform's
-          # PATH parsing in tests.
-          p = Path('server-typescript/src/ollama-cli.ts')
-          s = p.read_text()
-          s = s.replace('import { existsSync } from "node:fs";', 'import { existsSync, realpathSync, statSync } from "node:fs";')
-          s = s.replace('import { getProjectRoot } from "./security.ts";', 'import { getProjectRoot, isPathWithinRoot } from "./security.ts";')
-          marker = '''function resolveOllamaExecutable(): string | null {'''
-          helper = '''function resolveTrustedAbsoluteExecutable(candidate: string): string | null {\n  try {\n    if (!existsSync(candidate) || !statSync(candidate).isFile()) return null;\n    const resolved = realpathSync(candidate);\n    const projectRoot = realpathSync(getProjectRoot());\n    if (isPathWithinRoot(projectRoot, resolved)) return null;\n    return resolved;\n  } catch {\n    return null;\n  }\n}\n\nfunction resolvePowerShellExecutable(): string | null {\n  try {\n    return resolveTrustedExecutable("powershell", { projectRoot: getProjectRoot() });\n  } catch {\n    const pathEnv = process.env.Path || process.env.PATH || "";\n    for (const dir of pathEnv.split(";")) {\n      if (!dir.trim()) continue;\n      const resolved = resolveTrustedAbsoluteExecutable(join(dir.trim(), "powershell.exe"));\n      if (resolved) return resolved;\n    }\n    return null;\n  }\n}\n\nfunction resolveOllamaExecutable(): string | null {'''
-          if marker not in s: raise SystemExit('ollama marker missing')
-          s = s.replace(marker, helper)
-          old = '''        return resolveTrustedExecutable(candidate, {\n          projectRoot: getProjectRoot(),\n          allowAbsolutePath: true,\n        });'''
-          new = '''        return resolveTrustedAbsoluteExecutable(candidate);'''
-          if old not in s: raise SystemExit('ollama fallback pattern missing')
-          s = s.replace(old, new)
-          old = '''      powershell = resolveTrustedExecutable("powershell", {\n        projectRoot: getProjectRoot(),\n      });'''
-          new = '''      powershell = resolvePowerShellExecutable() || "";\n      if (!powershell) throw new TrustedExecutableError("powershell is not installed or not on PATH outside the project root.");'''
-          if old not in s: raise SystemExit('powershell pattern missing')
-          s = s.replace(old, new)
-          p.write_text(s)
-
-          # Isolate Python Ollama tests from the suite's mutable project-root
-          # state. The executable mocks are intentionally outside this root.
           p = Path('server-python/tests/test_ollama_install.py')
           s = p.read_text()
-          insert = '''\n\n@pytest.fixture(autouse=True)\ndef isolated_project_root(tmp_path, monkeypatch):\n    root = tmp_path / "project"\n    root.mkdir()\n    monkeypatch.setenv("AI_TERMINAL_PROJECT_ROOT", str(root))\n    return root\n'''
-          anchor = 'from ollama import is_ollama_cli_installed, launch_ollama_run  # noqa: E402\n'
-          if insert.strip() not in s:
-              s = s.replace(anchor, anchor + insert)
+          old = '''def test_launch_ollama_run_opens_console_on_windows():\n    fake_process = Mock(pid=1111)\n    with patch("ollama.shutil.which", return_value="C:\\\\ollama\\\\ollama.exe"),'''
+          new = '''def test_launch_ollama_run_opens_console_on_windows(tmp_path):\n    fake_process = Mock(pid=1111)\n    fake_ollama = tmp_path / "ollama.exe"\n    fake_ollama.write_text("stub")\n    with patch("ollama.shutil.which", return_value=str(fake_ollama)),'''
+          if old not in s: raise SystemExit('python Windows test pattern missing')
+          p.write_text(s.replace(old, new))
+
+          # The write tool now depends on the shared SSH isolation helper;
+          # provide it in the existing Git module mock.
+          p = Path('server-typescript/tests/api.test.ts')
+          s = p.read_text().replace('''  gitBranch: vi.fn(),\n}));''', '''  gitBranch: vi.fn(),\n  getGitSshCommand: vi.fn(() => "ssh -o BatchMode=yes"),\n}));''')
+          p.write_text(s)
+
+          # Production intentionally resolves the trusted PowerShell absolute
+          # path; assert its executable name rather than the test temp prefix.
+          p = Path('server-typescript/tests/ollama-cli.test.ts')
+          s = p.read_text().replace('expect(capturedCommand?.[0]).toBe("powershell.exe");', 'expect(capturedCommand?.[0]?.toLowerCase()).toMatch(/powershell\\.exe$/);')
           p.write_text(s)
           PY
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add server-typescript/src/write-tools.ts server-typescript/src/ollama-cli.ts server-python/tests/test_ollama_install.py
-          git diff --cached --quiet || git commit -m "fix: resolve final test regressions"
+          git add server-python/tests/test_ollama_install.py server-typescript/tests/api.test.ts server-typescript/tests/ollama-cli.test.ts
+          git diff --cached --quiet || git commit -m "test: update mocks for trusted executable isolation"
           git push
