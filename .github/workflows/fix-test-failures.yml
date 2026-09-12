@@ -10,63 +10,65 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fix remaining regressions
+      - name: Fix final regressions
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          # Ollama Python: shutil.which already guarantees the PATH target
-          # exists; strict=True made mocked/test paths fail unnecessarily.
-          p = Path('server-python/ollama.py')
-          s = p.read_text().replace('Path(executable).resolve(strict=True)', 'Path(executable).resolve()')
-          p.write_text(s)
-
-          # Trusted executable resolution must use the target platform's PATH
-          # delimiter when tests simulate Windows on a POSIX runner.
-          p = Path('server-typescript/src/trusted-exec.ts')
-          s = p.read_text()
-          s = s.replace('import { delimiter, isAbsolute, join, resolve, sep } from "node:path";', 'import { delimiter, join, resolve } from "node:path";')
-          s = s.replace('  return pathEnv.split(delimiter).map((dir) => dir.trim()).filter(Boolean);', '  const pathDelimiter = process.platform === "win32" ? ";" : delimiter;\n  return pathEnv.split(pathDelimiter).map((dir) => dir.trim()).filter(Boolean);')
-          s = s.replace('  options: { projectRoot?: string | null } = {},', '  options: { projectRoot?: string | null; allowAbsolutePath?: boolean } = {},')
-          old = '''  if (looksLikePath(name)) {\n    throw new TrustedExecutableError(\n      `Refusing path-qualified executable '${name}'. Use a bare command name from PATH.`,\n    );\n  }'''
-          new = '''  if (looksLikePath(name) && !options.allowAbsolutePath) {\n    throw new TrustedExecutableError(\n      `Refusing path-qualified executable '${name}'. Use a bare command name from PATH.`,\n    );\n  }\n\n  if (looksLikePath(name) && options.allowAbsolutePath) {\n    const resolved = tryResolveFile(name);\n    if (!resolved) {\n      throw new TrustedExecutableError(`Executable '${name}' does not exist.`);\n    }\n    if (projectRootResolved && isPathWithinRoot(projectRootResolved, resolved)) {\n      throw new TrustedExecutableError(`Executable '${name}' resolves inside the project root.`);\n    }\n    return resolved;\n  }'''
-          # projectRootResolved is declared below, so use a second insertion instead.
-          if old in s:
-              s = s.replace(old, '''  let pathQualifiedName: string | null = null;\n  if (looksLikePath(name)) {\n    if (!options.allowAbsolutePath) {\n      throw new TrustedExecutableError(\n        `Refusing path-qualified executable '${name}'. Use a bare command name from PATH.`,\n      );\n    }\n    pathQualifiedName = name;\n  }''')
-          marker = '''  const dirs = pathDirectories();\n  const candidates: string[] = [];'''
-          insertion = '''  if (pathQualifiedName) {\n    const resolved = tryResolveFile(pathQualifiedName);\n    if (!resolved) {\n      throw new TrustedExecutableError(`Executable '${pathQualifiedName}' does not exist.`);\n    }\n    if (projectRootResolved && isPathWithinRoot(projectRootResolved, resolved)) {\n      throw new TrustedExecutableError(`Executable '${pathQualifiedName}' resolves inside the project root.`);\n    }\n    return resolved;\n  }\n\n  const dirs = pathDirectories();\n  const candidates: string[] = [];'''
-          if marker not in s: raise SystemExit('trusted-exec marker missing')
-          s = s.replace(marker, insertion)
-          p.write_text(s)
-
-          # Ollama's documented Windows install fallback is an explicit,
-          # canonical path, so use the trusted resolver's absolute-path mode.
-          p = Path('server-typescript/src/ollama-cli.ts')
-          s = p.read_text().replace('''        return resolveTrustedExecutable(candidate, {\n          projectRoot: getProjectRoot(),\n        });''', '''        return resolveTrustedExecutable(candidate, {\n          projectRoot: getProjectRoot(),\n          allowAbsolutePath: true,\n        });''')
-          p.write_text(s)
-
-          # Surface spawnSync errors instead of hiding the actual cause.
+          # Avoid stdin handling for git hash-object: capture the file bytes
+          # through the protected fd, write them to a private temp file, then
+          # hash that private file with --no-filters. This keeps the safe
+          # no-filter staging boundary while avoiding child-process stdin edge
+          # cases.
           p = Path('server-typescript/src/write-tools.ts')
-          s = p.read_text().replace('''  } catch {\n    return { code: 1, stdout: "", stderr: "git command failed" };\n  } finally {''', '''  } catch (exc) {\n    const message = exc instanceof Error ? exc.message : String(exc);\n    return { code: 1, stdout: "", stderr: `git command failed: ${message}` };\n  } finally {''')
+          s = p.read_text()
+          old = '''  const hashed = runGit(["hash-object", "-w", "--stdin", "--no-filters"], payload.toString("utf8"));\n  if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");'''
+          new = '''  const hashInput = path.join(tmpdir(), `git-add-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);\n  try {\n    fs.writeFileSync(hashInput, payload, { mode: 0o600 });\n    const hashed = runGit(["hash-object", "-w", "--no-filters", hashInput]);\n    if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");\n    const oid = hashed.stdout.trim();\n    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");\n    const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);\n    if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");\n  } finally {\n    try { fs.unlinkSync(hashInput); } catch { /* best effort */ }\n  }\n  return;'''
+          if old not in s: raise SystemExit('write-tools hash pattern missing')
+          # Replace the whole duplicated hash/update block after the hash call.
+          start = s.index(old)
+          end_marker = '''  if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");\n}'''
+          end = s.index(end_marker, start) + len(end_marker)
+          s = s[:start] + new + s[end:]
+          # Preserve actual spawn errors in diagnostics.
+          s = s.replace('stderr: result.stderr || "",', 'stderr: result.stderr || (result.error ? result.error.message : ""),')
           p.write_text(s)
 
-          # Simulated Windows tests must use a Windows PATH delimiter and
-          # provide a trusted PowerShell executable in their fake PATH.
-          p = Path('server-typescript/tests/ollama-cli.test.ts')
+          # TS Ollama: use a small trusted absolute-path helper for the
+          # documented LOCALAPPDATA fallback and PowerShell lookup. This keeps
+          # the project-root boundary but avoids relying on a mocked platform's
+          # PATH parsing in tests.
+          p = Path('server-typescript/src/ollama-cli.ts')
           s = p.read_text()
-          s = s.replace('''function setTestPath(newPath: string) {\n  process.env.PATH = newPath;\n  process.env.Path = newPath;\n}''', '''function setTestPath(newPath: string) {\n  process.env.PATH = newPath;\n  process.env.Path = newPath;\n}\n\nfunction joinTestPath(...dirs: string[]): string {\n  const delimiter = process.platform === "win32" ? ";" : path.delimiter;\n  return dirs.join(delimiter);\n}''')
-          s = s.replace('setTestPath(`${fakeBinDir}${path.delimiter}${originalPath.PATH}`);', 'setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));')
-          s = s.replace('setTestPath(`${fakeBinDir}${path.delimiter}${originalPath.PATH}`);', 'setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));')
-          # Add fake powershell.exe beside each Windows fake Ollama binary.
-          s = s.replace('fs.writeFileSync(path.join(fakeBinDir, "ollama.exe"), "stub");\n    setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));', 'fs.writeFileSync(path.join(fakeBinDir, "ollama.exe"), "stub");\n    fs.writeFileSync(path.join(fakeBinDir, "powershell.exe"), "stub");\n    setTestPath(joinTestPath(fakeBinDir, originalPath.PATH || ""));')
-          # Fallback launch: the PATH may contain PowerShell but not Ollama.
-          s = s.replace('fs.writeFileSync(path.join(ollamaDir, "ollama.exe"), "stub");\n\n    const emptyPathDir', 'fs.writeFileSync(path.join(ollamaDir, "ollama.exe"), "stub");\n\n    const emptyPathDir')
-          s = s.replace('const emptyPathDir = fs.mkdtempSync(path.join(os.tmpdir(), "ollama-cli-win-emptypath-"));\n    setTestPath(emptyPathDir);', 'const emptyPathDir = fs.mkdtempSync(path.join(os.tmpdir(), "ollama-cli-win-emptypath-"));\n    fs.writeFileSync(path.join(emptyPathDir, "powershell.exe"), "stub");\n    setTestPath(emptyPathDir);')
+          s = s.replace('import { existsSync } from "node:fs";', 'import { existsSync, realpathSync, statSync } from "node:fs";')
+          s = s.replace('import { getProjectRoot } from "./security.ts";', 'import { getProjectRoot, isPathWithinRoot } from "./security.ts";')
+          marker = '''function resolveOllamaExecutable(): string | null {'''
+          helper = '''function resolveTrustedAbsoluteExecutable(candidate: string): string | null {\n  try {\n    if (!existsSync(candidate) || !statSync(candidate).isFile()) return null;\n    const resolved = realpathSync(candidate);\n    const projectRoot = realpathSync(getProjectRoot());\n    if (isPathWithinRoot(projectRoot, resolved)) return null;\n    return resolved;\n  } catch {\n    return null;\n  }\n}\n\nfunction resolvePowerShellExecutable(): string | null {\n  try {\n    return resolveTrustedExecutable("powershell", { projectRoot: getProjectRoot() });\n  } catch {\n    const pathEnv = process.env.Path || process.env.PATH || "";\n    for (const dir of pathEnv.split(";")) {\n      if (!dir.trim()) continue;\n      const resolved = resolveTrustedAbsoluteExecutable(join(dir.trim(), "powershell.exe"));\n      if (resolved) return resolved;\n    }\n    return null;\n  }\n}\n\nfunction resolveOllamaExecutable(): string | null {'''
+          if marker not in s: raise SystemExit('ollama marker missing')
+          s = s.replace(marker, helper)
+          old = '''        return resolveTrustedExecutable(candidate, {\n          projectRoot: getProjectRoot(),\n          allowAbsolutePath: true,\n        });'''
+          new = '''        return resolveTrustedAbsoluteExecutable(candidate);'''
+          if old not in s: raise SystemExit('ollama fallback pattern missing')
+          s = s.replace(old, new)
+          old = '''      powershell = resolveTrustedExecutable("powershell", {\n        projectRoot: getProjectRoot(),\n      });'''
+          new = '''      powershell = resolvePowerShellExecutable() || "";\n      if (!powershell) throw new TrustedExecutableError("powershell is not installed or not on PATH outside the project root.");'''
+          if old not in s: raise SystemExit('powershell pattern missing')
+          s = s.replace(old, new)
+          p.write_text(s)
+
+          # Isolate Python Ollama tests from the suite's mutable project-root
+          # state. The executable mocks are intentionally outside this root.
+          p = Path('server-python/tests/test_ollama_install.py')
+          s = p.read_text()
+          insert = '''\n\n@pytest.fixture(autouse=True)\ndef isolated_project_root(tmp_path, monkeypatch):\n    root = tmp_path / "project"\n    root.mkdir()\n    monkeypatch.setenv("AI_TERMINAL_PROJECT_ROOT", str(root))\n    return root\n'''
+          anchor = 'from ollama import is_ollama_cli_installed, launch_ollama_run  # noqa: E402\n'
+          if insert.strip() not in s:
+              s = s.replace(anchor, anchor + insert)
           p.write_text(s)
           PY
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add server-python/ollama.py server-typescript/src/trusted-exec.ts server-typescript/src/ollama-cli.ts server-typescript/src/write-tools.ts server-typescript/tests/ollama-cli.test.ts
-          git diff --cached --quiet || git commit -m "fix: restore cross-platform executable test compatibility"
+          git add server-typescript/src/write-tools.ts server-typescript/src/ollama-cli.ts server-python/tests/test_ollama_install.py
+          git diff --cached --quiet || git commit -m "fix: resolve final test regressions"
           git push
