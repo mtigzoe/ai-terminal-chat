@@ -10,16 +10,17 @@ import { promisify } from "node:util";
 
 import { loadAppConfig, persistAppConfig } from "./config.js";
 import type { RunCommandResult } from "./types.js";
-import { join } from "node:path";
+   import { basename, join } from "node:path";
 import {
   getAllowedReadPaths,
   getProjectRoot,
   isReadAllowed,
+  isSensitiveFilename,
   isAbsoluteOnAnyPlatform,
   resolveFollowingSymlinks,
   isPathWithinRoot,
 } from "./security.ts";
-import { runIsolatedGit } from "./git.ts";
+import { ISOLATED_GIT_SUBCOMMANDS, runIsolatedGit } from "./git.ts";
 import { resolveTrustedExecutable, TrustedExecutableError } from "./trusted-exec.ts";
 
 const execFileAsync = promisify(execFile);
@@ -167,12 +168,35 @@ export const EXECUTION_RISK_COMMAND_PREFIXES = [
   "flake8",
 ] as const;
 
+/**
+ * Canonical single-spaced token form of a command.
+ *
+ * SECURITY: every gate in this module must match against this form. The
+ * allowlist (isCommandAllowed) authorizes commands after tokenization, so any
+ * gate that prefix-matches the raw string can be evaded with a tab or a
+ * repeated space ("npm\tinstall", "git  show") or, because tokenizeCommand
+ * strips quotes, with quoting ('"pytest"') — the command is still authorized
+ * but no longer recognized as execution-risk or content-reading.
+ */
+export function canonicalizeCommand(command: string): string {
+  try {
+    return tokenizeCommand(command ?? "").join(" ");
+  } catch {
+    return (command ?? "").trim().split(/\s+/).filter(Boolean).join(" ");
+  }
+}
+
+/** Prefix match against an already-canonical, already-lowercased command. */
+function matchesCanonicalPrefix(canonical: string, prefix: string): boolean {
+  return canonical === prefix || canonical.startsWith(`${prefix} `);
+}
+
 /** True when the command can run project/dependency-controlled code. */
 export function isExecutionRiskCommand(command: string): boolean {
-  const normalized = (command ?? "").trim().toLowerCase();
-  if (!normalized) return false;
-  return EXECUTION_RISK_COMMAND_PREFIXES.some(
-    (prefix) => normalized === prefix || normalized.startsWith(`${prefix} `),
+  const canonical = canonicalizeCommand(command).toLowerCase();
+  if (!canonical) return false;
+  return EXECUTION_RISK_COMMAND_PREFIXES.some((prefix) =>
+    matchesCanonicalPrefix(canonical, prefix),
   );
 }
 
@@ -226,6 +250,16 @@ export function isForbiddenPrefix(prefix: string): boolean {
   const tokens = normalized.split(/\s+/).filter(Boolean);
   const rawExe = tokens[0] ?? "";
   const exe = rawExe.replace(/\.(exe|cmd|bat)$/i, "");
+
+  // Git prefixes are limited to the subcommands run_command can isolate.
+  // The denylist above does not cover config/checkout/worktree/rebase/bisect,
+  // each of which is an execution or config-injection primitive.
+  if (exe === "git") {
+    const subcommand = tokens[1] ?? "";
+    if (!(ISOLATED_GIT_SUBCOMMANDS as readonly string[]).includes(subcommand)) {
+      return true;
+    }
+  }
 
   if (FORBIDDEN_BROAD_EXECUTABLE_PREFIXES.has(rawExe) || FORBIDDEN_BROAD_EXECUTABLE_PREFIXES.has(exe)) {
     // Bare interpreter / package manager — always forbidden.
@@ -372,12 +406,7 @@ export function __setAllowedCommandsForTests(prefixes: string[]): void {
  * and tabs do not affect the result.
  */
 export function isCommandAllowed(command: string): boolean {
-  let normalized: string;
-  try {
-    normalized = tokenizeCommand(command).join(" ");
-  } catch {
-    normalized = command.trim();
-  }
+  const normalized = canonicalizeCommand(command);
 
   const pipRequirementDefault = "pip install -r requirements.txt";
 
@@ -502,29 +531,55 @@ export function tokenizeCommand(command: string): string[] {
   return tokens;
 }
 
+/** Commands that can print the body of a file the user never selected. */
+const FILE_CONTENT_COMMAND_PREFIXES = [
+  "cat",
+  "type",
+  "get-content",
+  "gc",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "nl",
+  // Git content dumpers. "git log -p" and "git blame" emit whole file bodies
+  // just as "git show"/"git diff" do.
+  "git show",
+  "git diff",
+  "git log",
+  "git blame",
+  "git annotate",
+  "git grep",
+  "git cat-file",
+  "git rev-list",
+  "git archive",
+  "git stash show",
+] as const;
+
 function commandReadsFileContents(command: string): boolean {
-  const trimmed = command.trim();
+  const canonical = canonicalizeCommand(command).toLowerCase();
+  if (!canonical) return false;
 
-  const prefixes = [
-    "cat",
-    "type",
-    "Get-Content",
-    "gc",
-    "head",
-    "tail",
-    "less",
-    "more",
-    "bat",
-    "nl",
-    "git show",
-    "git diff",
-  ];
+  return FILE_CONTENT_COMMAND_PREFIXES.some((prefix) =>
+    matchesCanonicalPrefix(canonical, prefix),
+  );
+}
 
-  return prefixes.some(
-    (prefix) =>
-      trimmed === prefix ||
-      trimmed.startsWith(prefix + " ") ||
-      trimmed.toLowerCase().startsWith(prefix.toLowerCase() + " "),
+/** Flags that make a Git history command emit file contents rather than metadata. */
+function hasPatchProducingFlag(args: string[]): boolean {
+  return args.some(
+    (arg) =>
+      arg === "-p" ||
+      arg === "-u" ||
+      arg === "--patch" ||
+      arg === "--patch-with-stat" ||
+      arg === "--patch-with-raw" ||
+      arg === "--unified" ||
+      arg.startsWith("--unified=") ||
+      /^-U\d+$/.test(arg) ||
+      arg === "--cc" ||
+      arg === "--full-diff",
   );
 }
 
@@ -558,7 +613,42 @@ function runCommandRespectsReadPermissions(
   }
 
   const args = contentPathArguments(command);
-  const lower = command.toLowerCase();
+  const lower = canonicalizeCommand(command).toLowerCase();
+
+  if (lower === "git log" || lower.startsWith("git log ")) {
+    let fullArgs: string[];
+    try {
+      fullArgs = tokenizeCommand(command);
+    } catch {
+      fullArgs = command.trim().split(/\s+/);
+    }
+
+    const argsAfterLog = fullArgs.slice(2);
+
+    // Without a patch flag, git log emits commit metadata only.
+    if (!hasPatchProducingFlag(argsAfterLog)) {
+      return null;
+    }
+
+    const scopedPaths: string[] = [];
+    let sawDoubleDash = false;
+    for (const arg of argsAfterLog) {
+      if (arg === "--") {
+        sawDoubleDash = true;
+        continue;
+      }
+      if (sawDoubleDash) scopedPaths.push(arg);
+    }
+
+    if (scopedPaths.length > 0 && scopedPaths.every((path) => isReadAllowed(path))) {
+      return null;
+    }
+
+    return (
+      "Access denied: git log with a patch flag can expose file contents. " +
+      "Drop the patch flag, or scope it with '-- <selected path>'."
+    );
+  }
 
   if (lower.startsWith("git show ")) {
     let fullArgs: string[];
@@ -726,13 +816,17 @@ function commandBlocked(command: string): string | null {
     }
   }
 
-  if (/\.env\b/i.test(command)) {
+  // Quotes are stripped by tokenizeCommand, so `git show "HEAD:.env"` must be
+  // matched against the canonical form as well as the raw string.
+  const secretProbe = `${command}\n${tokens.join(" ")}`;
+
+  if (/\.env\b/i.test(secretProbe)) {
     return `This command is blocked for safety: ${command}`;
   }
-  if (/\bcredential/i.test(command)) {
+  if (/\bcredential/i.test(secretProbe)) {
     return `This command is blocked for safety: ${command}`;
   }
-  if (/\bid_rsa\b/i.test(command)) {
+  if (/\bid_rsa\b/i.test(secretProbe)) {
     return `This command is blocked for safety: ${command}`;
   }
 
@@ -818,6 +912,51 @@ function directoryListingPermissionError(command: string): string | null {
         "Access denied: directory listing outside the project root " +
         `is not allowed (${p}).`
       );
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Apply the same secrets/`.git` protection every path-facing tool uses
+ * (security.isSensitivePath) to run_command's arguments.
+ *
+ * run_command previously relied only on three raw-string regexes in
+ * commandBlocked (.env, credential, id_rsa), so `*.pem`, `*.key`,
+ * id_ed25519/id_ecdsa, secrets.json and `.git/` were reachable through
+ * allowlisted readers such as `git show <rev>:<path>`.
+ */
+function commandSensitivePathError(command: string): string | null {
+  let tokens: string[];
+  try {
+    tokens = tokenizeCommand(command);
+  } catch {
+    return "Access denied: could not safely parse command arguments.";
+  }
+
+  for (const token of tokens.slice(1)) {
+    if (!token || token.startsWith("-")) continue;
+
+    const candidates = [token];
+    // Git revision syntax: <rev>:<path>
+    const colon = token.indexOf(":");
+    if (colon >= 0 && colon + 1 < token.length) {
+      candidates.push(token.slice(colon + 1));
+    }
+
+    for (const candidate of candidates) {
+      const normalized = candidate.split("\\").join("/");
+      if (/(^|\/)\.git(\/|$)/i.test(normalized)) {
+        return `Access denied: '${token}' targets the .git directory.`;
+      }
+      const name = basename(normalized);
+      if (name && isSensitiveFilename(name)) {
+        return (
+          `Access denied: '${token}' looks like a secrets/credentials file. ` +
+          "Its contents are never exposed to the model."
+        );
+      }
     }
   }
 
@@ -1122,9 +1261,16 @@ export async function runCommand(
     return { error: "No command was provided." };
   }
 
-  const normalized = command.trim();
+  const raw = command.trim();
 
-  const blocked = commandBlocked(normalized);
+  // SECURITY: gates must agree on one normalization. isCommandAllowed()
+  // authorizes the tokenized form, so every other gate below is given that
+  // same form; matching the raw string here let "npm\tinstall" or
+  // "git  show" stay allowlisted while escaping the confirmation and
+  // read-permission checks.
+  const normalized = canonicalizeCommand(raw);
+
+  const blocked = commandBlocked(raw);
   if (blocked) {
     return { error: blocked };
   }
@@ -1135,6 +1281,11 @@ export async function runCommand(
         `Command not allowed: '${normalized}'. ` +
         `Allowed command prefixes: ${JSON.stringify(getAllowedCommands())}`,
     };
+  }
+
+  const sensitivePathError = commandSensitivePathError(normalized);
+  if (sensitivePathError) {
+    return { error: sensitivePathError };
   }
 
   const dirListingError = directoryListingPermissionError(normalized);
@@ -1198,6 +1349,20 @@ export async function runCommand(
   // boundary as git.ts (isolated GIT_CONFIG, SSH, helpers, pager).
   // Detect by original token, not the resolved absolute path.
   if (args[0].toLowerCase() === "git") {
+    // Positive allowlist: the denylist in isForbiddenPrefix() does not cover
+    // config/checkout/worktree/rebase/bisect, which would defeat the Git
+    // isolation boundary if a user widened the command allowlist.
+    const subcommand = (fileArgs[0] ?? "").toLowerCase();
+    if (
+      !(ISOLATED_GIT_SUBCOMMANDS as readonly string[]).includes(subcommand)
+    ) {
+      return {
+        error:
+          `Git subcommand not allowed: '${subcommand || "(none)"}'. ` +
+          `Allowed subcommands: ${JSON.stringify([...ISOLATED_GIT_SUBCOMMANDS])}`,
+      };
+    }
+
     try {
       const result = await runIsolatedGit(fileArgs, {
         timeout: COMMAND_TIMEOUT_MS,

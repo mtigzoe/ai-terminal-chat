@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import {
   __setAllowedCommandsForTests,
   addAllowedCommand,
+  isExecutionRiskCommand,
   isForbiddenPrefix,
   persistAllowedCommands,
   reloadAllowedCommands,
@@ -846,5 +847,252 @@ test("outside-project symlink/junction denied where supported", async () => {
     } catch {
       // ignore cleanup errors
     }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Gate-normalization regression tests
+//
+// isCommandAllowed() authorizes the tokenized form of a command. Every other
+// gate must match that same canonical form. When isExecutionRiskCommand() and
+// commandReadsFileContents() matched the raw string instead, a tab, a repeated
+// space, or a quote kept a command allowlisted while making it invisible to
+// the confirmation and read-permission checks.
+// ---------------------------------------------------------------------------
+
+/** Spellings that canonicalize to an allowlisted execution-risk command. */
+const EXECUTION_RISK_EVASIONS: [label: string, command: string][] = [
+  ["repeated space", "npm  install"],
+  ["tab separator", "npm\tinstall"],
+  ["mixed space and tab", "npm \tci"],
+  ["tab before flag", "pytest\t-x"],
+  ["double-quoted executable", '"pytest"'],
+  ["single-quoted executable", "'pytest'"],
+  ["quoted multi-word", '"npm" install'],
+  ["repeated space in python -m", "python  -m  pytest"],
+];
+
+for (const [label, command] of EXECUTION_RISK_EVASIONS) {
+  test(`execution-risk confirmation is not bypassed by ${label}: ${JSON.stringify(command)}`, async () => {
+    // The evasion is only meaningful if the command is still authorized.
+    assert.ok(
+      isCommandAllowed(command),
+      `${JSON.stringify(command)} must still be allowlisted, otherwise this is not a real bypass`,
+    );
+    assert.ok(
+      isExecutionRiskCommand(command),
+      `${JSON.stringify(command)} must be classified as execution-risk`,
+    );
+
+    const result = await runCommand(command, false);
+    assert.ok(
+      !isToolError(result),
+      `expected a confirmation prompt, got error: ${isToolError(result) ? result.error : ""}`,
+    );
+    assert.equal(
+      (result as { requires_confirmation?: boolean }).requires_confirmation,
+      true,
+      `${JSON.stringify(command)} must require confirmation instead of executing`,
+    );
+  });
+}
+
+test("whitespace and quoting do not change how a command is classified", () => {
+  // Each spelling below tokenizes to the same argv, so every gate must agree.
+  for (const spelling of ["npm install", "npm  install", "npm\tinstall", '"npm" install']) {
+    assert.equal(
+      isCommandAllowed(spelling),
+      isCommandAllowed("npm install"),
+      `allowlist decision must match for ${JSON.stringify(spelling)}`,
+    );
+    assert.equal(
+      isExecutionRiskCommand(spelling),
+      isExecutionRiskCommand("npm install"),
+      `execution-risk decision must match for ${JSON.stringify(spelling)}`,
+    );
+  }
+});
+
+test("canonical form does not turn a non-risk command into an execution-risk one", () => {
+  assert.ok(!isExecutionRiskCommand("git status"));
+  assert.ok(!isExecutionRiskCommand("git  log"));
+  assert.ok(!isExecutionRiskCommand("pwd"));
+  // Near-miss prefixes must not match.
+  assert.ok(!isExecutionRiskCommand("npm installer"));
+  assert.ok(!isExecutionRiskCommand("pytestx"));
+});
+
+// ---------------------------------------------------------------------------
+// git log read-permission regression tests
+//
+// "git log" is allowlisted by default but was absent from the content-reading
+// command set, so "git log -p" dumped every tracked file's body regardless of
+// the Project-page selection.
+// ---------------------------------------------------------------------------
+
+test("git log without a patch flag is allowed while restrictions are active", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git log");
+    assert.ok(!isToolError(result), "plain git log shows commit metadata only");
+  });
+});
+
+test("git log -n 5 is allowed while restrictions are active", async () => {
+  await runWithAllowedReadPaths([], async () => {
+    const result = await runCommand("git log -n 5");
+    assert.ok(!isToolError(result), "git log -n 5 shows commit metadata only");
+  });
+});
+
+for (const command of [
+  "git log -p",
+  "git log --patch",
+  "git log -U3",
+  "git log --patch-with-stat",
+  "git log --unified=5",
+]) {
+  test(`${command} is denied when no files are selected`, async () => {
+    await runWithAllowedReadPaths([], async () => {
+      const result = await runCommand(command);
+      assert.ok(isToolError(result), `${command} exposes file contents and must be denied`);
+      assert.match(String(result.error), /access denied/i);
+    });
+  });
+}
+
+test("git log -p scoped to a selected file is allowed", async () => {
+  await runWithAllowedReadPaths(["README.md"], async () => {
+    const result = await runCommand("git log -p -- README.md");
+    assert.ok(!isToolError(result), "patch output scoped to a selected file is allowed");
+  });
+});
+
+test("git log -p scoped to an unselected file is denied", async () => {
+  await runWithAllowedReadPaths(["other.md"], async () => {
+    const result = await runCommand("git log -p -- README.md");
+    assert.ok(isToolError(result), "patch output for an unselected file must be denied");
+  });
+});
+
+test("git log -p does not leak an unselected file's contents", async () => {
+  await runWithAllowedReadPaths(["other.md"], async () => {
+    const result = await runCommand("git log -p");
+    const body = isToolError(result)
+      ? ""
+      : `${(result as { stdout?: string }).stdout ?? ""}`;
+    assert.ok(!body.includes("# README"), "README.md body must not appear in the output");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Whitespace evasion of the read-permission gate
+// ---------------------------------------------------------------------------
+
+for (const command of [
+  "git  show HEAD:README.md",
+  "git  show HEAD",
+  "git  diff",
+  "git  log -p",
+]) {
+  test(`${JSON.stringify(command)} does not evade the read-permission gate`, async () => {
+    assert.ok(
+      isCommandAllowed(command),
+      "the evasion is only meaningful while the command stays allowlisted",
+    );
+    await runWithAllowedReadPaths([], async () => {
+      const result = await runCommand(command);
+      assert.ok(isToolError(result), `${command} must still be permission-checked`);
+      assert.match(String(result.error), /access denied/i);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sensitive-path protection for run_command arguments
+//
+// run_command previously relied only on the .env/credential/id_rsa regexes in
+// commandBlocked, so *.pem, *.key, id_ed25519 and .git/ were reachable through
+// allowlisted readers such as `git show <rev>:<path>`.
+// ---------------------------------------------------------------------------
+
+for (const command of [
+  "git show HEAD:server.key",
+  "git show HEAD:certs/private.pem",
+  "git show HEAD:id_ed25519",
+  "git show HEAD:config/secrets.json",
+  "git log -- app.key",
+]) {
+  test(`${JSON.stringify(command)} is refused as a sensitive path`, async () => {
+    const result = await runCommand(command);
+    assert.ok(isToolError(result), `${command} targets a secrets file and must be refused`);
+    assert.match(String(result.error), /access denied|blocked for safety/i);
+  });
+}
+
+test("run_command refuses arguments inside the .git directory", async () => {
+  for (const command of ["dir .git", "git show HEAD:.git/config"]) {
+    const result = await runCommand(command);
+    assert.ok(isToolError(result), `${command} must not expose .git`);
+  }
+});
+
+test("sensitive-path check does not reject ordinary arguments", async () => {
+  // .gitignore must not match the .git directory rule.
+  await runWithAllowedReadPaths(["README.md"], async () => {
+    const result = await runCommand("git show HEAD:README.md");
+    assert.ok(!isToolError(result), "an ordinary selected file must still be readable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Git subcommand allowlist
+//
+// The denylist in isForbiddenPrefix() does not enumerate config/checkout/
+// worktree/rebase/bisect, each of which defeats the Git isolation boundary.
+// ---------------------------------------------------------------------------
+
+for (const prefix of [
+  "git config",
+  "git checkout",
+  "git switch",
+  "git worktree",
+  "git rebase",
+  "git bisect",
+  "git submodule",
+  "git apply",
+  "git filter-branch",
+]) {
+  test(`${JSON.stringify(prefix)} cannot be added to the command allowlist`, () => {
+    assert.ok(isForbiddenPrefix(prefix), `${prefix} is an execution or config-injection primitive`);
+    assert.throws(
+      () => addAllowedCommand(prefix),
+      /not permitted for safety reasons/,
+      `${prefix} must be rejected by addAllowedCommand`,
+    );
+  });
+}
+
+test("read-only Git prefixes remain addable to the allowlist", () => {
+  for (const prefix of [
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch --list",
+    "git remote -v",
+  ]) {
+    assert.ok(!isForbiddenPrefix(prefix), `${prefix} must stay permitted`);
+  }
+});
+
+test("a non-isolated Git subcommand is refused even if the allowlist is widened", async () => {
+  // Simulates a config file that predates the subcommand allowlist.
+  __setAllowedCommandsForTests(["git config"]);
+  try {
+    const result = await runCommand("git config --list");
+    assert.ok(isToolError(result), "git config must be refused at execution time");
+    assert.match(String(result.error), /subcommand not allowed/i);
+  } finally {
+    __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
   }
 });

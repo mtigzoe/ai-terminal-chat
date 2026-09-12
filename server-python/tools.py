@@ -18,7 +18,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from security import (
     PROJECT_ROOT,
@@ -327,12 +327,35 @@ EXECUTION_RISK_COMMAND_PREFIXES = (
 )
 
 
+def _canonicalize_command(command: str) -> str:
+    """Canonical single-spaced token form of a command.
+
+    SECURITY: every gate in this module must match against this form.
+    is_command_allowed() authorizes commands after tokenization, so any gate
+    that prefix-matches the raw string can be evaded with a tab or a repeated
+    space ("npm\tinstall", "git  show") — the command stays allowlisted but is
+    no longer recognized as execution-risk or content-reading.
+    """
+
+    try:
+        tokens = shlex.split(command or "", posix=False)
+    except ValueError:
+        tokens = (command or "").split()
+    return " ".join(tokens)
+
+
+def _matches_canonical_prefix(canonical: str, prefix: str) -> bool:
+    """Prefix match against an already-canonical, already-lowercased command."""
+
+    return canonical == prefix or canonical.startswith(prefix + " ")
+
+
 def is_execution_risk_command(command: str) -> bool:
-    normalized = (command or "").strip().lower()
-    if not normalized:
+    canonical = _canonicalize_command(command).lower()
+    if not canonical:
         return False
     for prefix in EXECUTION_RISK_COMMAND_PREFIXES:
-        if normalized == prefix or normalized.startswith(prefix + " "):
+        if _matches_canonical_prefix(canonical, prefix):
             return True
     return False
 
@@ -399,6 +422,28 @@ def _normalize_command_prefix(prefix: str) -> str:
 
     return (prefix or "").strip()
 
+
+# Git subcommands run_command is allowed to reach. Mirrors
+# server-typescript/src/git.ts ISOLATED_GIT_SUBCOMMANDS. A positive allowlist
+# is required because FORBIDDEN_ALLOWED_COMMAND_PREFIXES does not enumerate
+# config/checkout/worktree/rebase/bisect.
+ISOLATED_GIT_SUBCOMMANDS = frozenset(
+    {
+        "status",
+        "diff",
+        "log",
+        "branch",
+        "show",
+        "remote",
+        "fetch",
+        "pull",
+        "push",
+        "add",
+        "commit",
+        "restore",
+        "rev-parse",
+    }
+)
 
 # Interpreters / package managers that must not be elevated via Settings.
 _FORBIDDEN_BROAD_EXECUTABLES = frozenset(
@@ -480,6 +525,14 @@ def _is_forbidden_prefix(prefix: str) -> bool:
         return True
     raw_exe = tokens[0]
     exe = re.sub(r"\.(exe|cmd|bat)$", "", raw_exe, flags=re.IGNORECASE)
+
+    # Git prefixes are limited to the subcommands run_command can isolate. The
+    # denylist above does not cover config/checkout/worktree/rebase/bisect,
+    # each of which is an execution or config-injection primitive.
+    if exe == "git":
+        subcommand = tokens[1] if len(tokens) > 1 else ""
+        if subcommand not in ISOLATED_GIT_SUBCOMMANDS:
+            return True
 
     if raw_exe in _FORBIDDEN_BROAD_EXECUTABLES or exe in _FORBIDDEN_BROAD_EXECUTABLES:
         if len(tokens) == 1:
@@ -599,7 +652,7 @@ reload_allowed_commands()
 _FILE_CONTENT_COMMAND_PREFIXES = (
     "cat",
     "type",
-    "Get-Content",
+    "get-content",
     "gc",
     "head",
     "tail",
@@ -610,17 +663,50 @@ _FILE_CONTENT_COMMAND_PREFIXES = (
     # Git content dumpers — can expose unselected file bodies
     "git show",
     "git diff",
+    "git log",
+    "git blame",
+    "git annotate",
+    "git grep",
+    "git cat-file",
+    "git rev-list",
+    "git archive",
+    "git stash show",
 )
+
+# Flags that make a Git history command emit file contents, not metadata.
+_GIT_PATCH_FLAGS = frozenset(
+    {
+        "-p",
+        "-u",
+        "--patch",
+        "--patch-with-stat",
+        "--patch-with-raw",
+        "--unified",
+        "--cc",
+        "--full-diff",
+    }
+)
+
+
+def _has_patch_producing_flag(args: list[str]) -> bool:
+    for arg in args:
+        if arg in _GIT_PATCH_FLAGS:
+            return True
+        if arg.startswith("--unified="):
+            return True
+        if re.fullmatch(r"-U\d+", arg):
+            return True
+    return False
 
 
 def _command_reads_file_contents(command: str) -> bool:
     """True if the command is a known file-content printer."""
 
-    cmd = command.strip()
+    canonical = _canonicalize_command(command).lower()
+    if not canonical:
+        return False
     for prefix in _FILE_CONTENT_COMMAND_PREFIXES:
-        if cmd == prefix or cmd.startswith(prefix + " "):
-            return True
-        if cmd.lower().startswith(prefix.lower() + " "):
+        if _matches_canonical_prefix(canonical, prefix):
             return True
     return False
 
@@ -644,6 +730,34 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
         args = shlex.split(command, posix=False)
     except ValueError:
         args = command.split()
+
+    # git log only dumps file bodies when a patch flag is present.
+    if len(args) >= 2 and args[0].lower() == "git" and args[1].lower() == "log":
+        args_after_log = args[2:]
+
+        # Without a patch flag, git log emits commit metadata only.
+        if not _has_patch_producing_flag(args_after_log):
+            return None
+
+        scoped_paths = []
+        saw_double_dash = False
+        for arg in args_after_log:
+            if arg == "--":
+                saw_double_dash = True
+                continue
+            if saw_double_dash:
+                scoped_paths.append(arg)
+
+        if scoped_paths and all(is_read_allowed(p) for p in scoped_paths):
+            return None
+
+        return {
+            "error": (
+                "Access denied: git log with a patch flag can expose file "
+                "contents. Drop the patch flag, or scope it with "
+                "'-- <selected path>'."
+            )
+        }
 
     # Special handling for git show: allow --no-patch/--stat/--name-only,
     # and properly extract paths from commit:path and -- path syntax.
@@ -724,6 +838,49 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     }
 
 
+
+
+def _command_sensitive_path_error(command: str) -> dict | None:
+    """Apply the secrets/.git protection every path tool uses to run_command args.
+
+    run_command previously relied only on BLOCKED_COMMAND_PATTERNS (.env,
+    credential, id_rsa), so *.pem, *.key, id_ed25519/id_ecdsa, secrets.json
+    and .git/ stayed reachable through allowlisted readers such as
+    `git show <rev>:<path>`.
+    """
+
+    try:
+        tokens = shlex.split(command, posix=False)
+    except ValueError:
+        return {"error": "Access denied: could not safely parse command arguments."}
+
+    for token in tokens[1:]:
+        if not token or token.startswith("-"):
+            continue
+
+        candidates = [token]
+        # Git revision syntax: <rev>:<path>
+        head, sep, tail = token.partition(":")
+        if sep and tail:
+            candidates.append(tail)
+
+        for candidate in candidates:
+            normalized = candidate.replace("\\", "/").strip("\"'")
+            if re.search(r"(^|/)\.git(/|$)", normalized, flags=re.IGNORECASE):
+                return {
+                    "error": f"Access denied: '{token}' targets the .git directory."
+                }
+            name = PurePosixPath(normalized).name
+            if name and is_sensitive_filename(name):
+                return {
+                    "error": (
+                        f"Access denied: '{token}' looks like a secrets/"
+                        "credentials file. Its contents are never exposed "
+                        "to the model."
+                    )
+                }
+
+    return None
 
 
 def _validate_directory_command_paths(command: str, args: list[str]) -> dict | None:
@@ -809,8 +966,15 @@ def run_command(command: str, confirm: bool = False) -> dict:
 
     command = command.strip()
 
+    # SECURITY: gates must agree on one normalization. is_command_allowed()
+    # authorizes the tokenized form, so every other gate below is given that
+    # same form; matching the raw string here let "npm\tinstall" or
+    # "git  show" stay allowlisted while escaping the confirmation and
+    # read-permission checks.
+    canonical = _canonicalize_command(command)
+
     for pattern in BLOCKED_COMMAND_PATTERNS:
-        if pattern.search(command):
+        if pattern.search(command) or pattern.search(canonical):
             return {
                 "error": (
                     f"This command is blocked for safety: {command}"
@@ -827,35 +991,49 @@ def run_command(command: str, confirm: bool = False) -> dict:
                 )
             }
 
-    if not is_command_allowed(command):
+    if not is_command_allowed(canonical):
         return {
             "error": (
-                f"Command not allowed: '{command}'. Allowed command "
+                f"Command not allowed: '{canonical}'. Allowed command "
                 f"prefixes: {sorted(ALLOWED_COMMAND_PREFIXES)}"
             )
         }
 
-    if is_execution_risk_command(command) and not confirm:
+    sensitive_path_error = _command_sensitive_path_error(canonical)
+    if sensitive_path_error is not None:
+        return sensitive_path_error
+
+    if is_execution_risk_command(canonical) and not confirm:
         return {
             "requires_confirmation": True,
-            "command": command.strip(),
+            "command": canonical,
             "message": (
-                f"Command '{command.strip()}' can execute project or dependency "
+                f"Command '{canonical}' can execute project or dependency "
                 f"code (scripts, tests, install hooks, or plugins). It was NOT run. "
                 f"Ask the user to confirm, then call run_command again with confirm=true."
             ),
         }
 
-    permission_error = _run_command_respects_read_permissions(command)
+    permission_error = _run_command_respects_read_permissions(canonical)
     if permission_error is not None:
         return permission_error
 
     try:
-        args = shlex.split(command, posix=False)
+        args = shlex.split(canonical, posix=False)
 
-        boundary_error = _validate_directory_command_paths(command, args)
+        boundary_error = _validate_directory_command_paths(canonical, args)
         if boundary_error is not None:
             return boundary_error
+
+        if args and args[0].lower() == "git":
+            subcommand = args[1].lower() if len(args) > 1 else ""
+            if subcommand not in ISOLATED_GIT_SUBCOMMANDS:
+                return {
+                    "error": (
+                        f"Git subcommand not allowed: '{subcommand or '(none)'}'. "
+                        f"Allowed subcommands: {sorted(ISOLATED_GIT_SUBCOMMANDS)}"
+                    )
+                }
 
         # `pwd` is not a standalone executable on Windows.
         # Translate to `cmd /c cd`, which prints the current directory.
@@ -886,7 +1064,7 @@ def run_command(command: str, confirm: bool = False) -> dict:
         truncated = stdout_truncated or stderr_truncated
 
         payload = {
-            "command": command,
+            "command": canonical,
             "returncode": result.returncode,
             "stdout": stdout[:max_output],
             "stderr": stderr[:max_output],
