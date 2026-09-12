@@ -10,10 +10,14 @@ import { promisify } from "node:util";
 
 import { loadAppConfig, persistAppConfig } from "./config.js";
 import type { RunCommandResult } from "./types.js";
+import { join } from "node:path";
 import {
   getAllowedReadPaths,
   getProjectRoot,
   isReadAllowed,
+  isAbsoluteOnAnyPlatform,
+  resolveFollowingSymlinks,
+  isPathWithinRoot,
 } from "./security.ts";
 import { runIsolatedGit } from "./git.ts";
 import { resolveTrustedExecutable, TrustedExecutableError } from "./trusted-exec.ts";
@@ -724,6 +728,80 @@ function commandBlocked(command: string): string | null {
   return null;
 }
 
+/**
+ * Fail-closed check for `dir` / `ls`: only allow listing the project root
+ * and its descendants. Rejects `..` escapes, absolute paths outside the
+ * root, and (on Windows) paths supplied via `/s:<path>`. Symlinks and
+ * junctions are resolved before the containment check.
+ */
+function directoryListingPermissionError(command: string): string | null {
+  let args: string[];
+  try {
+    args = tokenizeCommand(command);
+  } catch {
+    return "Access denied: invalid directory listing command.";
+  }
+
+  if (args.length === 0) {
+    return null;
+  }
+
+  const cmd = args[0].toLowerCase();
+  if (cmd !== "dir" && cmd !== "ls") {
+    return null;
+  }
+
+  const root = getProjectRoot();
+  const pathArgs: string[] = [];
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    // Windows: dir /s:<path> embeds the path in the switch.
+    const slashS = arg.match(/^\/s[:=](.+)$/i);
+    if (slashS) {
+      pathArgs.push(slashS[1]);
+      continue;
+    }
+    // Skip switches/flags. On Windows, dir uses /flag; on POSIX, ls uses -flag.
+    // Absolute paths (/, C:\, etc.) must not be treated as flags.
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    if (
+      process.platform === "win32" &&
+      /^\/[a-zA-Z]/.test(arg) &&
+      !isAbsoluteOnAnyPlatform(arg)
+    ) {
+      // e.g. /s, /b, /w — not drive-letter absolute paths
+      continue;
+    }
+    pathArgs.push(arg);
+  }
+
+  if (pathArgs.length === 0) {
+    // No path argument → lists project root (cwd). Allowed.
+    return null;
+  }
+
+  for (const p of pathArgs) {
+    let resolved: string;
+    try {
+      const candidate = isAbsoluteOnAnyPlatform(p) ? p : join(root, p);
+      resolved = resolveFollowingSymlinks(candidate);
+    } catch {
+      return `Access denied: cannot resolve path for directory listing: ${p}`;
+    }
+    if (!isPathWithinRoot(root, resolved)) {
+      return (
+        "Access denied: directory listing outside the project root " +
+        `is not allowed (${p}).`
+      );
+    }
+  }
+
+  return null;
+}
+
 function executableForCommand(args: string[]): {
   file: string;
   args: string[];
@@ -829,6 +907,10 @@ export async function runCommand(
     };
   }
 
+  const dirListingError = directoryListingPermissionError(normalized);
+  if (dirListingError) {
+    return { error: dirListingError };
+  }
 
   if (isExecutionRiskCommand(normalized) && !confirm) {
     return {

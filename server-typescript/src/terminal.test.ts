@@ -772,3 +772,79 @@ test("runCommand allows inspection without confirmation", async () => {
     undefined,
   );
 });
+
+// ---------------------------------------------------------------------------
+// dir / ls directory-listing permission regression tests
+// ---------------------------------------------------------------------------
+
+test("dir allowed (project root)", async () => {
+  const result = await runCommand("dir");
+  // May fail if cmd/dir is unavailable on this platform, but must not be an
+  // access-denied security error.
+  if (isToolError(result)) {
+    assert.ok(
+      !String(result.error).toLowerCase().includes("access denied"),
+      `unexpected access denial: ${result.error}`,
+    );
+  }
+});
+
+test("dir . allowed", async () => {
+  const result = await runCommand("dir .");
+  if (isToolError(result)) {
+    assert.ok(
+      !String(result.error).toLowerCase().includes("access denied"),
+      `unexpected access denial: ${result.error}`,
+    );
+  }
+});
+
+test("dir .. denied", async () => {
+  const result = await runCommand("dir ..");
+  assert.ok(isToolError(result), "dir .. must be denied");
+  assert.match(String(result.error), /access denied/i);
+});
+
+test("ls .. denied", async () => {
+  const result = await runCommand("ls ..");
+  assert.ok(isToolError(result), "ls .. must be denied");
+  assert.match(String(result.error), /access denied/i);
+});
+
+test("absolute path outside project root denied", async () => {
+  const outside = process.platform === "win32" ? "C:\\Windows" : "/etc";
+  const result = await runCommand(`dir ${outside}`);
+  assert.ok(isToolError(result), "absolute outside path must be denied");
+  assert.match(String(result.error), /access denied/i);
+});
+
+test("Windows dir /s:<outside-path> denied", async () => {
+  const outside = process.platform === "win32" ? "C:\\Windows" : "/etc";
+  const result = await runCommand(`dir /s:${outside}`);
+  assert.ok(isToolError(result), "dir /s:<outside> must be denied");
+  assert.match(String(result.error), /access denied/i);
+});
+
+test("outside-project symlink/junction denied where supported", async () => {
+  const { symlinkSync, mkdirSync } = await import("node:fs");
+  const root = getProjectRoot();
+  const linkName = join(root, "escape-link");
+  const target = process.platform === "win32" ? "C:\\Windows" : "/etc";
+  try {
+    try {
+      symlinkSync(target, linkName, process.platform === "win32" ? "junction" : undefined);
+    } catch {
+      // Symlink/junction creation may require privileges; skip if unsupported.
+      return;
+    }
+    const result = await runCommand(`dir ${linkName}`);
+    assert.ok(isToolError(result), "symlink/junction outside root must be denied");
+    assert.match(String(result.error), /access denied/i);
+  } finally {
+    try {
+      rmSync(linkName, { force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+});
