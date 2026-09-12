@@ -12,8 +12,7 @@
  */
 
 import dns from "node:dns/promises";
-import { Agent, fetch as undiciFetch } from "undici";
-import type { RequestInit as UndiciRequestInit } from "undici";
+import { Agent } from "undici";
 
 import {
   createSafeRequestInit,
@@ -219,6 +218,8 @@ export type SafeFetchOptions = {
   lookupAll?: LookupAll;
   /** Follow one safe redirect (default false — manual only). */
   followRedirects?: boolean;
+  /** Fetch implementation; defaults to the global fetch implementation. */
+  fetchImpl?: typeof globalThis.fetch;
 };
 
 /**
@@ -253,8 +254,9 @@ export async function safeFetch(
 
   try {
     const safeInit = createSafeRequestInit(init);
-    const response = await undiciFetch(url, {
-      ...(safeInit as UndiciRequestInit),
+    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    const response = await fetchImpl(url, {
+      ...safeInit,
       dispatcher: agent,
     });
 
