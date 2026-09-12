@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   fix-git-common-config:
-    if: "github.event.head_commit.message == 'security: activate Git common config isolation'"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
