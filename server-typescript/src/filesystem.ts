@@ -207,7 +207,7 @@ function planWalk(dir: string, dirents: Dirent[]): WalkPlan {
       continue;
     }
     if (dirent.isDirectory()) {
-      if (!SEARCH_EXCLUDED_DIR_NAMES.has(dirent.name)) {
+      if (!SEARCH_EXCLUDED_DIR_NAMES.has(dirent.name.toLowerCase())) {
         subdirs.push(dirent.name);
       }
       continue;
