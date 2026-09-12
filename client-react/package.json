@@ -32,7 +32,6 @@
     "electron": "npm run build && electron . --production",
     "electron:dev": "electron . --dev",
     "electron:build:win": "npm run build && node scripts/prepare-server.cjs && npx --yes electron-builder@26.15.3 --win nsis",
-    "electron:build:win:portable": "npm run build && node scripts/prepare-server.cjs && npx --yes electron-builder@26.15.3 --win portable",
     "electron:build:win:portable": "npm run build && node scripts/prepare-server.cjs && npx --yes electron-builder@26.15.3 --win portable"
   },
   "build": {
@@ -96,7 +95,7 @@
     "production": [
       ">0.2%",
       "not dead",
-      "not op_mini all"
+      "not op_mini all
     ],
     "development": [
       "last 1 chrome version",
