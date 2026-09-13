@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MainNav from './MainNav.jsx';
 
-const Header = ({ toggled, setToggled, waiting, pendingConfirmation }) => {
+const Header = ({ toggled, setToggled, waiting }) => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [waitingAnnounced, setWaitingAnnounced] = useState(false);
   const cancelRef = useRef(null);

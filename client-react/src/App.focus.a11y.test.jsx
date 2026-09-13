@@ -1011,4 +1011,102 @@ describe('App-level focus and skip links', () => {
     const cancelButton = await screen.findByRole('button', { name: /cancel response/i });
     expect(cancelButton).toBeInTheDocument();
   });
+
+  test('focus returns to trigger after Decline in confirmation dialog', async () => {
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
+
+    render(<App />);
+    const textarea = screen.getByLabelText(/chat message/i);
+    textarea.focus();
+    await sendMessage('create notes.txt');
+
+    await screen.findByRole('dialog');
+    const declineButton = screen.getByRole('button', { name: /decline/i });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(textarea).toHaveFocus();
+    });
+  });
+
+  test('focus returns to trigger after Allow in confirmation dialog', async () => {
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { success: true } } });
+
+    render(<App />);
+    const textarea = screen.getByLabelText(/chat message/i);
+    textarea.focus();
+    await sendMessage('create notes.txt');
+
+    await screen.findByRole('dialog');
+    const allowButton = screen.getByRole('button', { name: /allow/i });
+    fireEvent.click(allowButton);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(textarea).toHaveFocus();
+    });
+  });
+
+  test('focus returns to trigger after Escape in confirmation dialog', async () => {
+    setChatResponse({
+      data: {
+        tool_activity: [
+          {
+            type: 'pending_confirmation',
+            action_id: 'write-1',
+            name: 'write_file',
+            args: { path: 'notes.txt' },
+          },
+        ],
+      },
+    });
+    setConfirmResponse({ data: { result: { cancelled: true } } });
+
+    render(<App />);
+    const textarea = screen.getByLabelText(/chat message/i);
+    textarea.focus();
+    await sendMessage('create notes.txt');
+
+    await screen.findByRole('dialog');
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(textarea).toHaveFocus();
+    });
+  });
 });

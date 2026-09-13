@@ -31,9 +31,16 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
   const dialogRef = useRef(null);
   const denyRef = useRef(null);
   const allowRef = useRef(null);
+  const triggerRef = useRef(null);
 
   useEffect(() => {
     if (!pending) return undefined;
+
+    // Capture the currently focused element when dialog opens
+    if (!triggerRef.current) {
+      triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+
     denyRef.current?.focus();
 
     const handleKeyDown = (event) => {
@@ -56,6 +63,15 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [pending, resolving, onResolve]);
+
+  // Restore focus when dialog closes
+  useEffect(() => {
+    if (pending) return;
+    if (triggerRef.current && triggerRef.current.isConnected) {
+      triggerRef.current.focus();
+      triggerRef.current = null;
+    }
+  }, [pending]);
 
   if (!pending) return null;
   const readPermission = pending.name === 'read_file_permission';
@@ -476,7 +492,7 @@ const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: n
 
   useEffect(() => { let pendingFiles = null; let pendingPath = null; let restoreChatId = null; try { const rawFiles = localStorage.getItem('ai-terminal-chat:pending-files'); if (rawFiles) { pendingFiles = JSON.parse(rawFiles); localStorage.removeItem('ai-terminal-chat:pending-files'); } const rawPath = localStorage.getItem('ai-terminal-chat:pending-terminal-path'); if (rawPath) { pendingPath = rawPath; localStorage.removeItem('ai-terminal-chat:pending-terminal-path'); } const rawRestore = localStorage.getItem('ai-terminal-chat:restore-chat-id'); if (rawRestore) { restoreChatId = rawRestore; localStorage.removeItem('ai-terminal-chat:restore-chat-id'); } } catch {} if (restoreChatId) { try { const rawChats = localStorage.getItem(CHAT_STORAGE_KEY); const chats = rawChats ? JSON.parse(rawChats) : []; const chat = Array.isArray(chats) ? chats.find((c) => c.id === restoreChatId) : null; if (chat && Array.isArray(chat.messages)) { setChatId(chat.id); try { localStorage.setItem('ai-terminal-chat:current-chat-id', chat.id); } catch {} setData(chat.messages); setNewChatAvailable(true); } } catch {} } if (Array.isArray(pendingFiles)) { const paths = pendingFiles.map(({ path }) => path).filter(Boolean); setAllowedPaths(paths); try { localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths)); } catch {} if (pendingFiles.length > 0) { const fileContext = pendingFiles.map(({ path, content }) => `\n--- ${path} ---\n${content}\n--- end ${path} ---`).join('\n'); const message = `I explicitly selected these project files for you to inspect. Use the supplied contents as context for your next response.\n${fileContext}`; window.setTimeout(() => handleClick(message), 0); } } if (pendingPath) setPathForTerminal(pendingPath); }, []);
 
-  return (<div style={{ textAlign: 'center' }}><nav className="skip-links" aria-label="Skip links"><a className="skip-link" href="#main-conversation">Skip to conversation</a><a className="skip-link" href="#message-input-region">Skip to message input</a><a className="skip-link" href="#terminal-region">Skip to terminal</a></nav><div className="app-shell"><div className="chat-app" data-focus-region="chat"><Header toggled={toggled} setToggled={setToggled} waiting={waiting} pendingConfirmation={Boolean(pendingConfirmation)} /><ProviderSelector host={host} waiting={waiting} />{newChatAvailable && <div className="new-chat-link-wrapper"><a href="./index.html" className="new-chat-link" onClick={(event) => { event.preventDefault(); handleNewChat(); }}>New chat</a></div>}<ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />{waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}<div id="message-input-region"><MessageInput inputRef={inputRef} waiting={waiting} pendingConfirmation={Boolean(pendingConfirmation)} handleClick={handleClick} /></div><ConfirmationDialog pending={autoApproving ? null : pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} /></div><aside id="workspace-panels" className="workspace-panels" aria-label="Terminal"><div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-panel-heading"><TerminalPanel host={host} onSendToChat={handleClick} pathToInsert={pathForTerminal} onPathInserted={() => setPathForTerminal(null)} /></div></aside></div></div>);
+  return (<div style={{ textAlign: 'center' }}><nav className="skip-links" aria-label="Skip links"><a className="skip-link" href="#main-conversation">Skip to conversation</a><a className="skip-link" href="#message-input-region">Skip to message input</a><a className="skip-link" href="#terminal-region">Skip to terminal</a></nav><div className="app-shell"><div className="chat-app" data-focus-region="chat"><Header toggled={toggled} setToggled={setToggled} waiting={waiting} /><ProviderSelector host={host} waiting={waiting} />{newChatAvailable && <div className="new-chat-link-wrapper"><a href="./index.html" className="new-chat-link" onClick={(event) => { event.preventDefault(); handleNewChat(); }}>New chat</a></div>}<ConversationDisplayArea data={data} streamdiv={streamdiv} answer={answer} streamToolActivity={streamToolActivity} agentStatus={agentStatus} waiting={waiting} />{waiting && <button type="button" onClick={stopCurrentRequest}>Cancel response</button>}<div id="message-input-region"><MessageInput inputRef={inputRef} waiting={waiting} pendingConfirmation={Boolean(pendingConfirmation)} handleClick={handleClick} /></div><ConfirmationDialog pending={autoApproving ? null : pendingConfirmation} onResolve={resolveConfirmation} resolving={confirmationResolving} /></div><aside id="workspace-panels" className="workspace-panels" aria-label="Terminal"><div id="terminal-region" className="workspace-region" data-focus-region="terminal" aria-labelledby="terminal-panel-heading"><TerminalPanel host={host} onSendToChat={handleClick} pathToInsert={pathForTerminal} onPathInserted={() => setPathForTerminal(null)} /></div></aside></div></div>);
 }
 
 export default App;
