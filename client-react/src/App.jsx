@@ -31,10 +31,17 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
   const dialogRef = useRef(null);
   const denyRef = useRef(null);
   const allowRef = useRef(null);
+  const triggerRef = useRef(null);
 
   useEffect(() => {
     if (!pending) return undefined;
-    allowRef.current?.focus();
+
+    // Capture the currently focused element when dialog opens
+    if (!triggerRef.current) {
+      triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+
+    denyRef.current?.focus();
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape' && !resolving) {
@@ -56,6 +63,15 @@ function ConfirmationDialog({ pending, onResolve, resolving }) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [pending, resolving, onResolve]);
+
+  // Restore focus when dialog closes
+  useEffect(() => {
+    if (pending) return;
+    if (triggerRef.current && triggerRef.current.isConnected) {
+      triggerRef.current.focus();
+      triggerRef.current = null;
+    }
+  }, [pending]);
 
   if (!pending) return null;
   const readPermission = pending.name === 'read_file_permission';
