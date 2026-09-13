@@ -9,14 +9,15 @@ const Header = ({ toggled, setToggled, waiting }) => {
   const triggerRef = useRef(null);
 
   useEffect(() => {
-    if (waiting && clearRef.current === document.activeElement) {
-      document.body.focus();
+    if (!waiting) {
+      setWaitingAnnounced(false);
+      return undefined;
     }
-    if (waiting && !waitingAnnounced) {
-      setWaitingAnnounced(true);
-      setTimeout(() => setWaitingAnnounced(false), 2000);
-    }
-  }, [waiting, waitingAnnounced]);
+
+    setWaitingAnnounced(true);
+    const timer = window.setTimeout(() => setWaitingAnnounced(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [waiting]);
 
   const openConfirm = () => {
     triggerRef.current = document.activeElement;
