@@ -116,7 +116,9 @@ describe('client-react smoke tests', () => {
       fireEvent.change(screen.getByLabelText(/^message$/i), { target: { value: 'hello' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
-      await screen.findByText(/Error: Smoke failure/);
+      await screen.findByRole('article', { name: /assistant message/i }).then(el => 
+        expect(el).toHaveTextContent(/Error: Smoke failure/)
+      );
 
       const textarea = screen.getByLabelText(/^message$/i);
       expect(textarea).not.toBeDisabled();

@@ -85,35 +85,67 @@ function formatActivityItem(item) {
   return null;
 }
 
+function formatTimestamp(isoString) {
+  if (!isoString) return '';
+  try {
+    const date = new Date(isoString);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Agent activity section: renders a labelled region for each assistant message
  * that has tool activity. The most recent item is summarized using its actual
  * type (in progress, waiting on confirmation, completed, declined, or failed)
  * so the status shown always matches what really happened — it does not get
  * stuck announcing "running" after an action has already been resolved.
+ * When showAll is true, renders a list of all activities for screen reader navigation.
  */
-function ToolActivity({ activity = [], announceNew = false }) {
+function ToolActivity({ activity = [], announceNew = false, showAll = false }) {
   if (!activity || activity.length === 0) return null;
   const latest = activity[activity.length - 1];
   const formatted = formatActivityItem(latest);
   const summary = formatted ? formatted.text : 'Working…';
   const kind = formatted?.kind || 'progress';
-  return (
-    <div
-      className={`agent-activity agent-activity--${kind}`}
-      role="group"
-      aria-label="Agent activity"
-      data-testid="agent-activity"
-    >
-      <span className="agent-activity-label">Agent activity:</span>
-      <span
-        className="agent-activity-summary"
-        role="status"
-        aria-live={announceNew ? 'polite' : 'off'}
-        aria-atomic="true"
+
+  if (!showAll) {
+    return (
+      <div
+        className={`agent-activity agent-activity--${kind}`}
+        role="group"
+        aria-label="Agent activity"
+        data-testid="agent-activity"
       >
-        {summary}
-      </span>
+        <span className="agent-activity-label">Agent activity:</span>
+        <span
+          className="agent-activity-summary"
+          role="status"
+          aria-live={announceNew ? 'polite' : 'off'}
+          aria-atomic="true"
+        >
+          {summary}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="agent-activity agent-activity--complete" role="group" aria-label="Agent activity" data-testid="agent-activity">
+      <span className="agent-activity-label">Agent activity:</span>
+      <ul className="agent-activity-list" role="list" aria-label="Tool activity history">
+        {activity.map((item, idx) => {
+          const formatted = formatActivityItem(item);
+          const text = formatted ? formatted.text : 'Working…';
+          const itemKind = formatted?.kind || 'progress';
+          return (
+            <li key={idx} className={`agent-activity-item agent-activity-item--${itemKind}`} role="status" aria-live="off" aria-atomic="true">
+              {text}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -188,43 +220,132 @@ function CopyResponseButton({ text }) {
   );
 }
 
-const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatus = null, waiting = false }) => (
-  <main className="chat-area" id="main-conversation" aria-label="Conversation" aria-busy={waiting} tabIndex={-1}>
-    <AgentStatusRegion status={agentStatus} />
-    <WorkingStatus waiting={waiting} />
-    {data?.length <= 0 ? (
-      <div className="welcome-area">
-        <p className="welcome-1">Hi,</p>
-        <p className="welcome-2">How can I help you today?</p>
-      </div>
-    ) : null}
-    {data.map((element, index) => {
-      const isUser = element.role === 'user';
-      const messageLabel = isUser ? 'Your message' : 'Assistant message';
-      const responseText = element.parts?.[0]?.text || '';
-      return (
-        <article key={index} className={element.role} aria-label={`${messageLabel}, message ${index + 1}`}>
-          <img src={isUser ? userIcon : chatbotIcon} alt="" aria-hidden="true" />
+const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatus = null, waiting = false }) => {
+  const announcerRef = useRef(null);
+  const prevDataLengthRef = useRef(data?.length || 0);
+  const prevStreamdivRef = useRef(streamdiv);
+  const latestMessageIdRef = useRef(null);
+
+  useEffect(() => {
+    const currentDataLength = data?.length || 0;
+    const wasStreaming = prevStreamdivRef.current;
+    const isStreaming = streamdiv;
+
+    if (currentDataLength > prevDataLengthRef.current) {
+      const newMessages = data.slice(prevDataLengthRef.current);
+      newMessages.forEach((element, idx) => {
+        const isUser = element.role === 'user';
+        const messageLabel = isUser ? 'Your message' : 'Assistant message';
+        const responseText = element.parts?.[0]?.text || '';
+        const truncated = responseText.slice(0, 100) + (responseText.length > 100 ? '…' : '');
+        if (announcerRef.current) {
+          announcerRef.current.textContent = `${messageLabel}: ${truncated}`;
+        }
+      });
+      latestMessageIdRef.current = currentDataLength - 1;
+    } else if (wasStreaming && !isStreaming) {
+      const lastMessage = data[data.length - 1];
+      if (lastMessage && lastMessage.role === 'model') {
+        const responseText = lastMessage.parts?.[0]?.text || '';
+        const truncated = responseText.slice(0, 100) + (responseText.length > 100 ? '…' : '');
+        if (announcerRef.current) {
+          announcerRef.current.textContent = `Assistant response complete: ${truncated}`;
+        }
+      }
+      latestMessageIdRef.current = data.length - 1;
+    }
+
+    prevDataLengthRef.current = currentDataLength;
+    prevStreamdivRef.current = isStreaming;
+  }, [data, streamdiv]);
+
+  const handleSkipToLatest = () => {
+    const latestId = latestMessageIdRef.current;
+    if (latestId !== null) {
+      const el = document.getElementById(`message-${latestId}`);
+      el?.focus();
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.altKey && event.key.toLowerCase() === 'l') {
+        event.preventDefault();
+        handleSkipToLatest();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  return (
+    <main className="chat-area" id="main-conversation" aria-label="Conversation" aria-busy={waiting} tabIndex={-1}>
+      <div
+        id="conversation-announcer"
+        ref={announcerRef}
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+      />
+      <button
+        type="button"
+        className="skip-link skip-to-latest"
+        onClick={handleSkipToLatest}
+        aria-label="Jump to latest message (Alt+L)"
+      >
+        Jump to latest message
+      </button>
+      <AgentStatusRegion status={agentStatus} />
+      <WorkingStatus waiting={waiting} />
+      {data?.length <= 0 ? (
+        <div className="welcome-area">
+          <p className="welcome-1">Hi,</p>
+          <p className="welcome-2">How can I help you today?</p>
+        </div>
+      ) : null}
+      {data.map((element, index) => {
+        const isUser = element.role === 'user';
+        const messageLabel = isUser ? 'Your message' : 'Assistant message';
+        const responseText = element.parts?.[0]?.text || '';
+        const timestamp = formatTimestamp(element.timestamp);
+        const isLatest = index === data.length - 1;
+        return (
+          <article
+            key={index}
+            id={isLatest ? `message-${index}` : undefined}
+            className={element.role}
+            aria-label={`${messageLabel}, message ${index + 1}${timestamp ? `, sent at ${timestamp}` : ''}`}
+            tabIndex={isLatest ? 0 : -1}
+          >
+            <img src={isUser ? userIcon : chatbotIcon} alt="" aria-hidden="true" />
+            <div>
+              <h2 className="sr-only">{messageLabel}, message {index + 1}{timestamp ? `, sent at ${timestamp}` : ''}</h2>
+              {timestamp && (
+                <time className="message-timestamp" dateTime={element.timestamp} aria-label={`Sent at ${timestamp}`}>
+                  {timestamp}
+                </time>
+              )}
+              {!isUser && <ToolActivity activity={element.toolActivity} showAll={!streamdiv} />}
+              <div className="message-content"><Markdown>{responseText}</Markdown></div>
+              {!isUser && responseText && <CopyResponseButton text={responseText} />}
+            </div>
+          </article>
+        );
+      })}
+      {streamdiv && (
+        <article className="tempResponse" aria-label="Assistant response in progress" aria-live="off">
+          <img src={chatbotIcon} alt="" aria-hidden="true" />
           <div>
-            {!isUser && <ToolActivity activity={element.toolActivity} />}
-            <div className="message-content"><Markdown>{responseText}</Markdown></div>
-            {!isUser && responseText && <CopyResponseButton text={responseText} />}
+            <h2 className="sr-only">Assistant response in progress</h2>
+            <ToolActivity activity={streamToolActivity} announceNew />
+            {answer && <div className="message-content"><Markdown>{answer}</Markdown></div>}
           </div>
         </article>
-      );
-    })}
-    {streamdiv && (
-      <article className="tempResponse" aria-label="Assistant response in progress" aria-live="off">
-        <img src={chatbotIcon} alt="" aria-hidden="true" />
-        <div>
-          <ToolActivity activity={streamToolActivity} announceNew />
-          {answer && <div className="message-content"><Markdown>{answer}</Markdown></div>}
-        </div>
-      </article>
-    )}
-    <span id="checkpoint" aria-hidden="true" />
-  </main>
-);
+      )}
+      <span id="checkpoint" aria-hidden="true" />
+    </main>
+  );
+};
 
 export default ChatArea;
 export { AgentStatusRegion, ToolActivity, CopyResponseButton, WorkingStatus };
