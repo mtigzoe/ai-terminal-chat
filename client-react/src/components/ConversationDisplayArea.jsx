@@ -259,24 +259,13 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
     prevStreamdivRef.current = isStreaming;
   }, [data, streamdiv]);
 
-  const handleSkipToLatest = () => {
+  const handleJumpToLatest = () => {
     const latestId = latestMessageIdRef.current;
     if (latestId !== null) {
       const el = document.getElementById(`message-${latestId}`);
       el?.focus();
     }
   };
-
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.altKey && event.key.toLowerCase() === 'l') {
-        event.preventDefault();
-        handleSkipToLatest();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   return (
     <main className="chat-area" id="main-conversation" aria-label="Conversation" aria-busy={waiting} tabIndex={-1}>
@@ -289,9 +278,9 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
       />
       <button
         type="button"
-        className="skip-link skip-to-latest"
-        onClick={handleSkipToLatest}
-        aria-label="Jump to latest message (Alt+L)"
+        className="jump-to-latest"
+        onClick={handleJumpToLatest}
+        aria-label="Jump to latest message"
       >
         Jump to latest message
       </button>
@@ -315,7 +304,6 @@ const ChatArea = ({ data, streamdiv, answer, streamToolActivity = [], agentStatu
             id={isLatest ? `message-${index}` : undefined}
             className={element.role}
             aria-label={`${messageLabel}, message ${index + 1}${timestamp ? `, sent at ${timestamp}` : ''}`}
-            tabIndex={isLatest ? 0 : -1}
           >
             <img src={isUser ? userIcon : chatbotIcon} alt="" aria-hidden="true" />
             <div>
