@@ -15,7 +15,7 @@ import axios from 'axios';
 
 const HOST = 'http://localhost:9000';
 
-describe('GitStatusPanel accessibility (basic)', () => {
+describe('GitStatusPanel accessibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -48,13 +48,12 @@ describe('GitStatusPanel accessibility (basic)', () => {
     expect(results).toHaveNoViolations();
   });
 
-test('summary text exposes actual status as accessible name', async () => {
+test('summary text exposes visible status without overriding aria-label', async () => {
     axios.post.mockResolvedValue({ data: { stdout: '## main\n', stderr: '', returncode: 0 } });
     render(<GitStatusPanel />);
     await waitFor(() => {
       const summary = screen.getByTestId('git-status-summary');
       expect(summary).toBeInTheDocument();
-      // The visible text should be the accessible name (no aria-label override)
       expect(summary).not.toHaveAttribute('aria-label');
       expect(summary).toHaveTextContent(/git status — main — clean/i);
     });
