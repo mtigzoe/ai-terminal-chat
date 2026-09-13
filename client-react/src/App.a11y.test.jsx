@@ -36,7 +36,7 @@ test('chat has no automated accessibility violations while waiting for response'
   axios.post.mockReturnValue(new Promise(() => {}));
   
   const { container } = render(<App />);
-  const textarea = screen.getByLabelText(/^message$/i);
+  const textarea = screen.getByLabelText(/chat message/i);
   fireEvent.change(textarea, { target: { value: 'hi' } });
   fireEvent.click(screen.getByRole('button', { name: /send message/i }));
   

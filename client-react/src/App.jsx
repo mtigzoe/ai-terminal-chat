@@ -273,9 +273,8 @@ function App() {
             assertive: false,
           });
         }
-        // Ensure waiting is cleared and focus restored
+        // Ensure waiting is cleared (focus is managed by MessageInput on initial mount only)
         setWaiting(false);
-        window.setTimeout(() => inputRef.current?.focus(), 0);
       }
     } catch (error) {
       const message = getErrorMessage(error, 'Could not resolve confirmation.');

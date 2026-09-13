@@ -13,7 +13,7 @@ vi.mock('axios', () => ({
 import axios from 'axios';
 
 function getTextarea() {
-  return screen.getByLabelText(/^message$/i);
+  return screen.getByLabelText(/chat message/i);
 }
 
 function getSendButton() {

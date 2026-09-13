@@ -24,7 +24,7 @@ describe('keyboard accessibility', () => {
 
   test('Enter in the message input submits the message', async () => {
     render(<App />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
 
@@ -33,7 +33,7 @@ describe('keyboard accessibility', () => {
 
   test('Shift+Enter in the message input does not submit', () => {
     render(<App />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'line one' } });
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
     expect(screen.queryByRole('article', { name: /your message/i })).not.toBeInTheDocument();
@@ -59,7 +59,7 @@ describe('keyboard accessibility', () => {
     );
 
     render(<App />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
@@ -87,7 +87,7 @@ describe('keyboard accessibility', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /stream response off/i }));
 
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
@@ -104,7 +104,7 @@ describe('keyboard accessibility', () => {
     axios.post.mockReturnValue(new Promise(() => {}));
 
     render(<App />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 

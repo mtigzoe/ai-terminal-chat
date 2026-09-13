@@ -81,7 +81,7 @@ function makeStreamResponse(chunks, { ok = true, status = 200, statusText = 'OK'
 }
 
 function getTextarea() {
-  return screen.getByLabelText(/^message$/i);
+  return screen.getByLabelText(/chat message/i);
 }
 
 function getSendButton() {
@@ -969,7 +969,7 @@ describe('App-level focus and skip links', () => {
 
   test('F6 moves focus from chat to terminal', async () => {
     render(<App />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     textarea.focus();
     expect(document.activeElement).toBe(textarea);
 
@@ -986,7 +986,7 @@ describe('App-level focus and skip links', () => {
 
     fireEvent.keyDown(document, { key: 'F6' });
     await waitFor(() => {
-      expect(document.activeElement).toBe(screen.getByLabelText(/^message$/i));
+      expect(document.activeElement).toBe(screen.getByLabelText(/chat message/i));
     });
   });
 
@@ -997,14 +997,14 @@ describe('App-level focus and skip links', () => {
 
     fireEvent.keyDown(document, { key: 'F6', shiftKey: true });
     await waitFor(() => {
-      expect(document.activeElement).toBe(screen.getByLabelText(/^message$/i));
+      expect(document.activeElement).toBe(screen.getByLabelText(/chat message/i));
     });
   });
 
   test('cancel response button is present while waiting', async () => {
     axiosInstance.post.mockReturnValue(new Promise(() => {}));
     render(<App />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 

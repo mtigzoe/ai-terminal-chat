@@ -73,7 +73,7 @@ describe('client-react smoke tests', () => {
 
       expect(screen.getByRole('heading', { name: /chat/i })).toBeInTheDocument();
       expect(screen.getByRole('main', { name: /conversation/i })).toBeInTheDocument();
-      expect(screen.getByLabelText(/^message$/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/chat message/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /send message/i })).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /settings/i })).toBeInTheDocument();
     });
@@ -96,11 +96,11 @@ describe('client-react smoke tests', () => {
       defaultFetch();
       render(<App />);
 
-      fireEvent.change(screen.getByLabelText(/^message$/i), { target: { value: 'hello' } });
+      fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: 'hello' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await screen.findByText('Smoke OK');
-      expect(screen.getByLabelText(/^message$/i).value).toBe('');
+      expect(screen.getByLabelText(/chat message/i).value).toBe('');
     });
   });
 
@@ -113,14 +113,14 @@ describe('client-react smoke tests', () => {
       mockAxiosGet({ path: '/tmp/project' });
       render(<App />);
 
-      fireEvent.change(screen.getByLabelText(/^message$/i), { target: { value: 'hello' } });
+      fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: 'hello' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await screen.findByRole('article', { name: /assistant message/i }).then(el => 
         expect(el).toHaveTextContent(/Error: Smoke failure/)
       );
 
-      const textarea = screen.getByLabelText(/^message$/i);
+      const textarea = screen.getByLabelText(/chat message/i);
       expect(textarea).not.toBeDisabled();
       fireEvent.change(textarea, { target: { value: 'retry' } });
       expect(screen.getByRole('button', { name: /send message/i })).not.toBeDisabled();
@@ -173,7 +173,7 @@ describe('client-react smoke tests', () => {
 
       // Now send a chat message from the main App and verify the payload.
       render(<App />);
-      fireEvent.change(screen.getByLabelText(/^message$/i), { target: { value: 'hi' } });
+      fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: 'hi' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await waitFor(() => {
@@ -200,7 +200,7 @@ describe('client-react smoke tests', () => {
       );
 
       render(<App />);
-      fireEvent.change(screen.getByLabelText(/^message$/i), { target: { value: 'hi' } });
+      fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: 'hi' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await waitFor(() => {

@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 function getTextarea() {
-  return screen.getByLabelText(/^message$/i);
+  return screen.getByLabelText(/chat message/i);
 }
 
 function getSendButton() {

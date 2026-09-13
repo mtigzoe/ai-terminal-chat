@@ -32,20 +32,20 @@ describe('MessageInput accessibility', () => {
 
   test('associates a label with the textarea', () => {
     render(<MessageInput {...defaultProps} />);
-    expect(screen.getByLabelText(/^message$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/chat message/i)).toBeInTheDocument();
   });
 
-  test('exposes help text through aria-describedby', () => {
+  test('exposes help text and status through aria-describedby', () => {
     render(<MessageInput {...defaultProps} />);
-    const textarea = screen.getByLabelText(/^message$/i);
-    expect(textarea).toHaveAttribute('aria-describedby', 'message-input-help');
+    const textarea = screen.getByLabelText(/chat message/i);
+    expect(textarea).toHaveAttribute('aria-describedby', 'message-input-help message-input-status');
     expect(screen.getByText(/press enter to send/i)).toBeInTheDocument();
   });
 
   test('Enter submits the message', () => {
     const handleClick = () => {};
     render(<MessageInput {...defaultProps} handleClick={handleClick} />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
   });
@@ -53,7 +53,7 @@ describe('MessageInput accessibility', () => {
   test('Shift+Enter does not submit the message', () => {
     const handleClick = vi.fn();
     render(<MessageInput {...defaultProps} handleClick={handleClick} />);
-    const textarea = screen.getByLabelText(/^message$/i);
+    const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'line one' } });
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
     expect(handleClick).not.toHaveBeenCalled();
