@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import MainNav from './MainNav.jsx';
 
 const STORAGE_KEY = 'ai-terminal-chat:chats';
@@ -12,6 +12,9 @@ function HistoryPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
+  const [renameStatus, setRenameStatus] = useState('');
+  const renameButtonRefs = useRef({});
+  const searchInputRef = useRef(null);
 
   const loadChats = () => {
     try {
@@ -61,21 +64,31 @@ function HistoryPage() {
   };
 
   const handleCancelRename = () => {
+    const chatId = renamingId;
     setRenamingId(null);
     setRenameValue('');
+    setRenameStatus('');
+    if (chatId && renameButtonRefs.current[chatId]) {
+      renameButtonRefs.current[chatId].focus();
+    }
   };
 
   const handleSaveRename = (chat) => {
     const next = loadChats();
     const target = next.find((c) => c.id === chat.id);
+    let trimmed = '';
     if (target) {
-      const trimmed = String(renameValue || '').trim();
+      trimmed = String(renameValue || '').trim();
       target.title = trimmed || 'Untitled chat';
       saveChats(next);
       setChats(next);
     }
     setRenamingId(null);
     setRenameValue('');
+    setRenameStatus(`Renamed to "${trimmed || 'Untitled chat'}"`);
+    if (renameButtonRefs.current[chat.id]) {
+      renameButtonRefs.current[chat.id].focus();
+    }
   };
 
   useEffect(() => {
@@ -97,6 +110,9 @@ function HistoryPage() {
       setError('Could not clear chat history.');
     } finally {
       setClearing(false);
+      if (searchInputRef.current) {
+        searchInputRef.current.focus();
+      }
     }
   };
 
@@ -148,6 +164,7 @@ function HistoryPage() {
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               autoComplete="off"
+              ref={searchInputRef}
             />
             {chats.length > 0 && (
               <form className="history-clear-form" onSubmit={handleClear}>
@@ -179,6 +196,12 @@ function HistoryPage() {
           </p>
         )}
 
+        {renameStatus && (
+          <p className="history-status" role="status" aria-live="polite">
+            {renameStatus}
+          </p>
+        )}
+
         {filteredChats.length === 0 ? (
           <p className="history-empty">
             {chats.length === 0 ? 'No saved chats yet.' : 'No chats match your search.'}
@@ -203,7 +226,6 @@ function HistoryPage() {
                         className="history-rename-input"
                         value={renameValue}
                         onChange={(event) => setRenameValue(event.target.value)}
-                        onBlur={() => handleSaveRename(chat)}
                         onKeyDown={(event) => {
                           if (event.key === 'Escape') handleCancelRename();
                           if (event.key === 'Enter') {
@@ -221,7 +243,7 @@ function HistoryPage() {
                         type="button"
                         className="history-restore-button"
                         onClick={() => handleRestore(chat)}
-                        aria-label={`Restore chat: ${displayTitle}`}
+                        aria-label={`Restore chat: ${displayTitle}, ${(Array.isArray(chat.messages) ? chat.messages.length : 0)} messages${formatDate(chat.date) ? `, ${formatDate(chat.date)}` : ''}`}
                       >
                         <span className="history-item-title">{displayTitle}</span>
                         {formatDate(chat.date) && (
@@ -229,7 +251,7 @@ function HistoryPage() {
                             {formatDate(chat.date)}
                           </time>
                         )}
-                        <span className="history-item-count" aria-label={`${(Array.isArray(chat.messages) ? chat.messages.length : 0)} messages`}>
+                        <span className="history-item-count">
                           {(Array.isArray(chat.messages) ? chat.messages.length : 0)} msg
                         </span>
                       </button>
@@ -237,9 +259,9 @@ function HistoryPage() {
                         <button
                           type="button"
                           className="history-rename-button"
+                          ref={(el) => { renameButtonRefs.current[chat.id] = el; }}
                           onClick={() => handleStartRename(chat)}
                           aria-label={`Rename ${displayTitle}`}
-                          title="Rename"
                         >
                           Rename
                         </button>

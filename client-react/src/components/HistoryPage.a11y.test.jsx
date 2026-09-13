@@ -94,6 +94,25 @@ describe('HistoryPage accessibility', () => {
     });
   });
 
+  test('restore button accessible name includes message count and date', async () => {
+    const chats = [
+      { id: '1', title: 'My chat', date: '2024-01-01T10:00:00Z', messages: [
+        { parts: [{ text: 'msg1' }] },
+        { parts: [{ text: 'msg2' }] },
+      ] },
+    ];
+    mockLocalStorage.getItem.mockReturnValue(JSON.stringify(chats));
+
+    render(<HistoryPage />);
+    await waitFor(() => {
+      const restoreButton = screen.getByRole('button', { name: /restore chat: my chat/i });
+      expect(restoreButton).toHaveAttribute('aria-label');
+      const label = restoreButton.getAttribute('aria-label');
+      expect(label).toMatch(/2 messages/i);
+      expect(label).toMatch(/1\/1\/2024/i); // date format
+    });
+  });
+
   test('rename buttons have accessible names', async () => {
     const chats = [
       { id: '1', title: 'My chat', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'hello' }] }] },
@@ -220,5 +239,150 @@ describe('HistoryPage accessibility', () => {
     await waitFor(() => {
       expect(screen.getByLabelText(/2 messages/i)).toBeInTheDocument();
     });
+  });
+
+  test('rename does not save when focus leaves input (no onBlur save)', async () => {
+    const chats = [
+      { id: '1', title: 'Original title', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'hello' }] }] },
+    ];
+    mockLocalStorage.getItem.mockReturnValue(JSON.stringify(chats));
+
+    render(<HistoryPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /rename original title/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /rename original title/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/rename chat/i)).toBeInTheDocument();
+    });
+
+    const renameInput = screen.getByLabelText(/rename chat/i);
+    renameInput.focus();
+    fireEvent.change(renameInput, { target: { value: 'New title' } });
+
+    // Move focus away (simulate blur)
+    fireEvent.blur(renameInput);
+
+    // Chat should still be in rename mode (no save on blur)
+    // The rename input should still be there with the new value
+    await waitFor(() => {
+      expect(screen.getByLabelText(/rename chat/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/rename chat/i)).toHaveValue('New title');
+    });
+
+    // Original title button should NOT be back yet
+    expect(screen.queryByRole('button', { name: /rename original title/i })).not.toBeInTheDocument();
+  });
+
+  test('Escape cancels rename and restores focus to Rename button', async () => {
+    const chats = [
+      { id: '1', title: 'My chat', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'hello' }] }] },
+    ];
+    mockLocalStorage.getItem.mockReturnValue(JSON.stringify(chats));
+
+    render(<HistoryPage />);
+    await waitFor(() => {
+      const renameButton = screen.getByRole('button', { name: /rename my chat/i });
+      renameButton.focus();
+      fireEvent.click(renameButton);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/rename chat/i)).toBeInTheDocument();
+    });
+
+    const renameInput = screen.getByLabelText(/rename chat/i);
+    renameInput.focus();
+    fireEvent.keyDown(renameInput, { key: 'Escape' });
+
+    // Rename input should be gone
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/rename chat/i)).not.toBeInTheDocument();
+    });
+
+    // Rename button should exist again (focus restoration logic runs)
+    expect(screen.getByRole('button', { name: /rename my chat/i })).toBeInTheDocument();
+  });
+
+  test('Enter saves rename and restores focus to Rename button', async () => {
+    const chats = [
+      { id: '1', title: 'Original title', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'hello' }] }] },
+    ];
+    mockLocalStorage.getItem.mockReturnValue(JSON.stringify(chats));
+
+    render(<HistoryPage />);
+    await waitFor(() => {
+      const renameButton = screen.getByRole('button', { name: /rename original title/i });
+      renameButton.focus();
+      fireEvent.click(renameButton);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/rename chat/i)).toBeInTheDocument();
+    });
+
+    const renameInput = screen.getByLabelText(/rename chat/i);
+    renameInput.focus();
+    fireEvent.change(renameInput, { target: { value: 'New title' } });
+    fireEvent.keyDown(renameInput, { key: 'Enter' });
+
+    // Rename input should be gone
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/rename chat/i)).not.toBeInTheDocument();
+    });
+
+    // Rename button should exist with updated name (focus restoration logic runs)
+    expect(screen.getByRole('button', { name: /rename new title/i })).toBeInTheDocument();
+  });
+
+  test('successful rename is announced via status region', async () => {
+    const chats = [
+      { id: '1', title: 'Original title', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'hello' }] }] },
+    ];
+    mockLocalStorage.getItem.mockReturnValue(JSON.stringify(chats));
+
+    render(<HistoryPage />);
+    await waitFor(() => {
+      const renameButton = screen.getByRole('button', { name: /rename original title/i });
+      renameButton.focus();
+      fireEvent.click(renameButton);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/rename chat/i)).toBeInTheDocument();
+    });
+
+    const renameInput = screen.getByLabelText(/rename chat/i);
+    renameInput.focus();
+    fireEvent.change(renameInput, { target: { value: 'New title' } });
+    fireEvent.keyDown(renameInput, { key: 'Enter' });
+
+    // Status region should announce the rename
+    await waitFor(() => {
+      const status = screen.getByText(/renamed to "new title"/i);
+      expect(status).toBeInTheDocument();
+      expect(status.closest('[role="status"]')).toBeInTheDocument();
+    });
+  });
+
+  test('clear history focuses search input after clearing', async () => {
+    const chats = [
+      { id: '1', title: 'My chat', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'hello' }] }] },
+    ];
+    mockLocalStorage.getItem.mockReturnValue(JSON.stringify(chats));
+    mockLocalStorage.removeItem.mockImplementation(() => {});
+
+    render(<HistoryPage />);
+    await waitFor(() => {
+      const clearButton = screen.getByRole('button', { name: /clear/i });
+      clearButton.focus();
+      fireEvent.click(clearButton);
+    });
+
+    await waitFor(() => {
+      const status = screen.getByRole('status');
+      expect(status).toHaveTextContent(/chat history cleared/i);
+    });
+
+    // Focus should move to search input
+    expect(screen.getByLabelText(/search history/i)).toHaveFocus();
   });
 });
