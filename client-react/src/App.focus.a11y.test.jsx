@@ -442,7 +442,7 @@ describe('ConfirmationDialog variant: file read permission', () => {
     expect(document.getElementById('confirmation-dialog-safety')).toHaveTextContent(/add this file to the agent selection/i);
   });
 
-  test('initial focus goes to allow button for file read permission', async () => {
+  test('initial focus goes to decline button for file read permission', async () => {
     setChatResponse({
       data: {
         tool_activity: [
@@ -460,8 +460,8 @@ describe('ConfirmationDialog variant: file read permission', () => {
     const focusCalls = [];
     const originalFocus = HTMLElement.prototype.focus;
     HTMLElement.prototype.focus = function(...args) {
-      // Match the Allow button by text content (it has "Allow" as text)
-      if (this.tagName === 'BUTTON' && this.textContent && this.textContent.includes('Allow')) {
+      // Match the Decline button by text content (it has "Decline" as text)
+      if (this.tagName === 'BUTTON' && this.textContent && this.textContent.includes('Decline')) {
         focusCalls.push({ element: this, args });
       }
       return originalFocus.apply(this, args);
@@ -472,13 +472,13 @@ describe('ConfirmationDialog variant: file read permission', () => {
       await sendMessage('read secret.txt');
 
       await screen.findByRole('dialog');
-      const allowButton = screen.getByRole('button', { name: /allow/i });
+      const declineButton = screen.getByRole('button', { name: /decline/i });
       // In a real browser, the button would have focus. In jsdom, useEffect focus
       // on conditionally mounted components in complex trees is not observed by
       // document.activeElement. We verify the focus call was attempted by checking
-      // that the focus method was called on the allow button.
+      // that the focus method was called on the decline button.
       expect(focusCalls.length).toBeGreaterThan(0);
-      expect(focusCalls[0].element).toBe(allowButton);
+      expect(focusCalls[0].element).toBe(declineButton);
     } finally {
       HTMLElement.prototype.focus = originalFocus;
     }
@@ -763,7 +763,7 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
     expect(document.getElementById('confirmation-dialog-safety')).toHaveTextContent(/nothing will be changed unless you choose allow/i);
   });
 
-  test('initial focus goes to allow button for tool confirmation', async () => {
+  test('initial focus goes to decline button for tool confirmation', async () => {
     setChatResponse({
       data: {
         tool_activity: [
@@ -781,7 +781,7 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
     const focusCalls = [];
     const originalFocus = HTMLElement.prototype.focus;
     HTMLElement.prototype.focus = function(...args) {
-      if (this.tagName === 'BUTTON' && this.textContent && this.textContent.includes('Allow')) {
+      if (this.tagName === 'BUTTON' && this.textContent && this.textContent.includes('Decline')) {
         focusCalls.push({ element: this, args });
       }
       return originalFocus.apply(this, args);
@@ -792,9 +792,9 @@ describe('ConfirmationDialog variant: tool confirmation', () => {
       await sendMessage('create notes.txt');
 
       await screen.findByRole('dialog');
-      const allowButton = screen.getByRole('button', { name: /allow/i });
+      const declineButton = screen.getByRole('button', { name: /decline/i });
       expect(focusCalls.length).toBeGreaterThan(0);
-      expect(focusCalls[0].element).toBe(allowButton);
+      expect(focusCalls[0].element).toBe(declineButton);
     } finally {
       HTMLElement.prototype.focus = originalFocus;
     }
