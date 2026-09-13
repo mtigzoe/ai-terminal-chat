@@ -40,6 +40,14 @@ describe('ProjectExplorer accessibility', () => {
           },
         };
       }
+      if (path === 'README.md') {
+        return {
+          data: {
+            path: 'README.md',
+            contents: '# Test project',
+          },
+        };
+      }
       throw new Error(`Unexpected GET path: ${path}`);
     });
   });
@@ -96,5 +104,41 @@ describe('ProjectExplorer accessibility', () => {
 
     expect(checkbox).toBeChecked();
     expect(file).not.toHaveAttribute('aria-selected');
+  });
+
+  test('preview traps keyboard focus inside the modal dialog', async () => {
+    render(<ProjectExplorer host="http://localhost:9000" projectRoot="/project" />);
+
+    const file = await screen.findByRole('treeitem', { name: /README\.md, file/i });
+    file.focus();
+    fireEvent.keyDown(file, { key: 'Enter' });
+
+    const closeButton = await screen.findByRole('button', { name: 'Close' });
+    expect(closeButton).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Tab' });
+
+    expect(closeButton).toHaveFocus();
+  });
+
+  test('Escape closes preview and restores focus to the file treeitem', async () => {
+    render(<ProjectExplorer host="http://localhost:9000" projectRoot="/project" />);
+
+    const file = await screen.findByRole('treeitem', { name: /README\.md, file/i });
+    file.focus();
+    fireEvent.keyDown(file, { key: 'Enter' });
+
+    await screen.findByRole('button', { name: 'Close' });
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    // Allow the setTimeout in closePreview to execute and restore focus
+    await waitFor(() => {
+      expect(file).toHaveFocus();
+    });
   });
 });
