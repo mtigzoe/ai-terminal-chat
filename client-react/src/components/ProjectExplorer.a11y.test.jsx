@@ -114,11 +114,13 @@ describe('ProjectExplorer accessibility', () => {
     fireEvent.keyDown(file, { key: 'Enter' });
 
     const closeButton = await screen.findByRole('button', { name: 'Close' });
-    expect(closeButton).toHaveFocus();
+    // Focus is set in a useEffect, so wait for it to be applied
+    await waitFor(() => expect(closeButton).toHaveFocus());
 
     fireEvent.keyDown(document, { key: 'Tab' });
 
-    expect(closeButton).toHaveFocus();
+    // After Tab, focus should still be on closeButton (only focusable element in dialog)
+    await waitFor(() => expect(closeButton).toHaveFocus());
   });
 
   test('Escape closes preview and restores focus to the file treeitem', async () => {

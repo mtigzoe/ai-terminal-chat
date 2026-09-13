@@ -399,4 +399,52 @@ describe('ProjectExplorer accessibility', () => {
       expect(status).toHaveTextContent(/0 items/i);
     });
   });
+
+  test('filtered matching descendants under collapsed folder show aria-expanded=true on parent', async () => {
+    // Setup: src folder with index.js inside
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: '.', entries: [{ name: 'src', type: 'directory' }] },
+    });
+    axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+
+    // When src is expanded, it returns index.js
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: 'src', entries: [{ name: 'index.js', type: 'file' }] },
+    });
+
+    render(<ProjectExplorer host={host} />);
+
+    // Initially src is collapsed (aria-expanded is empty string for false in jsdom)
+    const srcItem = await screen.findByRole('treeitem', { name: /src, directory/i });
+    // In jsdom, aria-expanded={false} renders as empty string, not "false"
+    expect(srcItem).toHaveAttribute('aria-expanded', '');
+
+    // First expand src to load its children
+    fireEvent.keyDown(srcItem, { key: 'Enter' });
+    await waitFor(() => {
+      expect(screen.getByText(/src expanded/i)).toBeInTheDocument();
+    });
+    expect(srcItem).toHaveAttribute('aria-expanded', 'true');
+
+    // Then collapse it again
+    fireEvent.keyDown(srcItem, { key: 'Enter' });
+    await waitFor(() => {
+      expect(screen.getByText(/src collapsed/i)).toBeInTheDocument();
+    });
+    expect(srcItem).toHaveAttribute('aria-expanded', '');
+
+    // Now apply filter for index.js - the matching child should be visible
+    // and src should show aria-expanded="true" because its matching descendant is visible
+    const filter = screen.getByLabelText(/filter files and folders/i);
+    fireEvent.change(filter, { target: { value: 'index.js' } });
+
+    // Wait for filter to apply and tree to update
+    await waitFor(() => {
+      expect(screen.getByRole('treeitem', { name: /index\.js, file/i })).toBeInTheDocument();
+    });
+
+    // The src folder should now show aria-expanded="true" because its matching
+    // descendant is visible (even though user didn't explicitly expand it)
+    expect(srcItem).toHaveAttribute('aria-expanded', 'true');
+  });
 });
