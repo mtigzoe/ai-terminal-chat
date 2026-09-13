@@ -2,6 +2,10 @@ const MAX_TRACKED_REQUESTS = 200;
 const _EVENTS = new Map<string, AbortController>();
 
 export function register(requestId: string): AbortSignal {
+  if (_EVENTS.has(requestId)) {
+    throw new Error(`Request ID is already in use: ${requestId}`);
+  }
+
   const controller = new AbortController();
   if (_EVENTS.size >= MAX_TRACKED_REQUESTS) {
     const oldestId = _EVENTS.keys().next().value!;

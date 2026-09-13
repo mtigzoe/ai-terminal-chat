@@ -34,12 +34,15 @@ describe("cancellation", () => {
     expect(() => release(undefined as unknown as string)).not.toThrow();
   });
 
-  it("registering the same id twice resets the event", () => {
+  it("rejects duplicate request IDs instead of replacing the active request", () => {
     const first = register("req-1");
-    cancel("req-1");
-    expect(first.aborted).toBe(true);
 
-    const second = register("req-1");
-    expect(second.aborted).toBe(false);
+    expect(() => register("req-1")).toThrow(
+      "Request ID is already in use: req-1"
+    );
+
+    expect(first.aborted).toBe(false);
+    expect(cancel("req-1")).toBe(true);
+    expect(first.aborted).toBe(true);
   });
 });
