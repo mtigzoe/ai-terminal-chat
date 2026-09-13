@@ -215,15 +215,9 @@ describe('SettingsPage accessibility', () => {
 
     render(<SettingsPage host={HOST} />);
     await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
-
-    // Switch provider to trigger a fresh loadModels while we control the promise
-    const select = screen.getByLabelText(/ai provider/i);
-    // Keep same provider list but force change via ollama then back is hard; instead
-    // check after initial load starts - loadingModels is set true during loadModels.
-    // Initial loadModels may already have completed if models promise was not pending
-    // at first paint. Re-trigger by changing provider once models endpoint is pending.
-    fireEvent.change(select, { target: { value: 'gemini' } });
-
+// The initial settings load starts loadModels() without awaiting it.
+// Because the models request is intentionally unresolved, the model control
+// should expose aria-busy while that request is pending.
     await waitFor(() => {
       const modelControl =
         document.getElementById('settings-model') ||

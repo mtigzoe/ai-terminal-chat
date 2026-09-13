@@ -121,7 +121,9 @@ const SettingsPage = ({ host }) => {
   const checkOllamaCli = async () => {
     try {
       const response = await axios.get(`${host}/providers/ollama/status`);
-      setOllamaCliInstalled(Boolean(response.data?.installed));
+      setOllamaCliInstalled(
+        Boolean(response.data?.installed ?? response.data?.cli_installed)
+      );
     } catch {
       // If the check itself fails, don't offer to run a command that
       // may not work either — fall back to pointing at the installer.
@@ -148,7 +150,7 @@ const SettingsPage = ({ host }) => {
         }
         setAllowedCommands(allowedCommandsResponse.data.commands || []);
         setStatusMessage('');
-        await loadModels(providerResponse.data.name, providerResponse.data.model || '');
+        void loadModels(providerResponse.data.name, providerResponse.data.model || '');
       } catch {
         if (active) {
           setStatusIsError(true);
@@ -425,7 +427,13 @@ const SettingsPage = ({ host }) => {
               </div>
 
               <div className="settings-field settings-ollama-actions">
-                <span id="settings-ollama-action-label" className="settings-ollama-actions-label">
+                <span
+                  id="settings-ollama-action-label"
+                  className="settings-ollama-actions-label"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
                   {ollamaCliInstalled === null
                     ? 'Checking for Ollama…'
                     : ollamaCliInstalled
@@ -488,6 +496,7 @@ const SettingsPage = ({ host }) => {
                   onChange={(event) => setModel(event.target.value)}
                   disabled={saving || loadingModels}
                   aria-describedby="settings-model-help"
+                  aria-busy={loadingModels}
                 >
                   {models.length === 0 && model ? (
                     <option value={model} disabled>{model} (not installed)</option>
@@ -507,6 +516,8 @@ const SettingsPage = ({ host }) => {
                     disabled={saving}
                     placeholder="Or type a custom model name"
                     aria-describedby="settings-model-help"
+                    aria-label="Custom model name"
+                    aria-busy={loadingModels}
                   />
                 )}
               </>
@@ -519,6 +530,7 @@ const SettingsPage = ({ host }) => {
                 disabled={saving}
                 placeholder={loadingModels ? 'Loading models…' : 'Enter model name'}
                 aria-describedby="settings-model-help"
+                aria-busy={loadingModels}
               />
             )}
             <p id="settings-model-help" className="settings-help">
