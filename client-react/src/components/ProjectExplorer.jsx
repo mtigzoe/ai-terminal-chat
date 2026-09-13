@@ -22,7 +22,7 @@ const statusPriority = ['conflict', 'untracked', 'staged', 'added', 'modified', 
 export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles, onInsertPathIntoTerminal }) {
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
   const readStored = (key, fallback) => { try { const raw = localStorage.getItem(`${storageKey}:${key}`) ?? sessionStorage.getItem(`${storageKey}:${key}`); if (!raw) return fallback; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : fallback; } catch { return fallback; } };
-  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set(readStored('selected', []))); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewCloseRef = useRef(null); const filterRef = useRef(null); const skipNextPersist = useRef(false);
+  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set(readStored('selected', []))); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const skipNextPersist = useRef(false);
 
   const entryName = (entry) => entry?.name || entry?.path || ''; const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir; const entryPath = (entry, parentPath = '.') => { const name = entryName(entry); if (!name) return ''; if (entry?.path) return entry.path; if (!parentPath || parentPath === '.') return name; return `${parentPath.replace(/[\\/]$/, '')}/${name}`; };
   const typeLabel = (entry) => { if (isDirectory(entry)) return 'Folder'; const name = entryName(entry); const lastDot = name.lastIndexOf('.'); let ext = ''; if (lastDot > 0 && lastDot < name.length - 1) ext = name.slice(lastDot + 1).toLowerCase(); else if (lastDot === 0 && name.length > 1) ext = name.slice(1).toLowerCase(); if (!ext) return 'File'; return FILE_TYPE_LABELS[ext] || `${ext.toUpperCase()} File`; };
@@ -67,14 +67,57 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     return () => { window.removeEventListener('storage', onStorage); window.removeEventListener('ai-terminal-chat:allowed-paths-changed', syncGrantedPaths); };
   }, [storageKey]);
 
-  useEffect(() => { if (!openedFile) return undefined; previewCloseRef.current?.focus(); const onKeyDown = (event) => { if (event.key === 'Escape') { event.preventDefault(); setOpenedFile(null); } }; document.addEventListener('keydown', onKeyDown); return () => document.removeEventListener('keydown', onKeyDown); }, [openedFile]);
+const closePreview = useCallback(() => {
+    setOpenedFile(null);
+    window.setTimeout(() => previewReturnRef.current?.focus?.(), 0);
+  }, []);
+
+useEffect(() => {
+    if (!openedFile) return undefined;
+
+    previewCloseRef.current?.focus();
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePreview();
+        return;
+      }
+
+      if (event.key === 'Tab') {
+        const dialog = previewDialogRef.current;
+        const focusable = dialog?.querySelectorAll(
+          'button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])',
+        );
+
+        if (!focusable?.length) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (focusable.length === 1) {
+          event.preventDefault();
+          first.focus();
+        } else if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [openedFile, closePreview]);
   useEffect(() => { const id = window.setInterval(() => { void refreshGitStatus(); }, 5000); return () => window.clearInterval(id); }, [refreshGitStatus]);
   useEffect(() => { if (skipNextPersist.current) { skipNextPersist.current = false; return; } try { localStorage.setItem(`${storageKey}:expanded`, JSON.stringify(Array.from(expanded))); localStorage.setItem(`${storageKey}:selected`, JSON.stringify(Array.from(selectedFiles))); localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(Array.from(selectedFiles))); } catch {} }, [expanded, selectedFiles, storageKey]);
 
   const toggleDirectory = async (path, name) => { if (expanded.has(path)) { setExpanded((current) => { const next = new Set(current); next.delete(path); return next; }); setActivePath(path); setStatus(`${name} collapsed.`); return; } await loadDirectory(path); setExpanded((current) => new Set(current).add(path)); setActivePath(path); setStatus(`${name} expanded.`); };
   const collapseAll = () => { setExpanded(new Set()); setActivePath(null); setStatus('Project tree collapsed.'); window.setTimeout(() => treeRef.current?.querySelector('[role="treeitem"]')?.focus?.(), 0); };
   const expandAll = () => { const next = new Set(); const collect = (entries, parentPath) => { for (const entry of entries) { if (!isDirectory(entry)) continue; const path = entryPath(entry, parentPath); if (children[path]) { next.add(path); collect(children[path], path); } } }; collect(rootEntries, '.'); setExpanded(next); setActivePath(null); setStatus(next.size ? 'Project tree expanded.' : 'No loaded folders to expand.'); window.setTimeout(() => treeRef.current?.querySelector('[role="treeitem"]')?.focus?.(), 0); };
-  const openFile = async (entry, path) => { setStatus(`Opening ${entryName(entry)}.`); setError(''); try { const response = await axios.get(`${host}/project/read`, { params: { path } }); const content = response.data?.contents ?? response.data?.content ?? ''; const file = { path: response.data?.path || path, content }; setOpenedFile(file); onFileOpened?.(file); setActivePath(path); setStatus(`Opened ${entryName(entry)}. This does not send the file to the agent.`); } catch (err) { const message = err?.response?.data?.error || err?.message || 'Unable to open file.'; setError(message); setStatus('Unable to open file.'); } };
+  const openFile = async (entry, path) => { previewReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setStatus(`Opening ${entryName(entry)}.`); setError(''); try { const response = await axios.get(`${host}/project/read`, { params: { path } }); const content = response.data?.contents ?? response.data?.content ?? ''; const file = { path: response.data?.path || path, content }; setOpenedFile(file); onFileOpened?.(file); setActivePath(path); setStatus(`Opened ${entryName(entry)}. This does not send the file to the agent.`); } catch (err) { const message = err?.response?.data?.error || err?.message || 'Unable to open file.'; setError(message); setStatus('Unable to open file.'); } };
   const toggleFile = (entry, path, { shiftKey = false } = {}) => { setSelectedFiles((current) => { const next = new Set(current); if (shiftKey && lastSelectedPath) { const filePaths = visibleItems.filter((item) => !item.directory).map((item) => item.path); const start = filePaths.indexOf(lastSelectedPath); const end = filePaths.indexOf(path); if (start !== -1 && end !== -1) { const [from, to] = start < end ? [start, end] : [end, start]; for (let i = from; i <= to; i += 1) next.add(filePaths[i]); setStatus(`Selected ${to - from + 1} files for the agent.`); return next; } } if (next.has(path)) { next.delete(path); setStatus(`${entryName(entry)} removed from agent selection.`); } else { next.add(path); setStatus(`${entryName(entry)} selected for the agent.`); } return next; }); setLastSelectedPath(path); setActivePath(path); };
   const sortEntries = (entries) => { const factor = sortDirection === 'desc' ? -1 : 1; const compareNames = (a, b) => entryName(a).localeCompare(entryName(b), undefined, { numeric: true, sensitivity: 'base' }); return [...entries].sort((a, b) => { const aDir = isDirectory(a); const bDir = isDirectory(b); if (aDir !== bDir) return aDir ? -1 : 1; let primary = 0; if (sortColumn === 'type') primary = typeLabel(a).localeCompare(typeLabel(b), undefined, { sensitivity: 'base' }); if (primary === 0) primary = compareNames(a, b); return primary * factor; }); };
   const handleSort = (column) => { const nextDirection = sortColumn === column && sortDirection === 'asc' ? 'desc' : 'asc'; setSortColumn(column); setSortDirection(nextDirection); setStatus(`Sorted by ${SORT_COLUMN_LABELS[column]}, ${nextDirection === 'asc' ? 'ascending' : 'descending'}.`); };
@@ -107,7 +150,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         {renderedItems.map((item, renderedIndex) => { const { entry, path, level, directory } = item; const logicalIndex = shouldVirtualize ? firstVirtualIndex + renderedIndex : renderedIndex; const name = entryName(entry); const selected = selectedFiles.has(path); const isActive = activePath === path; const gitStatus = getGitStatus(path, directory); const statusDescription = gitStatus ? `, ${gitStatus.label}` : ''; const treeItemLabel = directory ? `${expanded.has(path) ? 'Expanded' : 'Collapsed'} ${name}, directory${statusDescription}` : `${name}, file${selected ? ', selected' : ''}${statusDescription}`; return <div key={path} role="treeitem" tabIndex={isActive || (!activePath && logicalIndex === 0) ? 0 : -1} aria-level={level} aria-posinset={item.posinset} aria-setsize={item.setsize} aria-expanded={directory ? expanded.has(path) : undefined} aria-label={treeItemLabel} data-tree-path={path} onFocus={() => setActivePath(path)} onKeyDown={(event) => handleTreeKeyDown(event, item)} onClick={() => directory ? toggleDirectory(path, name) : openFile(entry, path)} className="project-entry" style={shouldVirtualize ? { position: 'absolute', top: `${logicalIndex * TREE_ROW_HEIGHT}px`, insetInline: 0, height: `${TREE_ROW_HEIGHT}px`, paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` } : { paddingInlineStart: `${Math.max(0, level - 1) * 1.25}rem` }}><span className="project-entry-columns"><span className="project-entry-cell project-entry-cell-name">{directory ? <span aria-hidden="true">{expanded.has(path) ? '▾' : '▸'}</span> : <input type="checkbox" checked={selected} onChange={(event) => toggleFile(item.entry, path, { shiftKey: event.nativeEvent?.shiftKey || event.shiftKey })} aria-label={`Select ${name} for the agent`} onClick={(event) => event.stopPropagation()} />}{' '}{name}{gitStatus && <span className={`project-git-status project-git-status-${gitStatus.kind}`} aria-hidden="true" title={`Git status: ${gitStatus.label}`}>[{gitStatus.short}]</span>}</span><span className="project-entry-cell project-entry-cell-type" aria-hidden="true">{typeLabel(entry)}</span><span className="project-entry-cell project-entry-cell-size" aria-hidden="true">—</span><span className="project-entry-cell project-entry-cell-modified" aria-hidden="true">—</span></span></div>; })}
       </div>
       {visibleItems.length === 0 && !error && <div className="project-empty" aria-live="polite"><p>{normalizedFilter ? `No entries match "${filterQuery.trim()}".` : 'No entries in this project.'}</p>{!normalizedFilter && <p><a href="/settings.html#settings-project-root">Change project</a>{' · '}<button type="button" onClick={async () => { setChildren({}); setExpanded(new Set()); const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus(); }}>Retry</button></p>}</div>}
-      {openedFile && <div className="confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpenedFile(null); }}><section className="confirmation-dialog file-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="project-file-preview-heading"><h3 id="project-file-preview-heading">File: {openedFile.path}</h3><pre aria-label={`Contents of ${openedFile.path}`}>{openedFile.content}</pre><div className="confirmation-dialog-actions"><button ref={previewCloseRef} type="button" onClick={() => setOpenedFile(null)}>Close</button></div></section></div>}
+      {openedFile && <div className="confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePreview(); }}><section ref={previewDialogRef} className="confirmation-dialog file-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="project-file-preview-heading"><h3 id="project-file-preview-heading">File: {openedFile.path}</h3><pre aria-label={`Contents of ${openedFile.path}`}>{openedFile.content}</pre><div className="confirmation-dialog-actions"><button ref={previewCloseRef} type="button" onClick={closePreview}>Close</button></div></section></div>}
       <div role="status" aria-live="polite" className="project-status">{status}</div>{gitStatusError && <div role="status" aria-live="polite" className="project-git-status-error">{gitStatusError}</div>}{error && <div role="alert" className="project-error"><p>{error}</p><p><a href="/settings.html#settings-project-root">Change project</a>{' · '}<button type="button" onClick={async () => { setError(''); setChildren({}); const entries = await loadDirectory('.', true); setRootEntries(entries); void refreshGitStatus(); }}>Retry</button></p></div>}
     </section>
   );
