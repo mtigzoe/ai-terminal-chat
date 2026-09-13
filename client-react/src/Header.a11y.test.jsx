@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, test } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, test, vi } from 'vitest';
 import Header from './components/Header';
 
 describe('Header accessibility', () => {
@@ -49,5 +49,26 @@ describe('Header accessibility', () => {
     const dialog = screen.getByRole('dialog', { name: /clear conversation\?/i });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(dialog).toHaveAttribute('aria-labelledby', 'clear-conversation-title');
+  });
+
+  test('waiting status is announced once and clears after two seconds', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<Header toggled={false} setToggled={() => {}} waiting={false} />);
+      rerender(<Header toggled={false} setToggled={() => {}} waiting={true} />);
+
+      const status = screen.getByRole('status');
+      expect(status).toHaveTextContent('Response in progress — clear conversation unavailable');
+
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(status).toHaveTextContent('');
+
+      rerender(<Header toggled={false} setToggled={() => {}} waiting={true} />);
+      expect(status).toHaveTextContent('');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
