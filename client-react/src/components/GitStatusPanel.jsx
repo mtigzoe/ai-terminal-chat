@@ -130,7 +130,7 @@ export default function GitStatusPanel() {
 
   return (
     <div className={`git-status-panel ${status?.clean ? 'clean' : 'dirty'}`} id="git-status-region">
-      <p className="git-status-summary" aria-label="Repository Git status">{line}</p>
+      <p className="git-status-summary" data-testid="git-status-summary">{line}</p>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveText}</div>
     </div>
   );

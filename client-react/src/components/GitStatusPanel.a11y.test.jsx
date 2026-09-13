@@ -15,7 +15,7 @@ import axios from 'axios';
 
 const HOST = 'http://localhost:9000';
 
-describe('GitStatusPanel accessibility', () => {
+describe('GitStatusPanel accessibility (basic)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -48,12 +48,15 @@ describe('GitStatusPanel accessibility', () => {
     expect(results).toHaveNoViolations();
   });
 
-  test('summary text has accessible label', async () => {
+test('summary text exposes actual status as accessible name', async () => {
     axios.post.mockResolvedValue({ data: { stdout: '## main\n', stderr: '', returncode: 0 } });
     render(<GitStatusPanel />);
     await waitFor(() => {
-      const summary = screen.getByLabelText('Repository Git status');
-      expect(summary).toHaveAttribute('aria-label', 'Repository Git status');
+      const summary = screen.getByTestId('git-status-summary');
+      expect(summary).toBeInTheDocument();
+      // The visible text should be the accessible name (no aria-label override)
+      expect(summary).not.toHaveAttribute('aria-label');
+      expect(summary).toHaveTextContent(/git status — main — clean/i);
     });
   });
 
@@ -84,66 +87,66 @@ describe('GitStatusPanel accessibility', () => {
       expect(document.getElementById('git-status-region')).toBeInTheDocument();
     });
   });
+});
 
-  describe('parseGitStatus', () => {
-    test('parses clean status', () => {
-      const result = parseGitStatus('## main\n');
-      expect(result).toEqual({ branch: 'main', clean: true, staged: 0, changed: 0, modified: 0, untracked: 0, conflicts: 0 });
-    });
-
-    test('parses staged and modified files', () => {
-      const result = parseGitStatus('## main\nM  staged.txt\n M modified.txt\n');
-      expect(result.staged).toBe(1);
-      expect(result.modified).toBe(1);
-      expect(result.changed).toBe(2);
-    });
-
-    test('parses untracked files', () => {
-      const result = parseGitStatus('## main\n?? new.txt\n?? another.txt\n');
-      expect(result.untracked).toBe(2);
-    });
-
-    test('detects conflicts', () => {
-      const result = parseGitStatus('## main\nUU conflict.txt\n');
-      expect(result.conflicts).toBe(1);
-      expect(result.clean).toBe(false);
-    });
-
-    test('handles empty output', () => {
-      const result = parseGitStatus('');
-      expect(result.branch).toBe('');
-      expect(result.clean).toBe(true);
-    });
-
-    test('handles output with only branch', () => {
-      const result = parseGitStatus('## feature-branch\n');
-      expect(result.branch).toBe('feature-branch');
-      expect(result.clean).toBe(true);
-    });
+describe('parseGitStatus', () => {
+  test('parses clean status', () => {
+    const result = parseGitStatus('## main\n');
+    expect(result).toEqual({ branch: 'main', clean: true, staged: 0, changed: 0, modified: 0, untracked: 0, conflicts: 0 });
   });
 
-  describe('formatGitStatusLine', () => {
-    test('formats clean status', () => {
-      expect(formatGitStatusLine({ branch: 'main', clean: true })).toBe('Git status — main — clean');
-    });
+  test('parses staged and modified files', () => {
+    const result = parseGitStatus('## main\nM  staged.txt\n M modified.txt\n');
+    expect(result.staged).toBe(1);
+    expect(result.modified).toBe(1);
+    expect(result.changed).toBe(2);
+  });
 
-    test('formats dirty status with details', () => {
-      expect(formatGitStatusLine({ branch: 'main', clean: false, staged: 1, modified: 2, untracked: 1, conflicts: 0 }))
-        .toBe('Git status — main — 1 staged, 2 modified, 1 untracked');
-    });
+  test('parses untracked files', () => {
+    const result = parseGitStatus('## main\n?? new.txt\n?? another.txt\n');
+    expect(result.untracked).toBe(2);
+  });
 
-    test('handles conflicts', () => {
-      expect(formatGitStatusLine({ branch: 'main', clean: false, staged: 0, modified: 0, untracked: 0, conflicts: 2 }))
-        .toBe('Git status — main — 2 conflicts');
-    });
+  test('detects conflicts', () => {
+    const result = parseGitStatus('## main\nUU conflict.txt\n');
+    expect(result.conflicts).toBe(1);
+    expect(result.clean).toBe(false);
+  });
 
-    test('handles error status', () => {
-      expect(formatGitStatusLine({ error: 'not a git repo' })).toBe('Git status — not a git repo');
-    });
+  test('handles empty output', () => {
+    const result = parseGitStatus('');
+    expect(result.branch).toBe('');
+    expect(result.clean).toBe(true);
+  });
 
-    test('handles null/undefined', () => {
-      expect(formatGitStatusLine(null)).toBe('Git status — unavailable');
-      expect(formatGitStatusLine(undefined)).toBe('Git status — unavailable');
-    });
+  test('handles output with only branch', () => {
+    const result = parseGitStatus('## feature-branch\n');
+    expect(result.branch).toBe('feature-branch');
+    expect(result.clean).toBe(true);
+  });
+});
+
+describe('formatGitStatusLine', () => {
+  test('formats clean status', () => {
+    expect(formatGitStatusLine({ branch: 'main', clean: true })).toBe('Git status — main — clean');
+  });
+
+  test('formats dirty status with details', () => {
+    expect(formatGitStatusLine({ branch: 'main', clean: false, staged: 1, modified: 2, untracked: 1, conflicts: 0 }))
+      .toBe('Git status — main — 1 staged, 2 modified, 1 untracked');
+  });
+
+  test('handles conflicts', () => {
+    expect(formatGitStatusLine({ branch: 'main', clean: false, staged: 0, modified: 0, untracked: 0, conflicts: 2 }))
+      .toBe('Git status — main — 2 conflicts');
+  });
+
+  test('handles error status', () => {
+    expect(formatGitStatusLine({ error: 'not a git repo' })).toBe('Git status — not a git repo');
+  });
+
+  test('handles null/undefined', () => {
+    expect(formatGitStatusLine(null)).toBe('Git status — unavailable');
+    expect(formatGitStatusLine(undefined)).toBe('Git status — unavailable');
   });
 });
