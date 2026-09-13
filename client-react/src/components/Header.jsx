@@ -3,9 +3,20 @@ import MainNav from './MainNav.jsx';
 
 const Header = ({ toggled, setToggled, waiting }) => {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [waitingAnnounced, setWaitingAnnounced] = useState(false);
   const cancelRef = useRef(null);
   const clearRef = useRef(null);
   const triggerRef = useRef(null);
+
+  useEffect(() => {
+    if (waiting && clearRef.current === document.activeElement) {
+      document.body.focus();
+    }
+    if (waiting && !waitingAnnounced) {
+      setWaitingAnnounced(true);
+      setTimeout(() => setWaitingAnnounced(false), 2000);
+    }
+  }, [waiting, waitingAnnounced]);
 
   const openConfirm = () => {
     triggerRef.current = document.activeElement;
@@ -58,6 +69,9 @@ const Header = ({ toggled, setToggled, waiting }) => {
     <header className="chat-header">
       <MainNav />
       <h1>Chat</h1>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {waitingAnnounced && 'Response in progress — clear conversation unavailable'}
+      </div>
       <div className="stream-response-control">
         <span className="toggle-text" id="stream-response-label">
           Stream response
@@ -66,7 +80,7 @@ const Header = ({ toggled, setToggled, waiting }) => {
           type="button"
           className={`toggle-btn ${toggled ? 'toggled' : ''}`}
           onClick={() => setToggled(!toggled)}
-          aria-label={`Stream response ${toggled ? 'on' : 'off'}`}
+          aria-labelledby="stream-response-label"
           aria-pressed={toggled}
         >
           <span className="toggle-hover" aria-hidden="true">

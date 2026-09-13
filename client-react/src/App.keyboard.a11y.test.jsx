@@ -85,7 +85,7 @@ describe('keyboard accessibility', () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: /stream response off/i }));
+    fireEvent.click(screen.getByRole('button', { name: /stream response/i }));
 
     const textarea = screen.getByLabelText(/chat message/i);
     fireEvent.change(textarea, { target: { value: 'hi' } });

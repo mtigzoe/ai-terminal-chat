@@ -5,11 +5,11 @@ import Header from './components/Header';
 describe('Header accessibility', () => {
   test('stream toggle has aria-pressed reflecting its state', () => {
     const { rerender } = render(<Header toggled={false} setToggled={() => {}} waiting={false} />);
-    const toggle = screen.getByRole('button', { name: /stream response off/i });
+    const toggle = screen.getByRole('button', { name: /stream response/i });
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
     rerender(<Header toggled={true} setToggled={() => {}} waiting={false} />);
-    const toggleOn = screen.getByRole('button', { name: /stream response on/i });
+    const toggleOn = screen.getByRole('button', { name: /stream response/i });
     expect(toggleOn).toHaveAttribute('aria-pressed', 'true');
   });
 

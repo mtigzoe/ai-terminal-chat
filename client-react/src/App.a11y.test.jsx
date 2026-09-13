@@ -25,7 +25,7 @@ test('chat has no automated accessibility violations', async () => {
 test('chat has no automated accessibility violations with streaming mode', async () => {
   const { container, rerender } = render(<App />);
   // Toggle streaming mode
-  fireEvent.click(screen.getByRole('button', { name: /stream response off/i }));
+  fireEvent.click(screen.getByRole('button', { name: /stream response/i }));
   
   const results = await axe(container);
   expect(results).toHaveNoViolations();

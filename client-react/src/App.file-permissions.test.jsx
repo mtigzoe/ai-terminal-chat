@@ -106,7 +106,7 @@ test('streaming chat sends selected Project paths as allowed_paths', async () =>
   });
 
   render(<App />);
-  fireEvent.click(screen.getByRole('button', { name: /stream response off/i }));
+  fireEvent.click(screen.getByRole('button', { name: /stream response/i }));
   fireEvent.change(getTextarea(), { target: { value: 'Read README.md.' } });
   fireEvent.click(getSendButton());
 
