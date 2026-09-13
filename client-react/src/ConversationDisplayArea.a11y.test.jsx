@@ -45,7 +45,7 @@ describe('ConversationDisplayArea accessibility', () => {
     render(<ChatArea data={data} streamdiv={false} answer="" streamToolActivity={[]} agentStatus={null} waiting={false} />);
 
     expect(screen.getByRole('button', { name: 'Copy response' })).toBeInTheDocument();
-    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getAllByRole('button')).toHaveLength(2); // Copy response + Jump to latest message
   });
 
   test('copies the assistant response and reports success', async () => {
@@ -110,5 +110,15 @@ describe('ConversationDisplayArea accessibility', () => {
     render(<ChatArea data={data} streamdiv={false} answer="" streamToolActivity={[]} agentStatus={null} waiting={false} />);
 
     expect(screen.getByText(/Agent activity/i)).toBeInTheDocument();
+  });
+
+  test('renders a jump to latest message button', () => {
+    const data = [
+      { role: 'user', parts: [{ text: 'hi' }] },
+      { role: 'model', parts: [{ text: 'hello' }] },
+    ];
+    render(<ChatArea data={data} streamdiv={false} answer="" streamToolActivity={[]} agentStatus={null} waiting={false} />);
+
+    expect(screen.getByRole('button', { name: /jump to latest message/i })).toBeInTheDocument();
   });
 });

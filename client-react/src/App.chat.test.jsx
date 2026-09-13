@@ -131,8 +131,8 @@ describe('non-streaming chat lifecycle', () => {
     render(<App />);
     await sendMessage('read a.txt');
 
-    await screen.findByText('Done reading the file');
-    expect(screen.getByText(/Done reading the file/)).toBeInTheDocument();
+    const assistantMsg = await screen.findByRole('article', { name: /assistant message/i });
+    expect(assistantMsg).toHaveTextContent('Done reading the file');
   });
 
   test('recovers from a server error response and remains usable', async () => {
@@ -141,7 +141,8 @@ describe('non-streaming chat lifecycle', () => {
     render(<App />);
     await sendMessage('hi');
 
-    await screen.findByText(/Error: Provider offline/);
+    const assistantMsg = await screen.findByRole('article', { name: /assistant message/i });
+    expect(assistantMsg).toHaveTextContent(/Error: Provider offline/);
 
     const status = document.getElementById('agent-status-live');
     expect(status).toHaveAttribute('aria-live', 'assertive');
@@ -161,7 +162,8 @@ describe('non-streaming chat lifecycle', () => {
     render(<App />);
     await sendMessage('hi');
 
-    await screen.findByText(/Error: Cannot reach the backend at http:\/\/localhost:9000/);
+    const assistantMsg = await screen.findByRole('article', { name: /assistant message/i });
+    expect(assistantMsg).toHaveTextContent(/Error: Cannot reach the backend at http:\/\/localhost:9000/);
     expect(getTextarea()).not.toBeDisabled();
   });
 
@@ -184,7 +186,8 @@ describe('non-streaming chat lifecycle', () => {
     const cancelButton = await screen.findByRole('button', { name: /cancel response/i });
     fireEvent.click(cancelButton);
 
-    await screen.findByText(/Response stopped by user/i);
+    const assistantMsg = await screen.findByRole('article', { name: /assistant message/i });
+    expect(assistantMsg).toHaveTextContent(/Response stopped by user/i);
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/cancel/'),
       expect.objectContaining({ method: 'POST' })
@@ -251,7 +254,8 @@ describe('streaming chat lifecycle', () => {
     enableStreaming();
     await sendMessage('hi');
 
-    await screen.findByText(/Error: Internal Server Error/);
+    const assistantMsg = await screen.findByRole('article', { name: /assistant message/i });
+    expect(assistantMsg).toHaveTextContent(/Error: Internal Server Error/);
     expect(getTextarea()).not.toBeDisabled();
   });
 
@@ -268,7 +272,8 @@ describe('streaming chat lifecycle', () => {
     enableStreaming();
     await sendMessage('hi');
 
-    await screen.findByText(/Streaming stopped by user/i);
+    const assistantMsg = await screen.findByRole('article', { name: /assistant message/i });
+    expect(assistantMsg).toHaveTextContent(/Streaming stopped by user/i);
   });
 });
 

@@ -23,6 +23,10 @@ function generateRequestId() {
   return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function nowISO() {
+  return new Date().toISOString();
+}
+
 function ConfirmationDialog({ pending, onResolve, resolving }) {
   const dialogRef = useRef(null);
   const denyRef = useRef(null);
@@ -191,7 +195,7 @@ function App() {
             .pop();
           if (lastPendingIndex === undefined) {
             // Fallback: append as new message (shouldn't happen normally)
-            return [...current, { role: 'model', parts: [{ text: finalText }], toolActivity: newActivityItems }];
+            return [...current, { role: 'model', parts: [{ text: finalText }], toolActivity: newActivityItems, timestamp: nowISO() }];
           }
           return current.map((message, index) => {
             if (index !== lastPendingIndex) return message;
@@ -314,12 +318,12 @@ function App() {
   }, [pendingConfirmation, waiting]);
 
   const handleClick = (message) => { if (validationCheck(message)) return; if (!is_stream) handleNonStreamingChat(message); else handleStreamingChat(message); };
-  const handleNonStreamingChat = async (message) => { const requestId = generateRequestId(); requestIdRef.current = requestId; const controller = new AbortController(); abortControllerRef.current = controller; const resolvedAllowedPaths = resolveAllowedPaths(); const userInstructions = resolveUserInstructions(); const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions }; const ndata = [...data, { role: "user", parts: [{ text: message }] }]; flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); }); executeScroll(); const headerConfig = { headers: { 'Content-Type': 'application/json;charset=UTF-8' }, signal: controller.signal }; const fetchData = async () => { let modelResponse = ""; let toolActivity = []; let cancelled = false; try { const response = await axios.post(url, chatData, headerConfig); modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled); const pending = toolActivity.find((item) => item.type === 'pending_confirmation'); if (pending) { setPendingConfirmation(pending); setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false }); } else if (cancelled) { if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false }); } else { const status = statusFromToolActivity(toolActivity); if (status) setAgentStatus(status); else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } } catch (error) { if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") { cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); } } finally { if (abortControllerRef.current === controller) abortControllerRef.current = null; requestIdRef.current = null; const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }]; flushSync(() => { setData(updatedData); setWaiting(false); }); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0); } }; fetchData(); };
+  const handleNonStreamingChat = async (message) => { const requestId = generateRequestId(); requestIdRef.current = requestId; const controller = new AbortController(); abortControllerRef.current = controller; const resolvedAllowedPaths = resolveAllowedPaths(); const userInstructions = resolveUserInstructions(); const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions }; const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: nowISO() }]; flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); }); executeScroll(); const headerConfig = { headers: { 'Content-Type': 'application/json;charset=UTF-8' }, signal: controller.signal }; const fetchData = async () => { let modelResponse = ""; let toolActivity = []; let cancelled = false; try { const response = await axios.post(url, chatData, headerConfig); modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled); const pending = toolActivity.find((item) => item.type === 'pending_confirmation'); if (pending) { setPendingConfirmation(pending); setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false }); } else if (cancelled) { if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false }); } else { const status = statusFromToolActivity(toolActivity); if (status) setAgentStatus(status); else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } } catch (error) { if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") { cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); } } finally { if (abortControllerRef.current === controller) abortControllerRef.current = null; requestIdRef.current = null; const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }]; flushSync(() => { setData(updatedData); setWaiting(false); }); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0); } }; fetchData(); };
   const handleStreamingChat = async (message) => {
     const resolvedAllowedPaths = resolveAllowedPaths();
     const userInstructions = resolveUserInstructions();
     const chatData = { chat: message, history: data, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions };
-    const ndata = [...data, { role: "user", parts: [{ text: message }] }];
+const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: nowISO() }];
     flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); });
     executeScroll();
     const headerConfig = { Accept: "application/x-ndjson, text/plain", "Content-Type": "application/json" };
@@ -356,6 +360,7 @@ function App() {
             parts: [{ text: modelResponse }],
             toolActivity: [...toolActivity],
             pendingConfirmation: true,
+            timestamp: nowISO(),
           };
           flushSync(() => {
             setData((current) => [...current, pendingModelMessage]);
@@ -458,7 +463,7 @@ function App() {
           window.setTimeout(() => inputRef.current?.focus(), 0);
         } else {
           setAnswer("");
-          const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity }];
+          const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse || (cancelled ? "[Streaming stopped by user.]" : "") }], toolActivity, timestamp: nowISO() }];
           flushSync(() => { setData(updatedData); setWaiting(false); });
           showStreamdiv(false);
           setStreamToolActivity([]);
