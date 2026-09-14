@@ -22,7 +22,7 @@ const statusPriority = ['conflict', 'untracked', 'staged', 'added', 'modified', 
 export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles, onInsertPathIntoTerminal }) {
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
   const readStored = (key, fallback) => { try { const raw = localStorage.getItem(`${storageKey}:${key}`) ?? sessionStorage.getItem(`${storageKey}:${key}`); if (!raw) return fallback; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : fallback; } catch { return fallback; } };
-  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set(readStored('selected', []))); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const skipNextPersist = useRef(false);
+  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set(readStored('selected', []))); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const skipNextPersist = useRef(false); const treeHasFocusRef = useRef(false);
 
   const entryName = (entry) => entry?.name || entry?.path || ''; const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir; const entryPath = (entry, parentPath = '.') => { const name = entryName(entry); if (!name) return ''; if (entry?.path) return entry.path; if (!parentPath || parentPath === '.') return name; return `${parentPath.replace(/[\\/]$/, '')}/${name}`; };
   const typeLabel = (entry) => { if (isDirectory(entry)) return 'Folder'; const name = entryName(entry); const lastDot = name.lastIndexOf('.'); let ext = ''; if (lastDot > 0 && lastDot < name.length - 1) ext = name.slice(lastDot + 1).toLowerCase(); else if (lastDot === 0 && name.length > 1) ext = name.slice(1).toLowerCase(); if (!ext) return 'File'; return FILE_TYPE_LABELS[ext] || `${ext.toUpperCase()} File`; };
@@ -134,7 +134,37 @@ useEffect(() => {
   const shouldVirtualize = visibleItems.length > VIRTUALIZATION_THRESHOLD; const viewportItemCount = Math.ceil(TREE_VIEWPORT_HEIGHT / TREE_ROW_HEIGHT); const firstVirtualIndex = shouldVirtualize ? Math.max(0, Math.floor(scrollTop / TREE_ROW_HEIGHT) - VIRTUALIZATION_OVERSCAN) : 0; const lastVirtualIndex = shouldVirtualize ? Math.min(visibleItems.length, firstVirtualIndex + viewportItemCount + VIRTUALIZATION_OVERSCAN * 2) : visibleItems.length; const renderedItems = shouldVirtualize ? visibleItems.slice(firstVirtualIndex, lastVirtualIndex) : visibleItems;
   const focusItem = (path) => { const index = visibleItems.findIndex((item) => item.path === path); if (index < 0) return; setActivePath(path); if (shouldVirtualize) { const top = index * TREE_ROW_HEIGHT; const bottom = top + TREE_ROW_HEIGHT; const viewportBottom = scrollTop + TREE_VIEWPORT_HEIGHT; if (top < scrollTop) setScrollTop(top); else if (bottom > viewportBottom) setScrollTop(Math.max(0, bottom - TREE_VIEWPORT_HEIGHT)); } };
   useEffect(() => { if (!activePath) return undefined; if (!treeRef.current || !treeRef.current.contains(document.activeElement)) { return undefined; } const frame = window.requestAnimationFrame(() => { treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(activePath)}"]`)?.focus?.(); }); return () => window.cancelAnimationFrame(frame); }, [activePath]);
+  // Track whether the tree has focus using focusin/focusout events
+  useEffect(() => {
+    const tree = treeRef.current;
+    if (!tree) return;
+    const onFocusIn = () => { treeHasFocusRef.current = true; };
+    const onFocusOut = (e) => { if (!tree.contains(e.relatedTarget)) treeHasFocusRef.current = false; };
+    tree.addEventListener('focusin', onFocusIn);
+    tree.addEventListener('focusout', onFocusOut);
+    return () => {
+      tree.removeEventListener('focusin', onFocusIn);
+      tree.removeEventListener('focusout', onFocusOut);
+    };
+  }, []);
   const moveActive = (offset) => { if (!visibleItems.length) return; const currentIndex = visibleItems.findIndex((item) => item.path === activePath); const index = currentIndex < 0 ? 0 : currentIndex; const next = Math.max(0, Math.min(index + offset, visibleItems.length - 1)); focusItem(visibleItems[next].path); };
+// Keep activePath valid when filter changes remove the focused item.
+// Always update activePath to a visible item (or null).
+// Only move DOM focus if the tree currently has focus.
+  useEffect(() => {
+    if (!activePath) return;
+    const stillVisible = visibleItems.some((item) => item.path === activePath);
+    if (stillVisible) return;
+    const nextItem = visibleItems[0] ?? null;
+    setActivePath(nextItem?.path ?? null);
+    // Only move DOM focus if tree has focus (not filter, not external controls)
+    const treeHasFocus = treeHasFocusRef.current;
+    if (treeHasFocus && nextItem) {
+      window.setTimeout(() => {
+        treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(nextItem.path)}"]`)?.focus?.();
+      }, 0);
+    }
+  }, [visibleItems, filterQuery, activePath]);
   const handleTreeKeyDown = async (event, item) => { const index = visibleItems.findIndex((visible) => visible.path === item.path); if (event.key === 'ArrowDown') { event.preventDefault(); moveActive(1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveActive(-1); } else if (event.key === 'Home') { event.preventDefault(); if (visibleItems[0]) focusItem(visibleItems[0].path); } else if (event.key === 'End') { event.preventDefault(); const last = visibleItems[visibleItems.length - 1]; if (last) focusItem(last.path); } else if (item.directory && event.key === 'ArrowRight') { event.preventDefault(); if (!expanded.has(item.path)) await toggleDirectory(item.path, entryName(item.entry)); else if (children[item.path]?.length) { const firstChild = visibleItems[index + 1]; if (firstChild) focusItem(firstChild.path); } } else if (item.directory && event.key === 'ArrowLeft') { event.preventDefault(); if (expanded.has(item.path)) await toggleDirectory(item.path, entryName(item.entry)); else if (item.parentPath !== '.') focusItem(item.parentPath); } else if (item.directory && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); await toggleDirectory(item.path, entryName(item.entry)); } else if (!item.directory && event.key === 'Enter') { event.preventDefault(); await openFile(item.entry, item.path); } else if (!item.directory && event.key === ' ') { event.preventDefault(); toggleFile(item.entry, item.path); } };
   useEffect(() => { if (!normalizedFilter) return undefined; const count = visibleItems.length; setStatus(count ? `Filter "${filterQuery.trim()}": ${count} visible ${count === 1 ? 'item' : 'items'}.` : `No entries match "${filterQuery.trim()}".`); return undefined; }, [filterQuery, rootEntries, children, expanded]);
 
