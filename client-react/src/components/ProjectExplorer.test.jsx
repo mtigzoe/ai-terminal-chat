@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import axios from 'axios';
@@ -359,4 +359,134 @@ test('keyboard End in a virtualized tree keeps focus on the last item and scroll
   });
   expect(tree.scrollTop).toBeGreaterThan(0);
   expect(screen.getByRole('treeitem', { name: /file-249\.txt, file/i })).toBeInTheDocument();
+});
+
+test('Refresh aborts an in-flight initial expanded-path load so stale children are not applied', async () => {
+  const user = userEvent.setup();
+  let resolveSrc;
+  let listCalls = 0;
+  axios.get.mockImplementation(async (_url, config = {}) => {
+    const path = config.params?.path;
+    listCalls += 1;
+    if (path === '.') {
+      return {
+        data: {
+          path: '.',
+          entries: [
+            { name: 'src', type: 'directory' },
+            { name: 'fresh.txt', type: 'file' },
+          ],
+        },
+      };
+    }
+    if (path === 'src') {
+      return new Promise((resolve) => {
+        resolveSrc = resolve;
+      });
+    }
+    return { data: { path, entries: [] } };
+  });
+
+  localStorage.setItem(
+    `project-explorer:${host}:expanded`,
+    JSON.stringify(['src']),
+  );
+
+  render(<ProjectExplorer host={host} />);
+  expect(await screen.findByRole('treeitem', { name: /fresh\.txt, file/i })).toBeInTheDocument();
+
+  // Refresh before the delayed src/ response arrives.
+  await user.click(screen.getByRole('button', { name: /refresh/i }));
+  expect(await screen.findByRole('treeitem', { name: /fresh\.txt, file/i })).toBeInTheDocument();
+
+  // Late src response from the aborted initial sequence must not expand or inject children.
+  resolveSrc({ data: { path: 'src', entries: [{ name: 'stale.js', type: 'file' }] } });
+  await waitFor(() => {
+    expect(screen.queryByRole('treeitem', { name: /stale\.js/i })).not.toBeInTheDocument();
+  });
+  const srcItem = screen.getByRole('treeitem', { name: /src, directory/i });
+  expect(srcItem).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('unchecking a file removes it from ai-terminal-chat:allowed-paths', async () => {
+  const user = userEvent.setup();
+  mockProjectList({
+    '.': [
+      { name: 'keep.txt', type: 'file' },
+      { name: 'drop.txt', type: 'file' },
+    ],
+  });
+
+  render(<ProjectExplorer host={host} />);
+  const keep = await screen.findByRole('checkbox', { name: /select keep\.txt for the agent/i });
+  const drop = screen.getByRole('checkbox', { name: /select drop\.txt for the agent/i });
+
+  await user.click(keep);
+  await user.click(drop);
+  await waitFor(() => {
+    const allowed = JSON.parse(localStorage.getItem('ai-terminal-chat:allowed-paths'));
+    expect(allowed).toEqual(expect.arrayContaining(['keep.txt', 'drop.txt']));
+  });
+
+  await user.click(drop);
+  await waitFor(() => {
+    const allowed = JSON.parse(localStorage.getItem('ai-terminal-chat:allowed-paths'));
+    expect(allowed).toEqual(['keep.txt']);
+  });
+});
+
+test('Refresh prunes selected files that no longer exist in the reloaded directory', async () => {
+  const user = userEvent.setup();
+  const listings = {
+    '.': [
+      { name: 'gone.txt', type: 'file' },
+      { name: 'stay.txt', type: 'file' },
+    ],
+  };
+  mockProjectList(listings);
+
+  render(<ProjectExplorer host={host} />);
+  const gone = await screen.findByRole('checkbox', { name: /select gone\.txt for the agent/i });
+  await user.click(gone);
+  await user.click(screen.getByRole('checkbox', { name: /select stay\.txt for the agent/i }));
+  await waitFor(() => {
+    expect(JSON.parse(localStorage.getItem('ai-terminal-chat:allowed-paths'))).toEqual(
+      expect.arrayContaining(['gone.txt', 'stay.txt']),
+    );
+  });
+
+  listings['.'] = [{ name: 'stay.txt', type: 'file' }];
+  await user.click(screen.getByRole('button', { name: /refresh/i }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole('checkbox', { name: /select gone\.txt/i })).not.toBeInTheDocument();
+  });
+  await waitFor(() => {
+    const allowed = JSON.parse(localStorage.getItem('ai-terminal-chat:allowed-paths') || '[]');
+    expect(allowed).toEqual(['stay.txt']);
+  });
+});
+
+test('virtualized tree keeps a tabbable treeitem when the active path is outside the window', async () => {
+  const entries = Array.from({ length: 250 }, (_, index) => ({
+    name: `file-${String(index).padStart(3, '0')}.txt`,
+    type: 'file',
+  }));
+  mockProjectList({ '.': entries });
+
+  render(<ProjectExplorer host={host} />);
+  const tree = await screen.findByRole('tree', { name: /project files and directories/i });
+
+  const first = await screen.findByRole('treeitem', { name: /file-000\.txt, file/i });
+  first.focus();
+  expect(first).toHaveAttribute('tabIndex', '0');
+
+  // Scroll the virtualized window so file-000 is no longer rendered while activePath stays file-000.
+  fireEvent.scroll(tree, { target: { scrollTop: 200 * 32 } });
+
+  await waitFor(() => {
+    expect(screen.queryByRole('treeitem', { name: /file-000\.txt, file/i })).not.toBeInTheDocument();
+  });
+  const tabbable = tree.querySelectorAll('[role="treeitem"][tabindex="0"]');
+  expect(tabbable.length).toBeGreaterThanOrEqual(1);
 });
