@@ -585,4 +585,48 @@ describe('ProjectExplorer accessibility', () => {
     });
     expect(bItem).not.toHaveFocus();
   });
+
+  test('activePath updates to visible item when filter input has focus, but DOM focus stays on filter', async () => {
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: '.', entries: [
+        { name: 'a.txt', type: 'file' },
+        { name: 'b.txt', type: 'file' },
+      ] },
+    });
+    axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+
+    render(<ProjectExplorer host={host} />);
+
+    const aItem = await screen.findByRole('treeitem', { name: /a\.txt, file/i });
+    const bItem = screen.getByRole('treeitem', { name: /b\.txt, file/i });
+
+    // Focus a.txt
+    aItem.focus();
+    expect(aItem).toHaveFocus();
+
+    // Move focus to the filter input
+    const filter = screen.getByLabelText(/filter files and folders/i);
+    filter.focus();
+    expect(filter).toHaveFocus();
+
+    // Filter to only show b.txt (a.txt will be hidden)
+    fireEvent.change(filter, { target: { value: 'b.txt' } });
+
+    // Wait for filter to apply and a.txt to be removed from DOM
+    await waitFor(() => {
+      expect(screen.queryByRole('treeitem', { name: /a\.txt, file/i })).not.toBeInTheDocument();
+    });
+
+    // Focus should remain on the filter input
+    await waitFor(() => {
+      expect(filter).toHaveFocus();
+    });
+
+    // b.txt should be the new activePath (tabIndex="0") but NOT have DOM focus
+    expect(bItem).not.toHaveFocus();
+    expect(bItem).toHaveAttribute('tabIndex', '0');
+
+    // a.txt should no longer be in the document
+    expect(screen.queryByRole('treeitem', { name: /a\.txt, file/i })).not.toBeInTheDocument();
+  });
 });

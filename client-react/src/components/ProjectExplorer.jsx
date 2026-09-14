@@ -149,18 +149,17 @@ useEffect(() => {
   }, []);
   const moveActive = (offset) => { if (!visibleItems.length) return; const currentIndex = visibleItems.findIndex((item) => item.path === activePath); const index = currentIndex < 0 ? 0 : currentIndex; const next = Math.max(0, Math.min(index + offset, visibleItems.length - 1)); focusItem(visibleItems[next].path); };
 // Keep activePath valid when filter changes remove the focused item.
-// Only move focus if it was already inside the tree (not in the filter input).
+// Always update activePath to a visible item (or null).
+// Only move DOM focus if the tree currently has focus.
   useEffect(() => {
     if (!activePath) return;
     const stillVisible = visibleItems.some((item) => item.path === activePath);
     if (stillVisible) return;
-    const filterHasFocus = filterRef.current?.contains(document.activeElement) ?? false;
-    if (filterHasFocus) return; // user is typing in the filter field
-    const treeHadFocus = treeHasFocusRef.current;
     const nextItem = visibleItems[0] ?? null;
     setActivePath(nextItem?.path ?? null);
-    if (treeHadFocus && nextItem) {
-      // Focus the new item on the next tick so React has rendered it
+    // Only move DOM focus if tree has focus (not filter, not external controls)
+    const treeHasFocus = treeHasFocusRef.current;
+    if (treeHasFocus && nextItem) {
       window.setTimeout(() => {
         treeRef.current?.querySelector(`[data-tree-path="${CSS.escape(nextItem.path)}"]`)?.focus?.();
       }, 0);
