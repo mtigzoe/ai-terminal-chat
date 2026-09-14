@@ -22,7 +22,7 @@ const statusPriority = ['conflict', 'untracked', 'staged', 'added', 'modified', 
 export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles, onInsertPathIntoTerminal }) {
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
   const readStored = (key, fallback) => { try { const raw = localStorage.getItem(`${storageKey}:${key}`) ?? sessionStorage.getItem(`${storageKey}:${key}`); if (!raw) return fallback; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : fallback; } catch { return fallback; } };
-  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set(readStored('selected', []))); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const skipNextPersist = useRef(false); const treeHasFocusRef = useRef(false); const childrenRef = useRef({}); const loadGens = useRef(new Map()); const explorerEpoch = useRef(0);
+  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set(readStored('selected', []))); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const skipNextPersist = useRef(false); const treeHasFocusRef = useRef(false); const childrenRef = useRef({}); const loadGens = useRef(new Map()); const explorerEpoch = useRef(0); const pendingExpand = useRef(new Set());
 
   const entryName = (entry) => entry?.name || entry?.path || ''; const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir; const entryPath = (entry, parentPath = '.') => { const name = entryName(entry); if (!name) return ''; if (entry?.path) return entry.path; if (!parentPath || parentPath === '.') return name; return `${parentPath.replace(/[\\/]$/, '')}/${name}`; };
   const typeLabel = (entry) => { if (isDirectory(entry)) return 'Folder'; const name = entryName(entry); const lastDot = name.lastIndexOf('.'); let ext = ''; if (lastDot > 0 && lastDot < name.length - 1) ext = name.slice(lastDot + 1).toLowerCase(); else if (lastDot === 0 && name.length > 1) ext = name.slice(1).toLowerCase(); if (!ext) return 'File'; return FILE_TYPE_LABELS[ext] || `${ext.toUpperCase()} File`; };
@@ -42,21 +42,42 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
       if (loadGens.current.get(path) !== gen) return null; // stale for this path
       const nextEntries = Array.isArray(response.data?.entries) ? response.data.entries : [];
       setChildren((current) => ({ ...current, [path]: nextEntries }));
-      // Drop selected files that were direct children of this path but are gone.
-      const childPaths = new Set(nextEntries.map((entry) => {
+      // Drop selections that are direct children of this path and missing, or
+      // descendants whose immediate child segment under this path is missing
+      // (e.g. selected src/foo.js when src/ was removed from '.').
+      const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '') || '.';
+      const base = norm(path);
+      const present = new Set();
+      for (const entry of nextEntries) {
         const name = entry?.name || entry?.path || '';
-        if (!name) return '';
-        if (entry?.path) return entry.path;
-        if (!path || path === '.') return name;
-        return `${String(path).replace(/[\\/]$/, '')}/${name}`;
-      }).filter(Boolean));
+        if (!name) continue;
+        const full = entry?.path
+          ? norm(entry.path)
+          : (base === '.' ? norm(name) : `${base}/${norm(name)}`);
+        present.add(full);
+      }
       setSelectedFiles((current) => {
         let changed = false;
         const next = new Set();
         for (const selected of current) {
-          const parent = selected.includes('/') ? selected.slice(0, selected.lastIndexOf('/')) : '.';
-          const isDirectChild = parent === path || (path === '.' && !selected.includes('/'));
-          if (isDirectChild && !childPaths.has(selected)) {
+          const s = norm(selected);
+          const underBase = base === '.'
+            ? s !== '.'
+            : (s === base || s.startsWith(`${base}/`));
+          if (!underBase) {
+            next.add(selected);
+            continue;
+          }
+          const rest = base === '.' ? s : (s === base ? '' : s.slice(base.length + 1));
+          if (!rest) {
+            // Selected the directory path itself — keep only if still present.
+            if (!present.has(s) && base !== '.') { changed = true; continue; }
+            next.add(selected);
+            continue;
+          }
+          const firstSeg = rest.includes('/') ? rest.slice(0, rest.indexOf('/')) : rest;
+          const immediate = base === '.' ? firstSeg : `${base}/${firstSeg}`;
+          if (!present.has(immediate)) {
             changed = true;
             continue;
           }
@@ -200,18 +221,22 @@ useEffect(() => {
 
   const toggleDirectory = async (path, name) => {
     if (expanded.has(path)) {
+      pendingExpand.current.delete(path);
       setExpanded((current) => { const next = new Set(current); next.delete(path); return next; });
       setActivePath(path);
       setStatus(`${name} collapsed.`);
       return;
     }
+    pendingExpand.current.add(path);
     const entries = await loadDirectory(path);
-    if (entries == null) return; // failed or stale — do not expand
+    const stillWanted = pendingExpand.current.has(path);
+    pendingExpand.current.delete(path);
+    if (entries == null || !stillWanted) return; // failed, stale, or collapsed during load
     setExpanded((current) => new Set(current).add(path));
     setActivePath(path);
     setStatus(`${name} expanded.`);
   };
-  const collapseAll = () => { setExpanded(new Set()); setActivePath(null); setStatus('Project tree collapsed.'); window.setTimeout(() => treeRef.current?.querySelector('[role="treeitem"]')?.focus?.(), 0); };
+  const collapseAll = () => { pendingExpand.current.clear(); setExpanded(new Set()); setActivePath(null); setStatus('Project tree collapsed.'); window.setTimeout(() => treeRef.current?.querySelector('[role="treeitem"]')?.focus?.(), 0); };
   const expandAll = () => { const next = new Set(); const collect = (entries, parentPath) => { for (const entry of entries) { if (!isDirectory(entry)) continue; const path = entryPath(entry, parentPath); if (children[path]) { next.add(path); collect(children[path], path); } } }; collect(rootEntries, '.'); setExpanded(next); setActivePath(null); setStatus(next.size ? 'Project tree expanded.' : 'No loaded folders to expand.'); window.setTimeout(() => treeRef.current?.querySelector('[role="treeitem"]')?.focus?.(), 0); };
   const openFile = async (entry, path) => { previewReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setStatus(`Opening ${entryName(entry)}.`); setError(''); try { const response = await axios.get(`${host}/project/read`, { params: { path } }); const content = response.data?.contents ?? response.data?.content ?? ''; const file = { path: response.data?.path || path, content }; setOpenedFile(file); onFileOpened?.(file); setActivePath(path); setStatus(`Opened ${entryName(entry)}. This does not send the file to the agent.`); } catch (err) { const message = err?.response?.data?.error || err?.message || 'Unable to open file.'; setError(message); setStatus('Unable to open file.'); } };
   const toggleFile = (entry, path, { shiftKey = false } = {}) => { setSelectedFiles((current) => { const next = new Set(current); if (shiftKey && lastSelectedPath) { const filePaths = visibleItems.filter((item) => !item.directory).map((item) => item.path); const start = filePaths.indexOf(lastSelectedPath); const end = filePaths.indexOf(path); if (start !== -1 && end !== -1) { const [from, to] = start < end ? [start, end] : [end, start]; for (let i = from; i <= to; i += 1) next.add(filePaths[i]); setStatus(`Selected ${to - from + 1} files for the agent.`); return next; } } if (next.has(path)) { next.delete(path); setStatus(`${entryName(entry)} removed from agent selection.`); } else { next.add(path); setStatus(`${entryName(entry)} selected for the agent.`); } return next; }); setLastSelectedPath(path); setActivePath(path); };
@@ -272,7 +297,7 @@ useEffect(() => {
   return (
     <section className="project-explorer" role="region" aria-labelledby="project-explorer-heading" data-focus-region="project">
       <h2 id="project-explorer-heading">Project</h2><p className="project-explorer-path" aria-label="Current project directory">{projectRoot || '.'}</p><p className="project-change-link"><a href="/settings.html#settings-project-root">Change project</a></p>
-      <div className="project-actions"><button type="button" onClick={collapseAll}>Collapse all</button><button type="button" onClick={expandAll}>Expand all</button><button type="button" onClick={async () => { explorerEpoch.current += 1; loadGens.current.set('.', (loadGens.current.get('.') || 0) + 1); setChildren({}); setExpanded(new Set()); setActivePath(null); try { localStorage.removeItem(`${storageKey}:expanded`); sessionStorage.removeItem(`${storageKey}:expanded`); } catch {} const entries = await loadDirectory('.', true, true); if (entries != null) setRootEntries(entries); void refreshGitStatus(); }}>Refresh</button><button type="button" onClick={selectAllVisible}>Select all visible</button><button type="button" onClick={selectAllFiles} disabled={selectingAllFiles}>Select all files</button><button type="button" onClick={clearSelection} disabled={selectedFiles.size === 0}>Clear selection</button><button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>Use selected files with agent ({selectedFiles.size})</button>{onInsertPathIntoTerminal && <button type="button" onClick={() => { const path = activePath || Array.from(selectedFiles)[0] || '.'; onInsertPathIntoTerminal(path); setStatus(`Sent path ${path} to the terminal command field.`); }} disabled={!activePath && selectedFiles.size === 0} title="Insert the focused or selected path into the terminal command field">Insert path into terminal</button>}</div>
+      <div className="project-actions"><button type="button" onClick={collapseAll}>Collapse all</button><button type="button" onClick={expandAll}>Expand all</button><button type="button" onClick={async () => { explorerEpoch.current += 1; loadGens.current.set('.', (loadGens.current.get('.') || 0) + 1); setChildren({}); setExpanded(new Set()); pendingExpand.current.clear(); setActivePath(null); try { localStorage.removeItem(`${storageKey}:expanded`); sessionStorage.removeItem(`${storageKey}:expanded`); } catch {} const entries = await loadDirectory('.', true, true); if (entries != null) setRootEntries(entries); void refreshGitStatus(); }}>Refresh</button><button type="button" onClick={selectAllVisible}>Select all visible</button><button type="button" onClick={selectAllFiles} disabled={selectingAllFiles}>Select all files</button><button type="button" onClick={clearSelection} disabled={selectedFiles.size === 0}>Clear selection</button><button type="button" onClick={useSelectedFiles} disabled={selectedFiles.size === 0}>Use selected files with agent ({selectedFiles.size})</button>{onInsertPathIntoTerminal && <button type="button" onClick={() => { const path = activePath || Array.from(selectedFiles)[0] || '.'; onInsertPathIntoTerminal(path); setStatus(`Sent path ${path} to the terminal command field.`); }} disabled={!activePath && selectedFiles.size === 0} title="Insert the focused or selected path into the terminal command field">Insert path into terminal</button>}</div>
       <div className="project-filter"><label htmlFor="project-filter-input">Filter files and folders</label><input ref={filterRef} id="project-filter-input" type="search" value={filterQuery} onChange={(event) => setFilterQuery(event.target.value)} placeholder="Type to filter..." autoComplete="off" aria-controls="project-tree-list" />{filterQuery && <button type="button" onClick={() => { setFilterQuery(''); filterRef.current?.focus(); }}>Clear filter</button>}</div>
       <div className="project-help-block"><button type="button" className="project-shortcuts-toggle" aria-expanded={showShortcuts} aria-controls="project-shortcuts" onClick={() => setShowShortcuts((value) => !value)}>{showShortcuts ? 'Hide keyboard shortcuts' : 'Show keyboard shortcuts'}</button>{showShortcuts && <ul id="project-shortcuts" className="project-shortcuts"><li>F6 / Shift+F6 — move between chat, project tree, and terminal</li><li>Arrow keys — move between visible items</li><li>Right Arrow — expand folder; Left Arrow — collapse folder</li><li>Enter or Space — toggle folder; Enter on a file opens a preview</li><li>Home / End — first or last visible item</li><li>Checkboxes — select files to supply their contents to the agent</li><li>Insert path into terminal — places the focused or selected path in the terminal command field</li><li>Name / Type column headers — sort the file list; activate again to reverse the order</li></ul>}<p id="project-selection-help" className="project-selection-help">Tree view. Use arrow keys to navigate. Right Arrow expands a folder, Left Arrow collapses it, Enter or Space toggles a folder. Check files to supply their contents to the agent. Use the Name or Type column headers to sort the list. Use “Insert path into terminal” for a command workflow. Press F6 to move between the chat, project tree, and terminal.</p></div>
       <div className="project-tree-header" role="table" aria-label="Sort project files and folders"><div role="row" className="project-tree-header-row"><span role="columnheader" aria-sort={ariaSortValue('name')} className="project-tree-header-cell project-tree-header-cell-name"><button type="button" className="project-sort-button" onClick={() => handleSort('name')} aria-label={sortButtonLabel('name')}>Name<span aria-hidden="true" className="project-sort-glyph">{sortGlyph('name')}</span></button></span><span role="columnheader" aria-sort={ariaSortValue('type')} className="project-tree-header-cell project-tree-header-cell-type"><button type="button" className="project-sort-button" onClick={() => handleSort('type')} aria-label={sortButtonLabel('type')}>Type<span aria-hidden="true" className="project-sort-glyph">{sortGlyph('type')}</span></button></span><span role="columnheader" className="project-tree-header-cell project-tree-header-cell-size" title="Size is not provided by the project server.">Size</span><span role="columnheader" className="project-tree-header-cell project-tree-header-cell-modified" title="Modified date is not provided by the project server.">Modified</span></div></div>

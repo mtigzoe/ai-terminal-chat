@@ -490,3 +490,151 @@ test('virtualized tree keeps a tabbable treeitem when the active path is outside
   const tabbable = tree.querySelectorAll('[role="treeitem"][tabindex="0"]');
   expect(tabbable.length).toBeGreaterThanOrEqual(1);
 });
+
+test('Refresh prunes nested selections when an ancestor directory disappears', async () => {
+  const user = userEvent.setup();
+  const listings = {
+    '.': [
+      { name: 'src', type: 'directory' },
+      { name: 'stay.txt', type: 'file' },
+    ],
+    src: [
+      { name: 'nested.js', type: 'file' },
+    ],
+  };
+  mockProjectList(listings);
+
+  // Pre-select a nested path (as Chat or a previous session might have).
+  localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['src/nested.js', 'stay.txt']));
+  localStorage.setItem(`project-explorer:${host}:selected`, JSON.stringify(['src/nested.js', 'stay.txt']));
+
+  render(<ProjectExplorer host={host} />);
+  expect(await screen.findByRole('checkbox', { name: /select stay\.txt for the agent/i })).toBeChecked();
+
+  // src/ removed from the project root.
+  listings['.'] = [{ name: 'stay.txt', type: 'file' }];
+  delete listings.src;
+  await user.click(screen.getByRole('button', { name: /refresh/i }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole('treeitem', { name: /src, directory/i })).not.toBeInTheDocument();
+  });
+  await waitFor(() => {
+    const allowed = JSON.parse(localStorage.getItem('ai-terminal-chat:allowed-paths') || '[]');
+    expect(allowed).toEqual(['stay.txt']);
+  });
+});
+
+test('selection prune normalizes backslash paths when matching children', async () => {
+  const user = userEvent.setup();
+  const listings = {
+    '.': [
+      { name: 'src', type: 'directory' },
+      { name: 'keep.txt', type: 'file' },
+    ],
+  };
+  mockProjectList(listings);
+
+  // Windows-style stored selection under src\
+  localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['src\\gone.js', 'keep.txt']));
+  localStorage.setItem(`project-explorer:${host}:selected`, JSON.stringify(['src\\gone.js', 'keep.txt']));
+
+  render(<ProjectExplorer host={host} />);
+  expect(await screen.findByRole('checkbox', { name: /select keep\.txt for the agent/i })).toBeChecked();
+
+  listings['.'] = [{ name: 'keep.txt', type: 'file' }];
+  await user.click(screen.getByRole('button', { name: /refresh/i }));
+
+  await waitFor(() => {
+    const allowed = JSON.parse(localStorage.getItem('ai-terminal-chat:allowed-paths') || '[]');
+    expect(allowed).toEqual(['keep.txt']);
+  });
+});
+
+test('a deferred initial root load cannot overwrite a completed Refresh', async () => {
+  const user = userEvent.setup();
+  let resolveInitial;
+  let rootCalls = 0;
+  axios.get.mockImplementation(async (_url, config = {}) => {
+    const path = config.params?.path;
+    if (path !== '.') {
+      return { data: { path, entries: [] } };
+    }
+    rootCalls += 1;
+    if (rootCalls === 1) {
+      return new Promise((resolve) => {
+        resolveInitial = resolve;
+      });
+    }
+    return {
+      data: {
+        path: '.',
+        entries: [{ name: 'after-refresh.txt', type: 'file' }],
+      },
+    };
+  });
+
+  render(<ProjectExplorer host={host} />);
+  // Initial request is in flight; Refresh starts a newer root load.
+  await user.click(await screen.findByRole('button', { name: /refresh/i }));
+  expect(await screen.findByRole('treeitem', { name: /after-refresh\.txt, file/i })).toBeInTheDocument();
+
+  // Late initial response with stale listing must not replace the Refresh result.
+  resolveInitial({
+    data: {
+      path: '.',
+      entries: [{ name: 'stale-initial.txt', type: 'file' }],
+    },
+  });
+
+  await waitFor(() => {
+    expect(screen.getByRole('treeitem', { name: /after-refresh\.txt, file/i })).toBeInTheDocument();
+    expect(screen.queryByRole('treeitem', { name: /stale-initial\.txt/i })).not.toBeInTheDocument();
+  });
+});
+
+test('collapsing a folder while its load is pending does not re-expand when the response arrives', async () => {
+  const user = userEvent.setup();
+  let resolveSrc;
+  axios.get.mockImplementation(async (_url, config = {}) => {
+    const path = config.params?.path;
+    if (path === '.') {
+      return {
+        data: {
+          path: '.',
+          entries: [{ name: 'src', type: 'directory' }],
+        },
+      };
+    }
+    if (path === 'src') {
+      return new Promise((resolve) => {
+        resolveSrc = resolve;
+      });
+    }
+    return { data: { path, entries: [] } };
+  });
+
+  render(<ProjectExplorer host={host} />);
+  const folder = await screen.findByRole('treeitem', { name: /src, directory/i });
+  await user.click(folder); // start expand (load pending)
+  expect(folder).toHaveAttribute('aria-expanded', 'false'); // not expanded until load completes
+
+  // Collapse while pending (second click while still collapsed may just re-trigger expand).
+  // Instead, ensure pendingExpand is cleared by clicking collapse after a microtask
+  // once expanded would be set — we simulate by calling collapse via keyboard after
+  // marking intent: click again is expand intent in UI when aria-expanded is false.
+  // Force collapse by using the Collapse all control.
+  await user.click(screen.getByRole('button', { name: /collapse all/i }));
+
+  resolveSrc({
+    data: {
+      path: 'src',
+      entries: [{ name: 'late.js', type: 'file' }],
+    },
+  });
+
+  await waitFor(() => {
+    expect(screen.getByRole('treeitem', { name: /src, directory/i })).toHaveAttribute('aria-expanded', 'false');
+  });
+  expect(screen.queryByRole('treeitem', { name: /late\.js/i })).not.toBeInTheDocument();
+});
