@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import './GitStatusBadge.css';
 import './ProjectExplorerColumns.css';
@@ -170,7 +170,7 @@ const closePreview = useCallback(() => {
     window.setTimeout(() => previewReturnRef.current?.focus?.(), 0);
   }, []);
 
-useEffect(() => {
+useLayoutEffect(() => {
     if (!openedFile) return undefined;
 
     previewCloseRef.current?.focus();
