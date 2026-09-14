@@ -154,10 +154,6 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
-    // Mock the src/ directory load
-    axiosInstance.get.mockResolvedValueOnce({
-      data: { path: 'src', entries: [] },
-    });
 
     render(<ProjectExplorer host={host} />);
 
@@ -177,10 +173,6 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
-    // Mock the src/ directory load
-    axiosInstance.get.mockResolvedValueOnce({
-      data: { path: 'src', entries: [] },
-    });
 
     render(<ProjectExplorer host={host} />);
 
@@ -200,10 +192,6 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
-    // Mock the src/ directory load
-    axiosInstance.get.mockResolvedValueOnce({
-      data: { path: 'src', entries: [] },
-    });
 
     render(<ProjectExplorer host={host} />);
 
@@ -273,10 +261,6 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
-    // Mock the src/ directory load
-    axiosInstance.get.mockResolvedValueOnce({
-      data: { path: 'src', entries: [] },
-    });
 
     render(<ProjectExplorer host={host} />);
 
@@ -430,9 +414,10 @@ describe('ProjectExplorer accessibility', () => {
 
     render(<ProjectExplorer host={host} />);
 
-    // Initially src is collapsed (aria-expanded="false" explicitly)
+    // Initially src is collapsed (aria-expanded is empty string for false in jsdom)
     const srcItem = await screen.findByRole('treeitem', { name: /src, directory/i });
-    expect(srcItem).toHaveAttribute('aria-expanded', 'false');
+    // In jsdom, aria-expanded={false} renders as empty string, not "false"
+    expect(srcItem).toHaveAttribute('aria-expanded', '');
 
     // First expand src to load its children
     fireEvent.keyDown(srcItem, { key: 'Enter' });
@@ -446,7 +431,7 @@ describe('ProjectExplorer accessibility', () => {
     await waitFor(() => {
       expect(screen.getByText(/src collapsed/i)).toBeInTheDocument();
     });
-    expect(srcItem).toHaveAttribute('aria-expanded', 'false');
+    expect(srcItem).toHaveAttribute('aria-expanded', '');
 
     // Now apply filter for index.js - the matching child should be visible
     // and src should show aria-expanded="true" because its matching descendant is visible
