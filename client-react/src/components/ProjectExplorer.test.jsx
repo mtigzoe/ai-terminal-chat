@@ -163,3 +163,200 @@ test('periodic refresh triggers another git status request after approximately 5
   setIntervalSpy.mockRestore();
   clearIntervalSpy.mockRestore();
 });
+
+function mockProjectList(entriesByPath) {
+  axios.get.mockImplementation(async (_url, config = {}) => {
+    const path = config.params?.path;
+    if (path in entriesByPath) {
+      return { data: { path, entries: entriesByPath[path] } };
+    }
+    const error = new Error(`Unable to load ${path}`);
+    error.response = { data: { error: `Unable to load ${path}` } };
+    throw error;
+  });
+}
+
+test('Refresh re-fetches the project listing instead of returning the cached directory', async () => {
+  const user = userEvent.setup();
+  const listings = {
+    '.': [
+      { name: 'old.txt', type: 'file' },
+      { name: 'src', type: 'directory' },
+    ],
+  };
+  mockProjectList(listings);
+
+  render(<ProjectExplorer host={host} />);
+  expect(await screen.findByRole('treeitem', { name: /old\.txt, file/i })).toBeInTheDocument();
+
+  listings['.'] = [
+    { name: 'new.txt', type: 'file' },
+    { name: 'src', type: 'directory' },
+  ];
+
+  await user.click(screen.getByRole('button', { name: /refresh/i }));
+
+  expect(await screen.findByRole('treeitem', { name: /new\.txt, file/i })).toBeInTheDocument();
+  expect(screen.queryByRole('treeitem', { name: /old\.txt, file/i })).not.toBeInTheDocument();
+});
+
+test('a slower initial directory response does not overwrite a newer Refresh result', async () => {
+  const user = userEvent.setup();
+  let resolveInitial;
+  let listCalls = 0;
+  axios.get.mockImplementation(async (_url, config = {}) => {
+    const path = config.params?.path;
+    if (path !== '.') {
+      return { data: { path, entries: [] } };
+    }
+    listCalls += 1;
+    if (listCalls === 1) {
+      return new Promise((resolve) => {
+        resolveInitial = resolve;
+      });
+    }
+    return { data: { path: '.', entries: [{ name: 'new.txt', type: 'file' }] } };
+  });
+
+  render(<ProjectExplorer host={host} />);
+  await user.click(await screen.findByRole('button', { name: /refresh/i }));
+  expect(await screen.findByRole('treeitem', { name: /new\.txt, file/i })).toBeInTheDocument();
+
+  resolveInitial({ data: { path: '.', entries: [{ name: 'old.txt', type: 'file' }] } });
+
+  await waitFor(() => {
+    expect(screen.getByRole('treeitem', { name: /new\.txt, file/i })).toBeInTheDocument();
+    expect(screen.queryByRole('treeitem', { name: /old\.txt, file/i })).not.toBeInTheDocument();
+  });
+});
+
+test('failed folder loads do not stay expanded', async () => {
+  const user = userEvent.setup();
+  axios.get.mockImplementation(async (_url, config = {}) => {
+    const path = config.params?.path;
+    if (path === '.') {
+      return { data: { path: '.', entries: [{ name: 'src', type: 'directory' }] } };
+    }
+    const error = new Error('boom');
+    error.response = { data: { error: 'Unable to load src' } };
+    throw error;
+  });
+
+  render(<ProjectExplorer host={host} />);
+  const folder = await screen.findByRole('treeitem', { name: /src, directory/i });
+  await user.click(folder);
+
+  await waitFor(() => {
+    expect(screen.getByRole('alert')).toHaveTextContent(/unable to load src/i);
+  });
+  expect(folder).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('stored expanded paths that fail to load are dropped instead of staying expanded', async () => {
+  localStorage.setItem(
+    `project-explorer:${host}:expanded`,
+    JSON.stringify(['src']),
+  );
+  axios.get.mockImplementation(async (_url, config = {}) => {
+    const path = config.params?.path;
+    if (path === '.') {
+      return { data: { path: '.', entries: [{ name: 'src', type: 'directory' }] } };
+    }
+    const error = new Error('boom');
+    error.response = { data: { error: 'Unable to load src' } };
+    throw error;
+  });
+
+  render(<ProjectExplorer host={host} />);
+  const folder = await screen.findByRole('treeitem', { name: /src, directory/i });
+  await waitFor(() => {
+    expect(folder).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+test('mounting the explorer does not wipe Chat-granted allowed paths', async () => {
+  const allowedWrites = [];
+  const originalSetItem = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key, value) {
+    if (key === 'ai-terminal-chat:allowed-paths') {
+      allowedWrites.push(JSON.parse(String(value)));
+    }
+    return originalSetItem.call(this, key, value);
+  });
+
+  localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['granted.txt']));
+  mockProjectList({
+    '.': [
+      { name: 'granted.txt', type: 'file' },
+      { name: 'other.txt', type: 'file' },
+    ],
+  });
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('checkbox', { name: /select granted\.txt for the agent/i })).toBeChecked();
+  expect(JSON.parse(localStorage.getItem('ai-terminal-chat:allowed-paths'))).toEqual(['granted.txt']);
+  expect(allowedWrites.length).toBeGreaterThan(0);
+  expect(allowedWrites.every((paths) => paths.includes('granted.txt'))).toBe(true);
+});
+
+test('shift-click selects the visible file range and ignores files hidden by the filter', async () => {
+  const user = userEvent.setup();
+  mockProjectList({
+    '.': [
+      { name: 'a.txt', type: 'file' },
+      { name: 'b.txt', type: 'file' },
+      { name: 'c.txt', type: 'file' },
+    ],
+  });
+
+  render(<ProjectExplorer host={host} />);
+  const checkboxA = await screen.findByRole('checkbox', { name: /select a\.txt for the agent/i });
+  const checkboxC = screen.getByRole('checkbox', { name: /select c\.txt for the agent/i });
+
+  await user.click(checkboxA);
+  await user.keyboard('{Shift>}');
+  await user.click(checkboxC);
+  await user.keyboard('{/Shift}');
+
+  expect(checkboxA).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /select b\.txt for the agent/i })).toBeChecked();
+  expect(checkboxC).toBeChecked();
+
+  await user.click(screen.getByRole('button', { name: /clear selection/i }));
+  await user.click(checkboxA);
+  await user.type(screen.getByLabelText(/filter files and folders/i), 'c');
+
+  const filteredC = await screen.findByRole('checkbox', { name: /select c\.txt for the agent/i });
+  await user.keyboard('{Shift>}');
+  await user.click(filteredC);
+  await user.keyboard('{/Shift}');
+
+  await user.click(screen.getByRole('button', { name: /clear filter/i }));
+  expect(screen.getByRole('checkbox', { name: /select a\.txt for the agent/i })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /select b\.txt for the agent/i })).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /select c\.txt for the agent/i })).toBeChecked();
+});
+
+test('keyboard End in a virtualized tree keeps focus on the last item and scrolls it into the window', async () => {
+  const user = userEvent.setup();
+  const entries = Array.from({ length: 250 }, (_, index) => ({
+    name: `file-${String(index).padStart(3, '0')}.txt`,
+    type: 'file',
+  }));
+  mockProjectList({ '.': entries });
+
+  render(<ProjectExplorer host={host} />);
+  const tree = await screen.findByRole('tree', { name: /project files and directories/i });
+  expect(tree).toHaveStyle({ position: 'relative' });
+
+  const first = await screen.findByRole('treeitem', { name: /file-000\.txt, file/i });
+  first.focus();
+  await user.keyboard('{End}');
+
+  await waitFor(() => {
+    expect(document.activeElement).toHaveAttribute('data-tree-path', 'file-249.txt');
+  });
+  expect(tree.scrollTop).toBeGreaterThan(0);
+  expect(screen.getByRole('treeitem', { name: /file-249\.txt, file/i })).toBeInTheDocument();
+});
