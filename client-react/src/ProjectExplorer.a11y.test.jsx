@@ -546,4 +546,43 @@ describe('ProjectExplorer accessibility', () => {
     });
     expect(bItem).not.toHaveFocus();
   });
+
+  test('activePath does not move focus when tree lost focus before filter change', async () => {
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: '.', entries: [
+        { name: 'a.txt', type: 'file' },
+        { name: 'b.txt', type: 'file' },
+      ] },
+    });
+    axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+
+    render(<ProjectExplorer host={host} />);
+
+    const aItem = await screen.findByRole('treeitem', { name: /a\.txt, file/i });
+    const bItem = screen.getByRole('treeitem', { name: /b\.txt, file/i });
+
+    // Focus a.txt (tree has focus)
+    aItem.focus();
+    expect(aItem).toHaveFocus();
+
+    // Move focus to a sort button (outside the tree)
+    const sortButton = screen.getByRole('button', { name: /name, sorted ascending. activate to sort descending/i });
+    sortButton.focus();
+    expect(sortButton).toHaveFocus();
+
+    // Now filter to only show b.txt
+    const filter = screen.getByLabelText(/filter files and folders/i);
+    fireEvent.change(filter, { target: { value: 'b.txt' } });
+
+    // Wait for filter to apply
+    await waitFor(() => {
+      expect(screen.queryByRole('treeitem', { name: /a\.txt, file/i })).not.toBeInTheDocument();
+    });
+
+    // Focus should stay on the sort button, not move to b.txt
+    await waitFor(() => {
+      expect(sortButton).toHaveFocus();
+    });
+    expect(bItem).not.toHaveFocus();
+  });
 });
