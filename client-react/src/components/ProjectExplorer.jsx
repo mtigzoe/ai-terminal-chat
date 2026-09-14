@@ -53,7 +53,35 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
     }
   }, [host]);
 
-  useEffect(() => { let active = true; setStatus('Loading project.'); axios.get(`${host}/project/list`, { params: { path: '.' } }).then(async (response) => { if (!active) return; const nextEntries = Array.isArray(response.data?.entries) ? response.data.entries : []; setRootEntries(nextEntries); setChildren((current) => ({ ...current, '.': nextEntries })); setError(''); setStatus(`${response.data?.path || '.'}: ${nextEntries.length} items.`); void refreshGitStatus(); const paths = Array.from(expanded).filter((path) => path && path !== '.'); if (paths.length) { const loaded = {}; for (const path of paths) { if (!active) return; try { const res = await axios.get(`${host}/project/list`, { params: { path } }); loaded[path] = Array.isArray(res.data?.entries) ? res.data.entries : []; } catch {} } if (active && Object.keys(loaded).length) setChildren((current) => ({ ...current, ...loaded })); } }).catch((err) => { if (!active) return; const message = err?.response?.data?.error || err?.message || 'Unable to load project directory.'; setRootEntries([]); setError(message); setStatus('Unable to load project directory.'); }); return () => { active = false; }; }, [host]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setStatus('Loading project.');
+      // Route through loadDirectory so the initial '.' request participates in
+      // the same per-path generation as Refresh (prevents a late initial
+      // response from overwriting a newer Refresh result).
+      const entries = await loadDirectory('.', true, true);
+      if (cancelled || entries == null) return;
+      setRootEntries(entries);
+      void refreshGitStatus();
+      const paths = Array.from(expanded).filter((path) => path && path !== '.');
+      const failed = [];
+      for (const path of paths) {
+        if (cancelled) return;
+        const result = await loadDirectory(path);
+        if (result == null) failed.push(path);
+      }
+      if (cancelled) return;
+      if (failed.length) {
+        setExpanded((current) => {
+          const next = new Set(current);
+          failed.forEach((p) => next.delete(p));
+          return next;
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [host]);
 
   // A Chat-page permission grant is persisted in the same browser storage
   // used for agent read permissions. Merge newly granted paths into the
