@@ -154,6 +154,10 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+    // Mock the src/ directory load
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: 'src', entries: [] },
+    });
 
     render(<ProjectExplorer host={host} />);
 
@@ -173,6 +177,10 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+    // Mock the src/ directory load
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: 'src', entries: [] },
+    });
 
     render(<ProjectExplorer host={host} />);
 
@@ -192,6 +200,10 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+    // Mock the src/ directory load
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: 'src', entries: [] },
+    });
 
     render(<ProjectExplorer host={host} />);
 
@@ -261,6 +273,10 @@ describe('ProjectExplorer accessibility', () => {
       ] },
     });
     axiosInstance.post.mockResolvedValueOnce({ data: { stdout: '' } });
+    // Mock the src/ directory load
+    axiosInstance.get.mockResolvedValueOnce({
+      data: { path: 'src', entries: [] },
+    });
 
     render(<ProjectExplorer host={host} />);
 

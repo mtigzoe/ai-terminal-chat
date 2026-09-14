@@ -107,6 +107,16 @@ describe('ProjectExplorer accessibility', () => {
   });
 
   test('preview traps keyboard focus inside the modal dialog', async () => {
+    axios.get.mockResolvedValueOnce({
+      data: { path: '.', entries: [
+        { name: 'README.md', type: 'file' },
+      ] },
+    });
+    axios.post.mockResolvedValueOnce({ data: { stdout: '' } });
+    axios.get.mockResolvedValueOnce({
+      data: { path: 'README.md', contents: '# Hello' },
+    });
+
     render(<ProjectExplorer host="http://localhost:9000" projectRoot="/project" />);
 
     const file = await screen.findByRole('treeitem', { name: /README\.md, file/i });
