@@ -470,6 +470,9 @@ export function safePath(inputPath: string): string {
 
 const SENSITIVE_EXACT_NAMES = new Set([
   ".git-credentials",
+  ".npmrc",
+  ".pypirc",
+  ".netrc",
   "credentials.json",
   "secrets.json",
   "id_rsa",
