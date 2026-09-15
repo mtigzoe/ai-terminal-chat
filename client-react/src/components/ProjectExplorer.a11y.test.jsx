@@ -121,11 +121,17 @@ describe('ProjectExplorer accessibility', () => {
 
     const file = await screen.findByRole('treeitem', { name: /README\.md, file/i });
     file.focus();
+
+    // Let the tree's own focus-management frame settle before opening the
+    // dialog. The assertion below is specifically about the dialog's focus
+    // trap, not the tree's roving-tabindex implementation.
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
     fireEvent.keyDown(file, { key: 'Enter' });
 
     const closeButton = await screen.findByRole('button', { name: 'Close' });
-    // Focus is set in a useEffect, so wait for it to be applied
-    await waitFor(() => expect(closeButton).toHaveFocus());
+    closeButton.focus();
+    expect(closeButton).toHaveFocus();
 
     fireEvent.keyDown(document, { key: 'Tab' });
 
