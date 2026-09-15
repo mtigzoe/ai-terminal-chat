@@ -49,34 +49,6 @@ function hasValidBearerToken(request: Request): boolean {
   return authorization === `Bearer ${apiAuthToken}`;
 }
 
-function addHealthProof(response: Response, request: Request): Response {
-  const expectedToken = process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
-  const challenge = request.headers.get("x-ai-terminal-chat-health-challenge");
-
-  if (!expectedToken || !challenge || response.status !== 200) {
-    return response;
-  }
-
-  const proof = crypto
-    .createHmac("sha256", expectedToken)
-    .update(challenge)
-    .digest("hex");
-
-  try {
-    const payload = response.clone();
-    return new Response(
-      payload.body,
-      {
-        status: response.status,
-        statusText: response.statusText,
-        headers: new Headers(response.headers),
-      },
-    );
-  } catch {
-    return response;
-  }
-}
-
 async function securedFetch(request: Request): Promise<Response> {
   const origin = request.headers.get("origin");
 
