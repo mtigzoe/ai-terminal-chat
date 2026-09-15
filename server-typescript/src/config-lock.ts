@@ -288,13 +288,42 @@ export function isLockOwnerDead(owner: ConfigLockOwner): boolean {
   return current !== owner.startToken;
 }
 
+/**
+ * Legacy/empty/malformed locks (pre-metadata) are reclaimed when older than
+ * the acquire timeout. Safe because the old implementation never wrote
+ * ownership data; any such file left behind is a crash remnant.
+ */
+function isLegacyLockReclaimable(lockPath: string): boolean {
+  try {
+    const info = statSync(lockPath);
+    if (!info.isFile()) return false;
+    if (info.size === 0 || info.size > MAX_LOCK_FILE_BYTES) {
+      return Date.now() - info.mtimeMs >= CONFIG_LOCK_TIMEOUT_MS;
+    }
+    const raw = readFileSync(lockPath, "utf8");
+    if (parseLockOwner(raw) === null) {
+      return Date.now() - info.mtimeMs >= CONFIG_LOCK_TIMEOUT_MS;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function tryReclaimStaleLock(lockPath: string): boolean {
   const snapshot = readLockSnapshot(lockPath);
-  if (snapshot === null) return false;
-  if (!isLockOwnerDead(snapshot.owner)) return false;
+  if (snapshot === null) {
+    if (!isLegacyLockReclaimable(lockPath)) return false;
+  } else if (!isLockOwnerDead(snapshot.owner)) {
+    return false;
+  }
 
-  const again = readLockSnapshot(lockPath);
-  if (again === null || again.raw !== snapshot.raw) return false;
+  if (snapshot !== null) {
+    const again = readLockSnapshot(lockPath);
+    if (again === null || again.raw !== snapshot.raw) return false;
+  } else if (!isLegacyLockReclaimable(lockPath)) {
+    return false;
+  }
 
   try {
     rmSync(lockPath);
