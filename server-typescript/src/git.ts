@@ -261,12 +261,6 @@ async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
     } else {
       throw new Error(".git must be a directory or gitfile.");
     }
-
-    // Linked worktrees keep their private Git directory under the common
-    // repository's .git/worktrees/<name>. Git may load the shared
-    // $GIT_COMMON_DIR/config before the worktree-specific config.worktree.
-    // Resolve and sanitize both locations so shared config cannot bypass the
-    // execution/network isolation boundary.
     let commonDir = gitDir;
     const commondirPath = join(gitDir, "commondir");
     if (existsSync(commondirPath)) {
@@ -278,7 +272,6 @@ async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
     const configPaths = [join(commonDir, "config")];
     const worktreeConfig = join(gitDir, "config.worktree");
     if (existsSync(worktreeConfig) && worktreeConfig !== configPaths[0]) configPaths.push(worktreeConfig);
-
     const originals: Array<{ path: string; content: string; sanitized: string }> = [];
     for (const configPath of configPaths) {
       const stat = lstatSync(configPath);
@@ -304,6 +297,7 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
   const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
   const emptyConfigPath = join(isolationDir, "config");
   writeFileSync(emptyConfigPath, "", { encoding: "utf8", mode: 0o600 });
+  const isRemoteCommand = args[0]?.toLowerCase() === "remote";
   try {
     const dynamic = options.skipDynamicOverrides ? [] : await dynamicConfigOverrides();
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...dynamic, ...args];
@@ -311,7 +305,6 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.GIT_EXTERNAL_DIFF; delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
     Object.assign(env, { GIT_CONFIG: emptyConfigPath, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_SSH_COMMAND: getGitSshCommand(), GIT_PROXY_COMMAND: "none", GIT_PAGER: "cat", PAGER: "cat" });
-    const isRemoteCommand = args[0]?.toLowerCase() === "remote";
     if (options.input !== undefined) {
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });
@@ -324,20 +317,12 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
       return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(stdout) : stdout, stderr: "" };
     }
     const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, windowsHide: true, maxBuffer, encoding: "utf8", env });
-    return {
-      code: 0,
-      stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stdout ?? "")) : String(result.stdout ?? ""),
-      stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stderr ?? "")) : String(result.stderr ?? ""),
-    };
+    return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stdout ?? "")) : String(result.stdout ?? ""), stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stderr ?? "")) : String(result.stderr ?? "") };
   } catch (error) {
     const value = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; status?: number; code?: number | string; killed?: boolean };
     if (value.code === "ENOENT") throw error;
     if (value.code === "ETIMEDOUT" || value.killed) throw Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" });
-    return {
-      code: typeof value.code === "number" ? value.code : (value.status ?? 1),
-      stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(value.stdout ?? "")) : String(value.stdout ?? ""),
-      stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(value.stderr ?? "")) : String(value.stderr ?? ""),
-    };
+    return { code: typeof value.code === "number" ? value.code : (value.status ?? 1), stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(value.stdout ?? "")) : String(value.stdout ?? ""), stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(value.stderr ?? "")) : String(value.stderr ?? "") };
   } finally { try { rmSync(isolationDir, { recursive: true, force: true }); } catch { } }
 }
 
