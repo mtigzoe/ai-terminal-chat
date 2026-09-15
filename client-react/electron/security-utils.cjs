@@ -5,6 +5,7 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+const { fileURLToPath } = require('node:url');
 
 /**
  * Validates that a path is within the project root.
@@ -72,7 +73,44 @@ function isSafeExternalUrl(urlString) {
   }
 }
 
+/**
+ * Returns true only when a navigation URL is the renderer URL selected by the
+ * application. External top-level navigation is blocked so an untrusted page
+ * cannot inherit the preload bridge exposed to the renderer.
+ */
+function isAllowedNavigationUrl(urlString, rendererEntry) {
+  if (typeof urlString !== 'string' || !urlString.trim() || !rendererEntry) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(urlString);
+
+    if (rendererEntry.type === 'url') {
+      const expected = new URL(rendererEntry.target);
+      return (
+        (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+        parsed.origin === expected.origin
+      );
+    }
+
+    if (rendererEntry.type === 'file') {
+      if (parsed.protocol !== 'file:') {
+        return false;
+      }
+      const expectedPath = path.resolve(rendererEntry.target);
+      const actualPath = path.resolve(fileURLToPath(parsed));
+      return actualPath === expectedPath;
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 module.exports = {
   validateProjectPath,
   isSafeExternalUrl,
+  isAllowedNavigationUrl,
 };
