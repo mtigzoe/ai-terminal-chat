@@ -1,8 +1,8 @@
 // Git inspection and confirmation-required Git operations.
-  //
-  // Mirrors the Git portion of server-python/tools.py. Read-only operations
-  // never mutate repository state. gitAdd() uses an explicit preview/confirm
-  // flag and stages exactly one non-sensitive file.
+//
+// Mirrors the Git portion of server-python/tools.py. Read-only operations
+// never mutate repository state. gitAdd() uses an explicit preview/confirm
+// flag and stages exactly one non-sensitive file.
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -83,6 +83,32 @@ const GIT_BRANCH_MAX_CHARS = 20_000;
 const GIT_DIFF_MAX_CHARS = 50_000;
 
 function cap(value: string, limit: number): { value: string; truncated: boolean } { return { value: value.slice(0, limit), truncated: value.length > limit }; }
+
+/**
+ * Remove username/password userinfo from Git remote URLs before terminal
+ * output can reach the model. Keep the remote host/path visible for useful
+ * diagnostics while never exposing credentials embedded in the URL.
+ */
+export function sanitizeGitRemoteOutput(output: string): string {
+  return output.replace(
+    /\b(?:https?|ssh|git|ftp|ftps):\/\/[^\s]+/gi,
+    (value) => {
+      try {
+        const parsed = new URL(value);
+        if (!parsed.username && !parsed.password) return value;
+        parsed.username = "";
+        parsed.password = "";
+        return parsed.toString();
+      } catch {
+        return value.replace(
+          /^([a-z][a-z0-9+.-]*:\/\/)[^\/\s]*@/i,
+          "$1",
+        );
+      }
+    },
+  );
+}
+
 function errorText(error: unknown): string {
   const value = error as NodeJS.ErrnoException & { stderr?: string };
   if (value.code === "ENOENT") return "git is not installed or not on PATH.";
@@ -285,6 +311,7 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.GIT_EXTERNAL_DIFF; delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
     Object.assign(env, { GIT_CONFIG: emptyConfigPath, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_SSH_COMMAND: getGitSshCommand(), GIT_PROXY_COMMAND: "none", GIT_PAGER: "cat", PAGER: "cat" });
+    const isRemoteCommand = args[0]?.toLowerCase() === "remote";
     if (options.input !== undefined) {
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });
@@ -294,15 +321,23 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
         child.on("error", (e) => { clearTimeout(timer); reject(e); }); child.on("close", (code) => { clearTimeout(timer); if (code === 0) resolve(out); else reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })); });
         child.stdin.write(options.input!); child.stdin.end();
       });
-      return { code: 0, stdout, stderr: "" };
+      return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(stdout) : stdout, stderr: "" };
     }
     const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, windowsHide: true, maxBuffer, encoding: "utf8", env });
-    return { code: 0, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+    return {
+      code: 0,
+      stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stdout ?? "")) : String(result.stdout ?? ""),
+      stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stderr ?? "")) : String(result.stderr ?? ""),
+    };
   } catch (error) {
     const value = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; status?: number; code?: number | string; killed?: boolean };
     if (value.code === "ENOENT") throw error;
     if (value.code === "ETIMEDOUT" || value.killed) throw Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" });
-    return { code: typeof value.code === "number" ? value.code : (value.status ?? 1), stdout: String(value.stdout ?? ""), stderr: String(value.stderr ?? "") };
+    return {
+      code: typeof value.code === "number" ? value.code : (value.status ?? 1),
+      stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(value.stdout ?? "")) : String(value.stdout ?? ""),
+      stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(value.stderr ?? "")) : String(value.stderr ?? ""),
+    };
   } finally { try { rmSync(isolationDir, { recursive: true, force: true }); } catch { } }
 }
 
@@ -330,7 +365,8 @@ export async function gitDiff(path = "", staged = false): Promise<Record<string,
 }
 
 export async function gitLog(maxCount = 10): Promise<Record<string, unknown>> { const numeric = Number(maxCount); if (!Number.isInteger(numeric)) return { error: "max_count must be a whole number." }; const count = Math.max(1, Math.min(numeric, 100)); try { const result = await runGit(["log", `-${count}`, "--oneline", "--decorate"], GIT_LOG_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." }; const log = cap(result.stdout, GIT_LOG_MAX_CHARS); return { log: log.value, truncated: log.truncated, ...(log.truncated ? { truncation_note: `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; } }
-export async function gitBranch(): Promise<Record<string, unknown>> { try { const result = await runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." }; const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS); return { branches: branches.value, truncated: branches.truncated, ...(branches.truncated ? { truncation_note: `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; } }
+export async function gitBranch(): Promise<Record<string, unknown>> { try { const result = await runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." }; const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS); return { branches: branches.value, truncated: branches.truncated, ...(branches.truncated ? { truncation_note: `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; }
+}
 
 async function stageFileWithoutFilters(relativePath: string, absolutePath: string): Promise<void> {
   const { fstatSync, readSync, closeSync, constants: fsConstants } = await import("node:fs"); const { fd } = openWithinProject(relativePath, fsConstants.O_RDONLY); let mode = "100644"; let payload: Buffer;
