@@ -14,7 +14,7 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { handleEditorOpen, getAvailableEditors } = require('./editor-handler.cjs');
-const { validateProjectPath, isSafeExternalUrl } = require('./security-utils.cjs');
+const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl } = require('./security-utils.cjs');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -224,6 +224,13 @@ function createWindow() {
   });
 
   const entry = getRendererEntry();
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedNavigationUrl(url, entry)) {
+      console.warn(`Blocked unsafe top-level navigation: ${url}`);
+      event.preventDefault();
+    }
+  });
 
   if (entry.type === 'file') {
     mainWindow.loadFile(entry.target);
