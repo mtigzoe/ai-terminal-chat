@@ -64,6 +64,7 @@ describe("config-lock", () => {
       () => acquireConfigLock(target, { timeoutMs: 300 }),
       /Could not acquire config lock/,
     );
+    assert.ok(existsSync(handle.lockPath));
     releaseConfigLock(handle.lockFd, handle.lockPath);
   });
 
@@ -114,6 +115,16 @@ describe("config-lock", () => {
     assert.ok(existsSync(lockPath));
   });
 
+  test("malformed lock is reclaimed after timeout age", () => {
+    const lockPath = configLockPath(target);
+    writeFileSync(lockPath, "not-json{{{");
+    const old = (Date.now() - CONFIG_LOCK_TIMEOUT_MS - 1000) / 1000;
+    utimesSync(lockPath, old, old);
+    const handle = acquireConfigLock(target, { timeoutMs: 1000 });
+    assert.ok(existsSync(handle.lockPath));
+    releaseConfigLock(handle.lockFd, handle.lockPath);
+  });
+
   test("legacy empty lock is reclaimed after timeout age", () => {
     const lockPath = configLockPath(target);
     writeFileSync(lockPath, "");
@@ -135,10 +146,18 @@ describe("config-lock", () => {
     releaseConfigLock(handle.lockFd, handle.lockPath);
   });
 
-  test("failed acquisition still cleans up partial lock", () => {
+  test("failed acquisition preserves the existing lock", () => {
     const handle = acquireConfigLock(target, { timeoutMs: 1000 });
+    const original = readFileSync(handle.lockPath, "utf8");
+
+    assert.throws(
+      () => acquireConfigLock(target, { timeoutMs: 200 }),
+      /Could not acquire config lock/,
+    );
+
+    assert.ok(existsSync(handle.lockPath));
+    assert.equal(readFileSync(handle.lockPath, "utf8"), original);
     releaseConfigLock(handle.lockFd, handle.lockPath);
-    assert.ok(!existsSync(handle.lockPath));
   });
 
   test("isProcessAlive: current process", () => {
