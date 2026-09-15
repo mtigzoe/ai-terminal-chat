@@ -2,6 +2,7 @@ import "dotenv/config";
 import { serve } from "@hono/node-server";
 import { app, type AppType } from "./routes.ts";
 import { runWithAllowedReadPaths } from "./security.ts";
+import crypto from "node:crypto";
 
 // Default 127.0.0.1 keeps the non-Docker local workflow unchanged.
 // Docker sets HOST=0.0.0.0 so the API is reachable from the host.
@@ -48,6 +49,34 @@ function hasValidBearerToken(request: Request): boolean {
   return authorization === `Bearer ${apiAuthToken}`;
 }
 
+function addHealthProof(response: Response, request: Request): Response {
+  const expectedToken = process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
+  const challenge = request.headers.get("x-ai-terminal-chat-health-challenge");
+
+  if (!expectedToken || !challenge || response.status !== 200) {
+    return response;
+  }
+
+  const proof = crypto
+    .createHmac("sha256", expectedToken)
+    .update(challenge)
+    .digest("hex");
+
+  try {
+    const payload = response.clone();
+    return new Response(
+      payload.body,
+      {
+        status: response.status,
+        statusText: response.statusText,
+        headers: new Headers(response.headers),
+      },
+    );
+  } catch {
+    return response;
+  }
+}
+
 async function securedFetch(request: Request): Promise<Response> {
   const origin = request.headers.get("origin");
 
@@ -75,7 +104,10 @@ async function securedFetch(request: Request): Promise<Response> {
 
   const pathname = new URL(request.url).pathname;
   if (request.method !== "POST" || (pathname !== "/chat" && pathname !== "/stream")) {
-    const response = await app.fetch(request);
+    let response = await app.fetch(request);
+    if (pathname === "/health") {
+      response = await addHealthProofToResponse(response, request);
+    }
     return applyCorsPolicy(response, origin);
   }
 
@@ -92,6 +124,30 @@ async function securedFetch(request: Request): Promise<Response> {
 
   const response = await runWithAllowedReadPaths(allowedPaths, () => app.fetch(request));
   return applyCorsPolicy(response, origin);
+}
+
+async function addHealthProofToResponse(response: Response, request: Request): Promise<Response> {
+  const expectedToken = process.env.AI_TERMINAL_CHAT_HEALTH_TOKEN;
+  const challenge = request.headers.get("x-ai-terminal-chat-health-challenge");
+
+  if (!expectedToken || !challenge || response.status !== 200) {
+    return response;
+  }
+
+  try {
+    const body = (await response.clone().json()) as Record<string, unknown>;
+    body.proof = crypto
+      .createHmac("sha256", expectedToken)
+      .update(challenge)
+      .digest("hex");
+    return new Response(JSON.stringify(body), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    });
+  } catch {
+    return response;
+  }
 }
 
 function applyCorsPolicy(response: Response, origin: string | null): Response {
