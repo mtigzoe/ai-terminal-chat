@@ -1201,6 +1201,33 @@ function executableForCommand(args: string[]): {
   };
 }
 
+/**
+ * Remove username/password userinfo from Git remote URLs before terminal
+ * output can reach the model. Keep the remote host/path visible for useful
+ * diagnostics while never exposing credentials embedded in the URL.
+ */
+export function sanitizeGitRemoteOutput(output: string): string {
+  return output.replace(
+    /\b(?:https?|ssh|git|ftp|ftps):\/\/[^\s]+/gi,
+    (value) => {
+      try {
+        const parsed = new URL(value);
+        if (!parsed.username && !parsed.password) return value;
+        parsed.username = "";
+        parsed.password = "";
+        return parsed.toString();
+      } catch {
+        // Preserve malformed-but-printable URLs while still removing the
+        // complete userinfo segment when possible.
+        return value.replace(
+          /^([a-z][a-z0-9+.-]*:\/\/)[^\/\s]*@/i,
+          "$1",
+        );
+      }
+    },
+  );
+}
+
 function capOutput(value: string): {
   value: string;
   truncated: boolean;
@@ -1369,7 +1396,11 @@ export async function runCommand(
         maxBuffer: MAX_OUTPUT_CHARS * 2,
       });
 
-      const out = capOutput(String(result.stdout ?? ""));
+      const remoteOutput =
+        args[0].toLowerCase() === "remote"
+          ? sanitizeGitRemoteOutput(String(result.stdout ?? ""))
+          : String(result.stdout ?? "");
+      const out = capOutput(remoteOutput);
       const err = capOutput(String(result.stderr ?? ""));
       const truncated = out.truncated || err.truncated;
 
