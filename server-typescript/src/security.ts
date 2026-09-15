@@ -48,6 +48,7 @@ import {
   mkdirRelativeToDirFd,
   WindowsHandlePathError,
 } from "./windows-handle-path.ts";
+import { acquireConfigLock, releaseConfigLock } from "./config-lock.ts";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -210,14 +211,11 @@ function loadConfig(): Record<string, unknown> {
  * Persist the full configuration object atomically outside the project.
  * Mirrors security.py's `_persist_config()`.
  *
- * Uses a simple file-based lock to prevent concurrent writes from losing
- * updates. The lock is a temporary file created with exclusive creation
- * (via openSync with flag 'wx' on Node 16+). Waits up to 5 seconds
- * with exponential backoff and actual sleep.
- *
- * If the lock cannot be acquired (timeout, EPERM, or other error), the
- * operation fails rather than performing an unsafe unlocked write. This
- * ensures mutual exclusion is never silently bypassed.
+ * Uses a file-based lock to prevent concurrent writes from losing updates.
+ * The lock is a `.config.*.lock` file created with exclusive creation
+ * (`wx`). Waiters recover a leftover lock only when its recorded owner
+ * process is demonstrably dead (see config-lock.ts). If the lock cannot
+ * be acquired, the operation fails rather than performing an unlocked write.
  */
 /**
  * Synchronous sleep using Atomics.wait on a SharedArrayBuffer.
@@ -271,63 +269,6 @@ function writeConfigFile(targetFile: string, payload: Record<string, unknown>): 
       // Best-effort cleanup; the original error is what matters.
     }
     throw err;
-  }
-}
-
-/**
- * Acquire the config file lock.
- *
- * Returns an object with the lock file descriptor and lock path, or throws
- * if the lock cannot be acquired within the timeout.
- */
-function acquireConfigLock(targetFile: string): { lockFd: number; lockPath: string } {
-  const dir = dirname(targetFile);
-  mkdirSync(dir, { recursive: true });
-
-  const configFileName = basename(targetFile).replace(/\.[^.]+$/, "");
-  const lockPath = join(dir, `.config.${configFileName}.lock`);
-  const maxLockWaitMs = 5000;
-  const lockWaitStart = Date.now();
-  let lockFd: number | null = null;
-  let lockAcquired = false;
-
-  // Try to acquire the lock with exponential backoff and real sleep
-  while (Date.now() - lockWaitStart < maxLockWaitMs) {
-    try {
-      lockFd = openSync(lockPath, "wx");
-      lockAcquired = true;
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        const elapsed = Date.now() - lockWaitStart;
-        const backoff = Math.min(10 + elapsed * 0.1, 100);
-        sleepSync(backoff);
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  if (!lockAcquired) {
-    throw new Error(`Could not acquire config lock for ${configFileName} after ${maxLockWaitMs}ms`);
-  }
-
-  return { lockFd: lockFd!, lockPath };
-}
-
-/**
- * Release the config file lock.
- */
-function releaseConfigLock(lockFd: number, lockPath: string): void {
-  try {
-    closeSync(lockFd);
-  } catch {
-    // Ignore
-  }
-  try {
-    rmSync(lockPath, { force: true });
-  } catch {
-    // Ignore lock cleanup errors
   }
 }
 

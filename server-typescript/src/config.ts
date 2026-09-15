@@ -13,9 +13,9 @@
 // migrated in providers.ts (Phase 4), which will reuse the helpers here.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import fs from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { holdConfigLock } from "./config-lock.ts";
 
 // ---------------------------------------------------------------------------
 // .env loading (mirrors server-python/app.py: `load_dotenv()`)
@@ -77,52 +77,9 @@ function sleepSync(ms: number): void {
  */
 function withConfigLock<T>(
   configFilePath: string,
-  operation: (directory: string, configFileName: string) => T,
+  operation: (directory: string) => T,
 ): T {
-  const directory = dirname(configFilePath);
-  mkdirSync(directory, { recursive: true });
-  const configFileName = basename(configFilePath).replace(/\.[^.]+$/, "");
-  const lockPath = join(directory, `.config.${configFileName}.lock`);
-  const maxLockWaitMs = 5000;
-  const lockWaitStart = Date.now();
-  let lockFd: number | null = null;
-  let lockAcquired = false;
-
-  while (Date.now() - lockWaitStart < maxLockWaitMs) {
-    try {
-      lockFd = fs.openSync(lockPath, "wx");
-      lockAcquired = true;
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        const elapsed = Date.now() - lockWaitStart;
-        sleepSync(Math.min(10 + elapsed * 0.1, 100));
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  if (!lockAcquired) {
-    throw new Error(`Could not acquire config lock for ${configFileName} after ${maxLockWaitMs}ms`);
-  }
-
-  try {
-    return operation(directory, configFileName);
-  } finally {
-    if (lockFd !== null) {
-      try {
-        fs.closeSync(lockFd);
-      } catch {
-        // Ignore cleanup errors.
-      }
-    }
-    try {
-      rmSync(lockPath, { force: true });
-    } catch {
-      // Ignore cleanup errors.
-    }
-  }
+  return holdConfigLock(configFilePath, () => operation(dirname(configFilePath)));
 }
 
 function writeConfigWhileLocked(
