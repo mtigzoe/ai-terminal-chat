@@ -83,6 +83,33 @@ def test_clean_repo_reports_clean(git_repo):
     assert "clean" in result["summary"].lower()
 
 
+def test_clean_repo_reports_clean_with_global_autocrlf(
+    git_repo, tmp_path_factory, monkeypatch
+):
+    """Global core.autocrlf must survive _run_git's config isolation.
+
+    tools._run_git() nulls the global/system Git config so hooks, filters,
+    and credential helpers cannot run. If that also drops the user's
+    core.autocrlf=true (the Git-for-Windows default), CRLF working-tree
+    files stop matching their LF blobs and every file is ghost-reported
+    as "modified" while the user's own `git status` says clean.
+    """
+
+    global_config = tmp_path_factory.mktemp("gitconfig-outside-repo") / "gitconfig"
+    global_config.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+
+    (git_repo / "file.txt").write_bytes(b"hello\r\n")
+    _git(["add", "file.txt"], git_repo)
+    _git(["commit", "-q", "-m", "init"], git_repo)
+
+    result = tools.git_status()
+
+    assert result["clean"] is True
+    assert result["changed"] == 0
+    assert result["untracked"] == 0
+
+
 def test_untracked_and_staged_files_are_classified_correctly(git_repo):
     (git_repo / "tracked.txt").write_text("v1\n")
     _git(["add", "tracked.txt"], git_repo)

@@ -37,7 +37,11 @@ def isolated_project_root(tmp_path, monkeypatch):
 
 
 def test_is_ollama_cli_installed_true_when_on_path():
-    with patch("ollama.shutil.which", return_value="/usr/local/bin/ollama"):
+    # platform.system is mocked: the production code rejects suffix-less
+    # executables only on Windows, and this stub PATH entry has no .exe.
+    with patch("ollama.shutil.which", return_value="/usr/local/bin/ollama"), patch(
+        "ollama.platform.system", return_value="Linux"
+    ):
         assert is_ollama_cli_installed() is True
 
 
@@ -75,7 +79,10 @@ def test_launch_ollama_run_starts_detached_process_on_posix():
         result = launch_ollama_run("llama3.1")
     assert result == {"started": True, "model": "llama3.1", "pid": 4321}
     args, kwargs = popen.call_args
-    assert args[0] == ["/usr/local/bin/ollama", "run", "llama3.1"]
+    # Path.resolve() runs on the host OS regardless of the mocked
+    # platform.system(), so a Windows test host canonicalizes this POSIX
+    # path to a drive-letter form; compare resolved-to-resolved.
+    assert args[0] == [str(Path("/usr/local/bin/ollama").resolve()), "run", "llama3.1"]
     assert kwargs["start_new_session"] is True
     assert "creationflags" not in kwargs
 
@@ -112,7 +119,11 @@ def test_launch_ollama_run_accepts_namespaced_and_tagged_models():
     ), patch("ollama.subprocess.Popen", return_value=fake_process) as popen:
         launch_ollama_run("myuser/mymodel:latest")
     args, _ = popen.call_args
-    assert args[0] == ["/usr/local/bin/ollama", "run", "myuser/mymodel:latest"]
+    assert args[0] == [
+        str(Path("/usr/local/bin/ollama").resolve()),
+        "run",
+        "myuser/mymodel:latest",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -133,7 +144,7 @@ def test_launch_ollama_run_accepts_cloud_model_names(model):
         result = launch_ollama_run(model)
     assert result == {"started": True, "model": model, "pid": 1}
     args, _ = popen.call_args
-    assert args[0] == ["/usr/local/bin/ollama", "run", model]
+    assert args[0] == [str(Path("/usr/local/bin/ollama").resolve()), "run", model]
 
 
 @pytest.fixture

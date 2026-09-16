@@ -1271,6 +1271,44 @@ def _git_ssh_command() -> str:
     return "ssh -F /dev/null -o ProxyCommand=none -o ProxyJump=none"
 
 
+# _run_git purposefully hides the system/global Git config so hooks,
+# filters, credential helpers, and URL rewrites cannot run. That also
+# drops the user's line-ending policy (core.autocrlf / core.eol). Without
+# it, a Windows checkout committed by the user's own git (autocrlf=true)
+# compares CRLF working files against LF blobs and every text file looks
+# modified. Those two keys cannot execute code, so the user's effective
+# values are queried without isolation and pinned via -c below. Only
+# documented values are forwarded.
+_GIT_AUTOCRLF_VALUES = {"true", "false", "input"}
+_GIT_EOL_VALUES = {"lf", "crlf", "native"}
+
+
+def _git_line_ending_overrides() -> list[str]:
+    """Pass the user's effective line-ending config through isolation."""
+
+    overrides: list[str] = []
+    for key, allowed in (
+        ("core.autocrlf", _GIT_AUTOCRLF_VALUES),
+        ("core.eol", _GIT_EOL_VALUES),
+    ):
+        try:
+            result = subprocess.run(
+                ["git", "config", "--get", key],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        value = result.stdout.strip().lower()
+        if value in allowed:
+            overrides.extend(["-c", f"{key}={value}"])
+    return overrides
+
+
 def _run_git(
     args: list,
     timeout: float,
@@ -1312,7 +1350,12 @@ def _run_git(
         }
     )
 
-    safe_args = list(_GIT_CONFIG_OVERRIDES) + _dynamic_git_config_overrides() + list(args)
+    safe_args = (
+        list(_GIT_CONFIG_OVERRIDES)
+        + _dynamic_git_config_overrides()
+        + _git_line_ending_overrides()
+        + list(args)
+    )
     try:
         return subprocess.run(
             ["git", *safe_args],
