@@ -1,5 +1,6 @@
 """Regression tests for Ollama CLI executable resolution."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,8 @@ import ollama  # noqa: E402
 
 
 def test_ollama_executable_is_resolved_to_absolute_path(monkeypatch, tmp_path):
-    executable = tmp_path / "ollama"
+    # On Windows the resolver requires a recognizable executable suffix.
+    executable = tmp_path / ("ollama.exe" if os.name == "nt" else "ollama")
     executable.write_text("stub", encoding="utf-8")
     monkeypatch.setattr(ollama.shutil, "which", lambda name: str(executable))
     monkeypatch.setattr(ollama, "get_project_root", lambda: tmp_path / "project")
