@@ -1,5 +1,0 @@
-B1 mkdtemp done
-B2 write done
-B3 fd=3
-B4 fstat ok size=1
-B5 calling ucrt _get_osfhandle
