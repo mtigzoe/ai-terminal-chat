@@ -65,10 +65,6 @@ const OBJ_CASE_INSENSITIVE = 0x00000040;
 // OBJ_DONT_REPARSE prevents the lookup from following it at all.
 const OBJ_DONT_REPARSE = 0x00001000;
 
-// CRT flags for _open_osfhandle
-const O_RDWR = 2;
-const O_BINARY = 0x8000;
-
 // NTSTATUS values of interest (unsigned form)
 const NTSTATUS_OBJECT_NAME_COLLISION = 0xc000_0035;
 const NTSTATUS_OBJECT_NAME_NOT_FOUND = 0xc000_0034;
@@ -151,7 +147,7 @@ type NativeApi = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   NtCreateFile: (...args: any[]) => number;
   getOsFHandle: (fd: number) => number;
-  openOsFHandle: (osfhandle: number, flags: number) => number;
+  openOsFHandle: (osfhandle: number) => number;
   CloseHandle: (h: number) => number;
   RtlNtStatusToDosError: (status: number) => number;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -190,12 +186,15 @@ function loadNative(): NativeApi {
     const koffi = require("koffi") as KoffiModule;
     const ntdll = koffi.load("ntdll.dll");
     const kernel32 = koffi.load("kernel32.dll");
-    let crt;
-    try {
-      crt = koffi.load("ucrtbase.dll");
-    } catch {
-      crt = koffi.load("msvcrt.dll");
-    }
+    // Node owns its file-descriptor table: libuv no longer registers fs
+    // descriptors with the UCRT, so the CRT _get_osfhandle/_open_osfhandle
+    // pair fast-fails the whole process for Node-opened fds (an
+    // uncatchable fatal error). libuv's uv_get_osfhandle/
+    // uv_open_osfhandle are the supported fd<->HANDLE boundary and are
+    // exported by the running executable itself. Bind from
+    // process.execPath: binding any other image would operate on a
+    // foreign fd table. Fail closed if the exports are unavailable.
+    const nodeImage = koffi.load(process.execPath);
 
     const UnicodeString = koffi.struct("UNICODE_STRING", {
       Length: "uint16",
@@ -228,8 +227,8 @@ function loadNative(): NativeApi {
       "void *",
       "uint32",
     ]);
-    const getOsFHandleRaw = crt.func("_get_osfhandle", "intptr", ["int"]);
-    const openOsFHandleRaw = crt.func("_open_osfhandle", "int", ["intptr", "int"]);
+    const getOsFHandleRaw = nodeImage.func("uv_get_osfhandle", "void *", ["int"]);
+    const openOsFHandleRaw = nodeImage.func("uv_open_osfhandle", "int", ["void *"]);
     const CloseHandleRaw = kernel32.func("CloseHandle", "int", ["uintptr"]);
     const RtlNtStatusToDosErrorRaw = ntdll.func("RtlNtStatusToDosError", "uint32", ["long"]);
 
@@ -237,7 +236,7 @@ function loadNative(): NativeApi {
       koffi,
       NtCreateFile: NtCreateFile as NativeApi["NtCreateFile"],
       getOsFHandle: (fd: number) => toNumber(getOsFHandleRaw(fd)),
-      openOsFHandle: (osfhandle: number, flags: number) => toNumber(openOsFHandleRaw(osfhandle, flags)),
+      openOsFHandle: (osfhandle: number) => toNumber(openOsFHandleRaw(osfhandle)),
       CloseHandle: (h: number) => toNumber(CloseHandleRaw(h)),
       RtlNtStatusToDosError: (status: number) => toNumber(RtlNtStatusToDosErrorRaw(status)),
       UnicodeString,
@@ -254,7 +253,12 @@ function loadNative(): NativeApi {
 function handleFromFd(fd: number): number {
   const native = loadNative();
   const h = native.getOsFHandle(fd);
-  if (h === -1 || h === 0xffff_ffff) {
+  if (
+    h === -1 ||
+    h === 0xffff_ffff ||
+    // INVALID_HANDLE_VALUE as an unsigned 64-bit pointer value.
+    h === Number(0xffff_ffff_ffff_ffffn)
+  ) {
     throw new WindowsHandlePathError("Invalid OS handle for directory fd");
   }
   return h;
@@ -387,10 +391,10 @@ export function openRelativeToDirFd(
     createOptions,
   });
 
-  const fd = native.openOsFHandle(fileHandle, O_RDWR | O_BINARY);
+  const fd = native.openOsFHandle(fileHandle);
   if (fd < 0) {
     native.CloseHandle(fileHandle);
-    throw new WindowsHandlePathError("_open_osfhandle failed after NtCreateFile");
+    throw new WindowsHandlePathError("uv_open_osfhandle failed after NtCreateFile");
   }
   return fd;
 }

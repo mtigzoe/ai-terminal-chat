@@ -25,23 +25,24 @@ import {
 import { getGitSshCommand } from "./git.ts";
 
 function markerScript(markerPath: string): { scriptPath: string; configValue: string } {
+  const posixPath = (p: string): string => p.split(String.fromCharCode(92)).join("/");
   const dir = mkdtempSync(join(tmpdir(), "git-marker-script-"));
-  if (platform() === "win32") {
-    const scriptPath = join(dir, "marker.cmd");
-    // cmd script: write marker then exit 0
-    writeFileSync(
-      scriptPath,
-      `@echo off\r\necho pwned > "${markerPath}"\r\nexit /b 0\r\n`,
-      "utf8",
-    );
-    return { scriptPath, configValue: scriptPath };
-  }
+  // Git for Windows executes hooks through its bundled sh. An unquoted
+  // backslash path is mangled there and a bare .cmd is not directly
+  // exec-able, so a .cmd hook silently never runs and these negative
+  // assertions would hold vacuously on Windows. A shebang'd sh script
+  // with a forward-slash path works on both platforms.
   const scriptPath = join(dir, "marker.sh");
-  writeFileSync(scriptPath, `#!/bin/sh\necho pwned > "${markerPath}"\n`, {
-    encoding: "utf8",
-    mode: 0o755,
-  });
-  return { scriptPath, configValue: scriptPath };
+  const markerPathPosix = posixPath(markerPath);
+  writeFileSync(
+    scriptPath,
+    `#!/bin/sh\necho pwned > "${markerPathPosix}"\nexit 0\n`,
+    {
+      encoding: "utf8",
+      mode: 0o755,
+    },
+  );
+  return { scriptPath, configValue: posixPath(scriptPath) };
 }
 
 function initRepo(): string {

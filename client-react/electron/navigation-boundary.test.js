@@ -17,9 +17,24 @@ describe('Electron navigation boundary', () => {
   });
 
   it('allows only the packaged renderer file', () => {
-    const entry = { type: 'file', target: '/app/client-react/dist/index.html' };
-    expect(isAllowedNavigationUrl('file:///app/client-react/dist/index.html', entry)).toBe(true);
-    expect(isAllowedNavigationUrl('file:///app/client-react/dist/other.html', entry)).toBe(false);
+    // The packaged renderer lives at a POSIX path in the Linux packaging
+    // and at a drive-letter path on Windows; a drive-letter-less file://
+    // URL is not a valid absolute Windows path (fileURLToPath rejects
+    // it), so use the platform's real packaged path to exercise the
+    // same allow/deny comparison.
+    const isWin = process.platform === 'win32';
+    const target = isWin
+      ? 'C:\\app\\client-react\\dist\\index.html'
+      : '/app/client-react/dist/index.html';
+    const indexUrl = isWin
+      ? 'file:///C:/app/client-react/dist/index.html'
+      : 'file:///app/client-react/dist/index.html';
+    const otherUrl = isWin
+      ? 'file:///C:/app/client-react/dist/other.html'
+      : 'file:///app/client-react/dist/other.html';
+    const entry = { type: 'file', target };
+    expect(isAllowedNavigationUrl(indexUrl, entry)).toBe(true);
+    expect(isAllowedNavigationUrl(otherUrl, entry)).toBe(false);
     expect(isAllowedNavigationUrl('https://example.com/', entry)).toBe(false);
   });
 });

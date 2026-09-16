@@ -81,7 +81,9 @@ describe("Git repository configuration isolation", () => {
 
     writeRepoConfig(
       repoDir,
-      `[user]\n\tname = Test User\n\temail = test@example.com\n[core]\n\thooksPath = ${hooksDir}\n`,
+      // Forward slashes: git rejects unescaped backslashes in config values.
+      // Forward slashes: git rejects unescaped backslashes in config values.
+      `[user]\n\tname = Test User\n\temail = test@example.com\n[core]\n\thooksPath = ${hooksDir.split(String.fromCharCode(92)).join("/")}\n`,
     );
     writeFileSync(join(repoDir, "test.txt"), "test\n", "utf8");
 
