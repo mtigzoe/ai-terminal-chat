@@ -1,0 +1,5 @@
+A1 kernel32 call pid=8308
+A2 bound, calling with fd 0
+A3 fd0 handle=760
+A4 fd1=764
+A5 fd2=768

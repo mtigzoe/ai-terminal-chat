@@ -1,0 +1,11 @@
+D1 node.exe loaded via koffi
+D2 uv_get_osfhandle bound
+D3 uv_open_osfhandle bound
+D4 node fd=3
+D5 uv_get_osfhandle -> 740
+D6 CreateFileW handle=744
+D7 uv_open_osfhandle fd=4
+D8 node fstatSync ok size=5
+D9 node read="HELLO"
+D10 node closeSync ok
+DONE-D

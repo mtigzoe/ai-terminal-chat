@@ -1,0 +1,9 @@
+1 require koffi
+2 koffi loaded
+3 ntdll loaded
+4 kernel32 loaded
+5 ucrtbase loaded
+6 structs defined, sizeof OA=48 US=16 IOSB=16
+7 NtCreateFile bound
+8 crt funcs bound
+9 pfd=3

@@ -1,0 +1,13 @@
+E1 project=C:\Users\Miriam\AppData\Local\Temp\vare-Nh4R5e
+E2 dir fd=3 O_DIRECTORY=undefined
+E3 parent handle via uv=740
+E4 NtCreateFile status=0 dos=0
+E5 child handle=720
+E6 child fd via uv_open=4
+E7 node writeSync ok
+E8 closeSync ok
+E9 on-disk="6c696e65310a6c696e65320a000a1aff656e640a"
+E10 binary-safe=true
+E11 open-existing status=0
+E12 readSync n=20 data="6c696e65310a6c696e65320a000a1aff656e640a"
+DONE-E binary=true
