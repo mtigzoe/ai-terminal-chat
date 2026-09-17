@@ -34,6 +34,21 @@ SUPPORTED_PROVIDERS = [
     "nvidia",
 ]
 
+_DEFAULT_TIMEOUT = 120
+
+
+def _timeout_from_env(env_name: str) -> int:
+    """Read a positive provider timeout, falling back safely on bad input."""
+
+    raw_value = os.getenv(env_name)
+    if raw_value is None:
+        return _DEFAULT_TIMEOUT
+    try:
+        timeout = int(raw_value.strip())
+    except (AttributeError, TypeError, ValueError):
+        return _DEFAULT_TIMEOUT
+    return timeout if timeout > 0 else _DEFAULT_TIMEOUT
+
 
 @dataclass
 class ProviderConfig:
@@ -41,7 +56,7 @@ class ProviderConfig:
     model: str
     base_url: Optional[str] = None
     api_key: Optional[str] = None
-    timeout: int = 120
+    timeout: int = _DEFAULT_TIMEOUT
 
     def to_public_dict(self) -> dict:
         """Non-secret view of this config, safe to return over HTTP."""
@@ -71,7 +86,7 @@ def load_provider_config(name: str) -> ProviderConfig:
             provider="ollama",
             model=os.getenv("OLLAMA_MODEL", "llama3.1"),
             base_url=base_url,
-            timeout=int(os.getenv("OLLAMA_TIMEOUT", "120")),
+            timeout=_timeout_from_env("OLLAMA_TIMEOUT"),
         )
     if name == "kilo":
         return ProviderConfig(
@@ -79,7 +94,7 @@ def load_provider_config(name: str) -> ProviderConfig:
             model=os.getenv("KILO_MODEL", "kilocode/kilo-auto/balanced"),
             base_url=os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway"),
             api_key=os.getenv("KILO_API_KEY"),
-            timeout=int(os.getenv("KILO_TIMEOUT", "120")),
+            timeout=_timeout_from_env("KILO_TIMEOUT"),
         )
     if name == "openai":
         return ProviderConfig(
@@ -87,7 +102,7 @@ def load_provider_config(name: str) -> ProviderConfig:
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             api_key=os.getenv("OPENAI_API_KEY"),
-            timeout=int(os.getenv("OPENAI_TIMEOUT", "120")),
+            timeout=_timeout_from_env("OPENAI_TIMEOUT"),
         )
     if name == "xai":
         return ProviderConfig(
@@ -95,7 +110,7 @@ def load_provider_config(name: str) -> ProviderConfig:
             model=os.getenv("XAI_MODEL", "grok-4.6"),
             base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
             api_key=os.getenv("XAI_API_KEY"),
-            timeout=int(os.getenv("XAI_TIMEOUT", "120")),
+            timeout=_timeout_from_env("XAI_TIMEOUT"),
         )
     if name == "openrouter":
         return ProviderConfig(
@@ -103,7 +118,7 @@ def load_provider_config(name: str) -> ProviderConfig:
             model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
             base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             api_key=os.getenv("OPENROUTER_API_KEY"),
-            timeout=int(os.getenv("OPENROUTER_TIMEOUT", "120")),
+            timeout=_timeout_from_env("OPENROUTER_TIMEOUT"),
         )
     if name == "nvidia":
         return ProviderConfig(
@@ -111,7 +126,7 @@ def load_provider_config(name: str) -> ProviderConfig:
             model=os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"),
             base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
             api_key=os.getenv("NVIDIA_API_KEY"),
-            timeout=int(os.getenv("NVIDIA_TIMEOUT", "120")),
+            timeout=_timeout_from_env("NVIDIA_TIMEOUT"),
         )
     if name == "anthropic":
         return ProviderConfig(
@@ -119,7 +134,7 @@ def load_provider_config(name: str) -> ProviderConfig:
             model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
             base_url=os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             api_key=os.getenv("ANTHROPIC_API_KEY"),
-            timeout=int(os.getenv("ANTHROPIC_TIMEOUT", "120")),
+            timeout=_timeout_from_env("ANTHROPIC_TIMEOUT"),
         )
 
     raise RuntimeError(
