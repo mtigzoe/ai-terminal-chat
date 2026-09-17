@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 
+// The challenge is fresh for every readiness probe so a captured proof cannot be replayed.
 function createHealthChallenge() {
   return crypto.randomBytes(32).toString('hex');
 }
