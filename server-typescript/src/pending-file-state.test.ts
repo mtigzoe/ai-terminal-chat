@@ -117,6 +117,31 @@ test("apply_patch pending action checks every target before confirmation", () =>
   assert.equal(popPending(action.action_id), undefined);
 });
 
+test("apply_patch without diff --git headers is also bound to target state", () => {
+  const project = makeProject();
+  const target = join(project, "plain.txt");
+  writeFileSync(target, "original\n", "utf8");
+
+  const patch = [
+    "--- a/plain.txt",
+    "+++ b/plain.txt",
+    "@@ -1 +1 @@",
+    "-original",
+    "+replacement",
+    "",
+  ].join("\n");
+
+  const action = createPending(
+    "apply_patch",
+    { patch },
+    { requires_confirmation: true },
+  );
+  writeFileSync(target, "changed after preview\n", "utf8");
+
+  assert.equal(popPending(action.action_id), undefined);
+  assert.equal(getPending(action.action_id), undefined);
+});
+
 test("git_add pending action is invalidated when the target changes", () => {
   const project = makeProject();
   const target = join(project, "stage-me.txt");
