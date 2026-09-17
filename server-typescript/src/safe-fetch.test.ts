@@ -48,6 +48,14 @@ test("IPv4-mapped IPv6 applies the same reserved-address policy", () => {
   assert.equal(blockedAddressReason("::ffff:8.8.8.8", false), null);
 });
 
+test("IPv6 link-local /10 range is fully blocked", () => {
+  assert.ok(blockedAddressReason("fe80::1", false));
+  assert.ok(blockedAddressReason("fe81::1", false));
+  assert.ok(blockedAddressReason("fe9a::1", false));
+  assert.ok(blockedAddressReason("febf::1", false));
+  assert.equal(blockedAddressReason("fec0::1", false), null);
+});
+
 test("resolveAndPinHostname rejects mixed public+private DNS answers", async () => {
   const lookup: LookupAll = async () => [
     { address: "8.8.8.8", family: 4 },
