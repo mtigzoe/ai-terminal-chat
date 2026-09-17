@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadProviderSelection = vi.fn();
-const getProvider = vi.fn();
+const { loadProviderSelection, getProvider } = vi.hoisted(() => ({
+  loadProviderSelection: vi.fn(),
+  getProvider: vi.fn(),
+}));
 
 vi.mock("../src/security.ts", () => ({
   loadProviderSelection,
