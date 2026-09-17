@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   rmSync,
   writeFileSync,
   realpathSync,
@@ -58,7 +59,7 @@ test("resolveTrustedExecutable ignores relative PATH entries", () => {
   const originalPath = process.env.PATH;
   const originalPathWin = process.env.Path;
   try {
-    require("node:fs").mkdirSync(relativeDir);
+    mkdirSync(relativeDir);
     if (process.platform === "win32") {
       writeFileSync(join(cwd, "relative-tool.cmd"), "@echo off\r\n", "utf8");
     } else {
