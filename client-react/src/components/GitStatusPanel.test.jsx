@@ -70,6 +70,7 @@ describe('GitStatusPanel', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -92,5 +93,24 @@ describe('GitStatusPanel', () => {
         { timeout: 8000 },
       );
     });
+  });
+
+  test('does not reschedule polling after an in-flight request finishes after unmount', async () => {
+    vi.useFakeTimers();
+    let resolveRequest;
+    axios.post.mockImplementation(() => new Promise((resolve) => {
+      resolveRequest = resolve;
+    }));
+
+    const { unmount } = render(<GitStatusPanel />);
+
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    unmount();
+    resolveRequest({ data: { stdout: '## main...origin/main\n' } });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
   });
 });
