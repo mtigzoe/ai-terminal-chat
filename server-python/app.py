@@ -10,6 +10,7 @@ import sys
 from types import ModuleType
 
 import app_original as _original
+import security as _security
 from flask import request
 
 app = _original.app
@@ -21,7 +22,6 @@ persist_provider_selection = _original.persist_provider_selection
 _provider_status = _original._provider_status
 PROJECT_ROOT = _original.PROJECT_ROOT
 get_project_root = _original.get_project_root
-set_project_root = _original.set_project_root
 provider = _original.provider
 
 
@@ -31,8 +31,9 @@ def _restore_provider_runtime_state(
     env_name,
     previous_ollama_url,
     previous_project_root,
+    previous_config,
 ):
-    """Restore every runtime value touched while building a candidate."""
+    """Restore every runtime and persisted value touched by the switch."""
 
     global provider
 
@@ -47,18 +48,11 @@ def _restore_provider_runtime_state(
         else:
             os.environ[env_name] = previous_api_key
 
-    # get_provider() may activate and persist a request's project_path before
-    # returning its candidate. Restore the saved project root in both the
-    # config file and the in-memory proxy when possible. A rollback error
-    # must never hide the original provider-persistence failure.
+    PROJECT_ROOT.set(previous_project_root)
     try:
-        set_project_root(str(previous_project_root))
+        _security._persist_config(previous_config)
     except Exception as exc:
-        print(f"[Warning] Could not restore project root after provider rollback: {exc}")
-        try:
-            PROJECT_ROOT.set(previous_project_root)
-        except Exception:
-            pass
+        print(f"[Warning] Could not restore persisted config after provider rollback: {exc}")
 
     _original.provider = previous_provider
     provider = previous_provider
@@ -88,6 +82,7 @@ def select_provider():
         previous_api_key = os.environ.get(env_name) if env_name else None
         previous_ollama_url = os.environ.get("OLLAMA_BASE_URL")
         previous_project_root = get_project_root()
+        previous_config = _security._load_config()
 
         if has_api_key and env_name:
             if api_key:
@@ -104,6 +99,7 @@ def select_provider():
                 env_name,
                 previous_ollama_url,
                 previous_project_root,
+                previous_config,
             )
             return {"error": f"Could not switch to '{name}': {exc}"}, 400
 
@@ -123,6 +119,7 @@ def select_provider():
                 env_name,
                 previous_ollama_url,
                 previous_project_root,
+                previous_config,
             )
             return {"error": f"Could not switch to '{name}': {exc}"}, 400
         except Exception as exc:
@@ -132,6 +129,7 @@ def select_provider():
                 env_name,
                 previous_ollama_url,
                 previous_project_root,
+                previous_config,
             )
             return {"error": f"Could not switch to '{name}': {exc}"}, 500
 
