@@ -1,3 +1,5 @@
+import { getProjectRoot } from "./security.ts";
+
 /**
  * Everything needed to continue an agent loop that paused mid-round for
  * confirmation, once the user Allows or Declines. Mirrors the `resume=`
@@ -63,9 +65,16 @@ export function getPending(actionId: string): PendingAction | undefined {
 
 export function popPending(actionId: string): PendingAction | undefined {
   const action = _PENDING.get(actionId);
-  if (action) {
-    _PENDING.delete(actionId);
+  if (!action) return undefined;
+
+  // A pending action contains project-relative paths and saved model/tool
+  // state. Do not let confirmation execute it against a different project
+  // root after the user switches projects while the confirmation is open.
+  if (action.resume && action.resume.project_root !== getProjectRoot()) {
+    return undefined;
   }
+
+  _PENDING.delete(actionId);
   return action;
 }
 
