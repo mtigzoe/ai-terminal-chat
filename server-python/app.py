@@ -83,6 +83,7 @@ API_KEY_ENV_VARS = {
     "xai": "XAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
 }
 
 app = Flask(__name__)

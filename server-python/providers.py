@@ -1,4 +1,4 @@
-"""Provider factory for Gemini, Ollama, Kilo, OpenAI, xAI, OpenRouter, and Anthropic."""
+"""Provider factory for Gemini, Ollama, Kilo, OpenAI, xAI, OpenRouter, Anthropic, and NVIDIA NIM."""
 
 import os
 import sys
@@ -31,6 +31,7 @@ SUPPORTED_PROVIDERS = [
     "xai",
     "openrouter",
     "anthropic",
+    "nvidia",
 ]
 
 
@@ -103,6 +104,14 @@ def load_provider_config(name: str) -> ProviderConfig:
             base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             api_key=os.getenv("OPENROUTER_API_KEY"),
             timeout=int(os.getenv("OPENROUTER_TIMEOUT", "120")),
+        )
+    if name == "nvidia":
+        return ProviderConfig(
+            provider="nvidia",
+            model=os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"),
+            base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+            api_key=os.getenv("NVIDIA_API_KEY"),
+            timeout=int(os.getenv("NVIDIA_TIMEOUT", "120")),
         )
     if name == "anthropic":
         return ProviderConfig(
@@ -186,6 +195,14 @@ def get_provider(name: str = None, model: str = None) -> Provider:
             timeout=config.timeout,
             http_referer=os.getenv("OPENROUTER_HTTP_REFERER"),
             app_title=os.getenv("OPENROUTER_APP_TITLE"),
+        )
+    elif config.provider == "nvidia":
+        from nvidia import NVIDIAProvider
+        provider = NVIDIAProvider(
+            base_url=config.base_url,
+            model=config.model,
+            api_key=config.api_key,
+            timeout=config.timeout,
         )
     elif config.provider == "anthropic":
         from anthropic_provider import AnthropicProvider

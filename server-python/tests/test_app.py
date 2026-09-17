@@ -34,6 +34,7 @@ def test_providers_endpoint_reports_current_and_supported(client):
         "xai",
         "openrouter",
         "anthropic",
+        "nvidia",
     ]
     assert data["current"] in data["providers"]
     assert "capabilities" in data

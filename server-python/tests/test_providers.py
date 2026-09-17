@@ -1,5 +1,8 @@
 import sys
 from pathlib import Path
+
+import pytest
+import requests
 from unittest.mock import Mock, patch
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
@@ -13,7 +16,8 @@ from openai_compatible import OpenAICompatibleProvider  # noqa: E402
 from anthropic_provider import AnthropicProvider  # noqa: E402
 from openai_provider import OpenAIProvider  # noqa: E402
 from openrouter import OpenRouterProvider  # noqa: E402
-from providers import SUPPORTED_PROVIDERS, get_provider  # noqa: E402
+from nvidia import NVIDIAProvider  # noqa: E402
+from providers import SUPPORTED_PROVIDERS, get_provider, load_provider_config  # noqa: E402
 from xai import XAIProvider  # noqa: E402
 from base import ToolCall  # noqa: E402
 
@@ -1674,3 +1678,183 @@ def test_gemini_build_contents_stores_user_instructions():
     assert config is not None
     assert "Be concise." in config.system_instruction
     assert "You are a local coding/project agent" in config.system_instruction
+
+
+# ---------------------------------------------------------------------------
+# NVIDIA NIM provider
+# ---------------------------------------------------------------------------
+
+
+def test_nvidia_provider_is_registered():
+    assert "nvidia" in SUPPORTED_PROVIDERS
+
+
+def test_nvidia_provider_requires_api_key():
+    try:
+        NVIDIAProvider(api_key=None)
+    except RuntimeError as exc:
+        assert "NVIDIA_API_KEY" in str(exc)
+    else:
+        raise AssertionError("NVIDIAProvider should require an API key")
+
+
+def test_nvidia_provider_configuration():
+    provider = NVIDIAProvider(
+        base_url="https://integrate.api.nvidia.com/v1",
+        model="meta/llama-3.1-8b-instruct",
+        api_key="test-key",
+    )
+
+    assert provider.base_url == "https://integrate.api.nvidia.com/v1"
+    assert provider.model == "meta/llama-3.1-8b-instruct"
+    assert provider.api_key == "test-key"
+    assert provider.display_name == "NVIDIA NIM"
+    assert provider.capabilities.local is False
+    assert provider.capabilities.requires_api_key is True
+    assert provider.capabilities.tools is True
+    assert provider.capabilities.streaming is True
+    assert provider.capabilities.model_listing is True
+    assert isinstance(provider, OpenAICompatibleProvider)
+
+
+def test_nvidia_provider_default_base_url_and_model():
+    provider = NVIDIAProvider(api_key="test-key")
+    assert provider.base_url == "https://integrate.api.nvidia.com/v1"
+    assert provider.model == "meta/llama-3.1-8b-instruct"
+
+
+def test_nvidia_provider_sends_bearer_auth_and_model_slug():
+    slug = "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+    provider = NVIDIAProvider(
+        base_url="https://integrate.api.nvidia.com/v1",
+        model=slug,
+        api_key="nvapi-test-key",
+    )
+    mock_response = Mock(status_code=200)
+    mock_response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}]
+    }
+    mock_response.raise_for_status = Mock()
+
+    with patch(
+        "openai_compatible.requests.post", return_value=mock_response
+    ) as post:
+        provider.generate([{"role": "user", "content": "hi"}])
+
+    headers = post.call_args.kwargs["headers"]
+    assert headers["Authorization"] == "Bearer nvapi-test-key"
+    assert post.call_args.kwargs["json"]["model"] == slug
+    assert post.call_args.args[0] == (
+        "https://integrate.api.nvidia.com/v1/chat/completions"
+    )
+
+
+def test_nvidia_model_override_preserves_slug(monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "key")
+    monkeypatch.setenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct")
+
+    provider = get_provider("nvidia", model="qwen/qwen3-next-80b-a3b-instruct")
+    assert isinstance(provider, NVIDIAProvider)
+    assert provider.model == "qwen/qwen3-next-80b-a3b-instruct"
+    assert provider.provider_config.model == "qwen/qwen3-next-80b-a3b-instruct"
+
+
+def test_nvidia_list_models_returns_catalog_ids():
+    provider = NVIDIAProvider(
+        base_url="https://integrate.api.nvidia.com/v1",
+        model="meta/llama-3.1-8b-instruct",
+        api_key="nvapi-test-key",
+    )
+    mock_response = Mock(status_code=200)
+    mock_response.json.return_value = {
+        "data": [
+            {"id": "meta/llama-3.1-8b-instruct"},
+            {"id": "nvidia/llama-3.1-nemotron-ultra-253b-v1"},
+        ]
+    }
+    mock_response.raise_for_status = Mock()
+
+    with patch("openai_compatible.requests.request", return_value=mock_response):
+        models = provider.list_models()
+
+    assert models == [
+        {"id": "meta/llama-3.1-8b-instruct"},
+        {"id": "nvidia/llama-3.1-nemotron-ultra-253b-v1"},
+    ]
+
+
+def test_nvidia_http_error_does_not_leak_api_key():
+    provider = NVIDIAProvider(
+        base_url="https://integrate.api.nvidia.com/v1",
+        model="meta/llama-3.1-8b-instruct",
+        api_key="nvapi-secret-value",
+    )
+    mock_response = Mock(status_code=401)
+    mock_response.text = '{"detail": "Invalid API key"}'
+    exc = requests.HTTPError("401 Client Error")
+    exc.response = mock_response
+    mock_response.raise_for_status.side_effect = exc
+    mock_response.json.return_value = {}
+
+    with patch("openai_compatible.requests.post", return_value=mock_response):
+        try:
+            provider.generate([{"role": "user", "content": "hi"}])
+        except RuntimeError as raised:
+            message = str(raised)
+        else:
+            raise AssertionError("generate should raise on HTTP 401")
+
+    assert "NVIDIA NIM request failed" in message
+    assert "401" in message
+    assert "nvapi-secret-value" not in message
+
+
+def test_nvidia_unreachable_error_names_provider():
+    provider = NVIDIAProvider(
+        base_url="https://integrate.api.nvidia.com/v1",
+        model="meta/llama-3.1-8b-instruct",
+        api_key="nvapi-test-key",
+    )
+
+    with patch(
+        "openai_compatible.requests.post",
+        side_effect=requests.ConnectionError("connection refused"),
+    ):
+        try:
+            provider.generate([{"role": "user", "content": "hi"}])
+        except RuntimeError as raised:
+            message = str(raised)
+        else:
+            raise AssertionError("generate should raise when unreachable")
+
+    assert message.startswith("Could not reach NVIDIA NIM")
+    assert "NVIDIA_BASE_URL" in message
+    assert "NVIDIA_API_KEY" in message
+
+
+def test_nvidia_provider_invalid_base_url_rejected():
+    # URL validation happens in validate_provider_base_url; credentials in
+    # URLs are rejected there. Confirm our SSRF entry point stays wired.
+    from security import validate_provider_base_url
+
+    with pytest.raises(ValueError):
+        validate_provider_base_url(
+            "https://user:pass@integrate.api.nvidia.com/v1"
+        )
+
+
+def test_nvidia_env_config_defaults(monkeypatch):
+    for var in (
+        "NVIDIA_API_KEY",
+        "NVIDIA_BASE_URL",
+        "NVIDIA_MODEL",
+        "NVIDIA_TIMEOUT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    config = load_provider_config("nvidia")
+    assert config.provider == "nvidia"
+    assert config.model == "meta/llama-3.1-8b-instruct"
+    assert config.base_url == "https://integrate.api.nvidia.com/v1"
+    assert config.api_key is None
+    assert config.timeout == 120
