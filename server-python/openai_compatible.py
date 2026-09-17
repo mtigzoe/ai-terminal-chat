@@ -16,21 +16,29 @@ from prompts import CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION
 from providers.base import Provider, ProviderCapabilities, ProviderResponse, ToolCall
 from tools import TOOL_SCHEMAS
 
-# Phrases that mean "this server/model cannot do function calling".
-# Used to drop tools and retry instead of failing the whole turn.
-_TOOLS_UNSUPPORTED_MARKERS = (
+# A retry without tools is safe only when the response specifically
+# indicates that tool/function calling is unsupported. Do not match generic
+# words such as "tool", "function", or "unsupported" on their own: those
+# words also occur in unrelated validation and server errors, where a retry
+# would duplicate the request and hide the original failure.
+_TOOLS_UNSUPPORTED_CAPABILITY_MARKERS = (
     "tool",
-    "tools",
-    "function",
-    "functions",
     "function calling",
+    "function_call",
     "tool_choice",
+)
+
+_TOOLS_UNSUPPORTED_REJECTION_MARKERS = (
     "does not support",
+    "doesn't support",
     "unsupported",
+    "not supported",
     "unknown field",
     "unrecognized",
     "invalid parameter",
     "not enabled",
+    "not implemented",
+    "not allowed",
 )
 
 _STREAM_UNSUPPORTED_MARKERS = (
@@ -77,7 +85,7 @@ def _http_response(exc: Exception):
 
 
 def looks_like_tools_unsupported(exc: Exception) -> bool:
-    """True when an HTTP error is likely caused by sending tools."""
+    """True when an HTTP error specifically rejects tool/function calling."""
 
     response = _http_response(exc)
     status = getattr(response, "status_code", None)
@@ -86,7 +94,14 @@ def looks_like_tools_unsupported(exc: Exception) -> bool:
     text = (_response_text(exc) if response is None else (response.text or "")).lower()
     if not text:
         text = str(exc).lower()
-    return any(marker in text for marker in _TOOLS_UNSUPPORTED_MARKERS)
+
+    has_capability_marker = any(
+        marker in text for marker in _TOOLS_UNSUPPORTED_CAPABILITY_MARKERS
+    )
+    has_rejection_marker = any(
+        marker in text for marker in _TOOLS_UNSUPPORTED_REJECTION_MARKERS
+    )
+    return has_capability_marker and has_rejection_marker
 
 
 def looks_like_streaming_unsupported(exc: Exception) -> bool:
