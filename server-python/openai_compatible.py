@@ -7,6 +7,7 @@ an API key is required, and detected capabilities differ.
 """
 
 import json
+import re
 from dataclasses import replace
 from typing import Optional
 
@@ -21,24 +22,10 @@ from tools import TOOL_SCHEMAS
 # words such as "tool", "function", or "unsupported" on their own: those
 # words also occur in unrelated validation and server errors, where a retry
 # would duplicate the request and hide the original failure.
-_TOOLS_UNSUPPORTED_CAPABILITY_MARKERS = (
-    "tool",
-    "function calling",
-    "function_call",
-    "tool_choice",
-)
-
-_TOOLS_UNSUPPORTED_REJECTION_MARKERS = (
-    "does not support",
-    "doesn't support",
-    "unsupported",
-    "not supported",
-    "unknown field",
-    "unrecognized",
-    "invalid parameter",
-    "not enabled",
-    "not implemented",
-    "not allowed",
+_TOOLS_UNSUPPORTED_PATTERNS = (
+    r"\b(?:tools?|tool_choice|functions?|function_call(?:ing)?)\b.{0,50}\b(?:does not support|doesn't support|not supported|unsupported|not enabled|not implemented|not allowed)\b",
+    r"\b(?:does not support|doesn't support|not supported|unsupported|not enabled|not implemented|not allowed)\b.{0,50}\b(?:tools?|tool_choice|functions?|function_call(?:ing)?)\b",
+    r"\bunknown (?:field|parameter)\b.{0,40}\b(?:tools?|tool_choice|functions?|function_call(?:ing)?)\b",
 )
 
 _STREAM_UNSUPPORTED_MARKERS = (
@@ -94,14 +81,7 @@ def looks_like_tools_unsupported(exc: Exception) -> bool:
     text = (_response_text(exc) if response is None else (response.text or "")).lower()
     if not text:
         text = str(exc).lower()
-
-    has_capability_marker = any(
-        marker in text for marker in _TOOLS_UNSUPPORTED_CAPABILITY_MARKERS
-    )
-    has_rejection_marker = any(
-        marker in text for marker in _TOOLS_UNSUPPORTED_REJECTION_MARKERS
-    )
-    return has_capability_marker and has_rejection_marker
+    return any(re.search(pattern, text) for pattern in _TOOLS_UNSUPPORTED_PATTERNS)
 
 
 def looks_like_streaming_unsupported(exc: Exception) -> bool:
