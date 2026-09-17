@@ -284,6 +284,7 @@ app.post("/providers/select", async (c) => {
         xai: "XAI_API_KEY",
         openrouter: "OPENROUTER_API_KEY",
         anthropic: "ANTHROPIC_API_KEY",
+        nvidia: "NVIDIA_API_KEY",
       };
       const envName = envApiKeyMap[name];
       if (hasApiKey && envName) {

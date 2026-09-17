@@ -40,6 +40,10 @@ const ENV_KEYS = [
   "ANTHROPIC_BASE_URL",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_TIMEOUT",
+  "NVIDIA_MODEL",
+  "NVIDIA_BASE_URL",
+  "NVIDIA_API_KEY",
+  "NVIDIA_TIMEOUT",
 ];
 
 let savedEnv: Record<string, string | undefined>;
@@ -709,7 +713,7 @@ describe("OpenAICompatibleProvider.appendToolResults", () => {
 // ---------------------------------------------------------------------------
 
 describe("SUPPORTED_PROVIDERS", () => {
-  it("lists exactly the seven supported provider names", () => {
+  it("lists exactly the eight supported provider names", () => {
     expect([...SUPPORTED_PROVIDERS]).toEqual([
       "gemini",
       "ollama",
@@ -718,6 +722,7 @@ describe("SUPPORTED_PROVIDERS", () => {
       "xai",
       "openrouter",
       "anthropic",
+      "nvidia",
     ]);
   });
 });
@@ -1277,5 +1282,163 @@ describe("StubProvider.buildContents", () => {
     const history = [userMsg("first")];
     const contents = provider.buildContents("second", history);
     expect(contents).toEqual([userMsg("first"), userMsg("second")]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NVIDIA NIM provider (factory registration + OpenAI-compatible reuse)
+// ---------------------------------------------------------------------------
+
+describe("NVIDIA NIM provider", () => {
+  it("is registered as a supported provider", () => {
+    expect(SUPPORTED_PROVIDERS).toContain("nvidia");
+  });
+
+  it("resolves env config with the documented NVIDIA NIM defaults", () => {
+    const config = loadProviderEnvConfig("nvidia");
+    expect(config).toMatchObject({
+      provider: "nvidia",
+      model: "meta/llama-3.1-8b-instruct",
+      base_url: "https://integrate.api.nvidia.com/v1",
+      timeout: 120,
+    });
+    expect(config.api_key).toBeUndefined();
+  });
+
+  it("honors NVIDIA_* env overrides", () => {
+    process.env.NVIDIA_API_KEY = "nvapi-test";
+    process.env.NVIDIA_MODEL = "qwen/qwen3-next-80b-a3b-instruct";
+    const config = loadProviderEnvConfig("nvidia");
+    expect(config.api_key).toBe("nvapi-test");
+    expect(config.model).toBe("qwen/qwen3-next-80b-a3b-instruct");
+  });
+
+  it("factory builds an OpenAI-compatible provider named nvidia / NVIDIA NIM", () => {
+    process.env.NVIDIA_API_KEY = "nvapi-test";
+    const provider = getProvider("nvidia");
+    expect(provider).toBeInstanceOf(OpenAICompatibleProvider);
+    expect(provider.name).toBe("nvidia");
+    expect(provider.displayName).toBe("NVIDIA NIM");
+    expect(provider.model).toBe("meta/llama-3.1-8b-instruct");
+    expect(provider.providerConfig).toMatchObject({
+      provider: "nvidia",
+      base_url: "https://integrate.api.nvidia.com/v1",
+      api_key: "nvapi-test",
+    });
+  });
+
+  it("marks nvidia as requiring an api key, with remote model listing", () => {
+    const provider = getProvider("nvidia");
+    expect(provider.capabilities.requires_api_key).toBe(true);
+    expect(provider.capabilities.model_listing).toBe(true);
+    expect(provider.capabilities.streaming).toBe(true);
+    expect(provider.capabilities.local).toBe(false);
+  });
+
+  it("preserves vendor/model slug ids exactly during model discovery", async () => {
+    const provider = new OpenAICompatibleProvider({
+      base_url: "https://integrate.api.nvidia.com/v1",
+      model: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      api_key: "nvapi-test",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: [
+            { id: "meta/llama-3.1-8b-instruct" },
+            { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1" },
+          ],
+        })
+      )
+    );
+    await expect(provider.listModels()).resolves.toEqual([
+      { id: "meta/llama-3.1-8b-instruct" },
+      { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1" },
+    ]);
+  });
+
+  it("sends bearer auth and the selected model to the NVIDIA chat endpoint", async () => {
+    process.env.NVIDIA_API_KEY = "nvapi-test";
+    const provider = getProvider("nvidia");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({
+          choices: [{ message: { role: "assistant", content: "hi from nim" } }],
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await provider.generate(provider.buildContents("hello", []));
+
+    expect(result.text).toBe("hi from nim");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://integrate.api.nvidia.com/v1/chat/completions");
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer nvapi-test"
+    );
+    const body = JSON.parse(String(init.body));
+    expect(body.model).toBe("meta/llama-3.1-8b-instruct");
+  });
+
+  it("reports HTTP errors without leaking the api key", async () => {
+    process.env.NVIDIA_API_KEY = "nvapi-secret-value";
+    const provider = getProvider("nvidia");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          textResponse('{"detail":"Invalid API key"}', 401)
+        )
+    );
+
+    let message = "";
+    try {
+      await provider.generate(provider.buildContents("hello", []));
+    } catch (exc) {
+      message = (exc as Error).message;
+    }
+    expect(message).toContain("NVIDIA NIM request failed (HTTP 401)");
+    expect(message).not.toContain("nvapi-secret-value");
+  });
+
+  it("maps an aborted request to a timeout error naming the provider", async () => {
+    const provider = getProvider("nvidia");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        const abortError = new Error("The operation was aborted");
+        abortError.name = "AbortError";
+        return Promise.reject(abortError);
+      })
+    );
+
+    await expect(
+      provider.generate(provider.buildContents("hello", []))
+    ).rejects.toThrow(/Request to NVIDIA NIM timed out/);
+  });
+
+  it("rejects base URLs that embed credentials", () => {
+    process.env.NVIDIA_API_KEY = "nvapi-test";
+    process.env.NVIDIA_BASE_URL = "https://user:pass@integrate.api.nvidia.com/v1";
+    expect(() => getProvider("nvidia")).toThrow(/Invalid base URL/);
+  });
+
+  it("reports the provider as unavailable when the key is missing", async () => {
+    const provider = getProvider("nvidia");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          textResponse('{"detail":"API key required"}', 401)
+        )
+    );
+
+    const status = await buildProviderStatus(provider, true);
+    expect(status.available).toBe(false);
+    expect(status.error).toContain("NVIDIA NIM returned HTTP 401");
   });
 });

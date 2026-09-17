@@ -6,6 +6,7 @@ export const SUPPORTED_PROVIDERS = [
   "xai",
   "openrouter",
   "anthropic",
+  "nvidia",
 ] as const;
 
 export type SupportedProviderName = (typeof SUPPORTED_PROVIDERS)[number];
@@ -70,6 +71,14 @@ export function loadProviderEnvConfig(name: string): ProviderEnvConfig {
         base_url: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
         api_key: process.env.OPENROUTER_API_KEY,
         timeout: parseInt(process.env.OPENROUTER_TIMEOUT || "120", 10),
+      };
+    case "nvidia":
+      return {
+        provider: "nvidia",
+        model: process.env.NVIDIA_MODEL || "meta/llama-3.1-8b-instruct",
+        base_url: process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1",
+        api_key: process.env.NVIDIA_API_KEY,
+        timeout: parseInt(process.env.NVIDIA_TIMEOUT || "120", 10),
       };
     case "anthropic":
       return {
