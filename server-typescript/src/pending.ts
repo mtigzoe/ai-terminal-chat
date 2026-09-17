@@ -78,13 +78,14 @@ export function popPending(actionId: string): PendingAction | undefined {
   }
 
   // Resumable confirmations are bound to the provider/model that generated
-  // their saved loop state. A provider/model switch must invalidate the old
+  // their saved loop state. A provider/model switch invalidates the old
   // confirmation instead of allowing /confirm to fall back to legacy
   // execution of the saved write.
   if (
     action.resume &&
     action.resume.provider_fingerprint !== currentProviderFingerprint()
   ) {
+    _PENDING.delete(actionId);
     return undefined;
   }
 
