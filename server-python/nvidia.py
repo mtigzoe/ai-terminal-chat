@@ -32,10 +32,14 @@ class NVIDIAProvider(OpenAICompatibleProvider):
         api_key: Optional[str] = None,
         timeout: int = 120,
     ):
-        if not api_key:
+        # Environment/configuration values can contain accidental whitespace.
+        # Treat a whitespace-only key as missing rather than sending an
+        # unusable Bearer credential to NVIDIA.
+        if not api_key or not str(api_key).strip():
             raise RuntimeError(
                 "NVIDIA_API_KEY is not set. Add it to your .env file."
             )
+        api_key = str(api_key).strip()
 
         # Preserve the selected model slug exactly (including characters
         # such as '/' in "meta/llama-3.1-8b-instruct"). Do not normalize.
