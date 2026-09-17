@@ -72,6 +72,20 @@ test("delete_file pending action is invalidated when the target disappears", () 
   assert.equal(popPending(action.action_id), undefined);
 });
 
+test("delete_file can bind a binary target without decoding it as UTF-8", () => {
+  const project = makeProject();
+  const target = join(project, "binary.bin");
+  writeFileSync(target, Buffer.from([0x00, 0xff, 0x80, 0x01]));
+
+  const action = createPending(
+    "delete_file",
+    { path: "binary.bin" },
+    { requires_confirmation: true },
+  );
+
+  assert.equal(popPending(action.action_id)?.action_id, action.action_id);
+});
+
 test("apply_patch pending action checks every target before confirmation", () => {
   const project = makeProject();
   writeFileSync(join(project, "a.txt"), "a\n", "utf8");
