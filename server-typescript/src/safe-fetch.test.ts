@@ -30,6 +30,24 @@ test("blockedAddressReason rejects private and metadata", () => {
   assert.ok(blockedAddressReason("10.0.0.1", true)); // still blocked
 });
 
+test("blockedAddressReason rejects multicast and reserved IPv4 ranges", () => {
+  assert.ok(blockedAddressReason("224.0.0.1", false));
+  assert.ok(blockedAddressReason("239.255.255.255", false));
+  assert.ok(blockedAddressReason("240.0.0.1", false));
+  assert.ok(blockedAddressReason("255.255.255.255", false));
+  assert.equal(blockedAddressReason("223.255.255.255", false), null);
+});
+
+test("IPv4-mapped IPv6 applies the same reserved-address policy", () => {
+  assert.ok(blockedAddressReason("::ffff:224.0.0.1", false));
+  assert.ok(blockedAddressReason("::ffff:239.255.255.255", false));
+  assert.ok(blockedAddressReason("::ffff:240.0.0.1", false));
+  assert.ok(blockedAddressReason("::ffff:255.255.255.255", false));
+  assert.ok(blockedAddressReason("::ffff:e000:0001", false));
+  assert.ok(blockedAddressReason("::ffff:f000:0001", false));
+  assert.equal(blockedAddressReason("::ffff:8.8.8.8", false), null);
+});
+
 test("resolveAndPinHostname rejects mixed public+private DNS answers", async () => {
   const lookup: LookupAll = async () => [
     { address: "8.8.8.8", family: 4 },

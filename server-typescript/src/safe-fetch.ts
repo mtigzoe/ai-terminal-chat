@@ -35,6 +35,7 @@ const PRIVATE_IPV4_RANGES: Array<{ start: number; end: number }> = [
   { start: ipToNum("169.254.0.0"), end: ipToNum("169.254.255.255") },
   { start: ipToNum("0.0.0.0"), end: ipToNum("0.255.255.255") },
   { start: ipToNum("100.64.0.0"), end: ipToNum("100.127.255.255") }, // CGNAT
+  { start: ipToNum("224.0.0.0"), end: ipToNum("255.255.255.255") }, // multicast/reserved
 ];
 
 const BLOCKED_IPV4 = new Set([
