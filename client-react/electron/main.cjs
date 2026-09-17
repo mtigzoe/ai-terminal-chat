@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { handleEditorOpen, getAvailableEditors } = require('./editor-handler.cjs');
 const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl } = require('./security-utils.cjs');
+const { createHealthChallenge, createHealthProof } = require('./health-check.cjs');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -56,11 +57,12 @@ function bundledBackendPath() {
 
 function checkBackend() {
   return new Promise((resolve) => {
+    const challenge = createHealthChallenge();
     const request = http.get(
       {
         hostname: BACKEND_HOST,
         port: BACKEND_PORT,
-        path: '/health',
+        path: `/health?challenge=${encodeURIComponent(challenge)}`,
         timeout: 1000,
         headers: {
           'Authorization': `Bearer ${HEALTH_TOKEN}`,
@@ -72,14 +74,11 @@ function checkBackend() {
         response.on('end', () => {
           try {
             const parsed = JSON.parse(data);
-            if (
+            resolve(
               parsed.status === 'ok' &&
-              parsed.app === 'ai-terminal-chat'
-            ) {
-              resolve(true);
-            } else {
-              resolve(false);
-            }
+              parsed.app === 'ai-terminal-chat' &&
+              verifyHealthResponse(parsed.proof, challenge)
+            );
           } catch {
             resolve(false);
           }
@@ -93,6 +92,15 @@ function checkBackend() {
       resolve(false);
     });
   });
+}
+
+function verifyHealthResponse(proof, challenge) {
+  if (typeof proof !== 'string' || !/^[0-9a-f]{64}$/i.test(proof)) {
+    return false;
+  }
+  const expected = Buffer.from(createHealthProof(HEALTH_TOKEN, challenge), 'hex');
+  const provided = Buffer.from(proof, 'hex');
+  return expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
 }
 
 async function waitForBackend(timeoutMs = 30000) {
