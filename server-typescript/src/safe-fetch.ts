@@ -329,8 +329,12 @@ export async function safeFetch(
     connect: {
       // Force every connection for this request to the pinned address.
       // undici still uses url.hostname for TLS SNI / cert validation.
-      lookup: (_hostname, _opts, callback) => {
-        callback(null, pin.address, pin.family);
+      lookup: (_hostname, lookupOptions, callback) => {
+        if (lookupOptions.all) {
+          callback(null, [{ address: pin.address, family: pin.family }]);
+        } else {
+          callback(null, pin.address, pin.family);
+        }
       },
     },
   });
