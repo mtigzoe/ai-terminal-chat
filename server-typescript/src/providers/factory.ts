@@ -121,6 +121,25 @@ export function getProvider(
       };
       return provider;
     }
+    case "nvidia": {
+      const provider = new OpenAICompatibleProvider({
+        base_url: envConfig.base_url || "https://integrate.api.nvidia.com/v1",
+        model,
+        api_key: envConfig.api_key,
+        timeout: envConfig.timeout,
+        requires_api_key: true,
+        display_name: "NVIDIA NIM",
+      });
+      provider.name = "nvidia";
+      provider.providerConfig = {
+        provider: "nvidia",
+        model,
+        base_url: envConfig.base_url,
+        api_key: envConfig.api_key,
+        timeout: envConfig.timeout,
+      };
+      return provider;
+    }
     case "anthropic": {
       const provider = new AnthropicProvider({
         model,

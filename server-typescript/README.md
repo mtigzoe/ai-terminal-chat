@@ -108,7 +108,7 @@ Response:
   "available": true,
   "error": null,
   "current": "ollama",
-  "providers": ["gemini", "ollama", "kilo", "openai", "xai", "openrouter", "anthropic"]
+  "providers": ["gemini", "ollama", "kilo", "openai", "xai", "openrouter", "anthropic", "nvidia"]
 }
 ```
 
@@ -194,7 +194,7 @@ server-typescript/src/
 1. **Hono** is used as the HTTP framework for its lightweight footprint and excellent TypeScript support.
 2. **Node.js built-ins** (`fs`, `path`, `child_process`) are used for filesystem, git, and terminal operations, matching the Python backend's behavior.
 3. **In-memory stores** (`pending.ts`, `cancellation.ts`) mirror the Python `threading.Lock`-protected stores, using `Map` for thread-safety in Node.js's single-threaded environment.
-4. **Provider abstraction** supports both stub providers (for testing) and OpenAI-compatible providers (for Ollama, OpenAI, xAI, OpenRouter, etc.).
+4. **Provider abstraction** supports both stub providers (for testing) and OpenAI-compatible providers (for Ollama, OpenAI, xAI, OpenRouter, NVIDIA NIM, etc.).
 5. **Security** is enforced at the tool and route level: path containment, sensitive file blocking, command allowlisting, and dangerous character blocking.
 
 ## Cross-Platform Support

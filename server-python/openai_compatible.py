@@ -7,6 +7,7 @@ an API key is required, and detected capabilities differ.
 """
 
 import json
+import re
 from dataclasses import replace
 from typing import Optional
 
@@ -16,21 +17,15 @@ from prompts import CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION
 from providers.base import Provider, ProviderCapabilities, ProviderResponse, ToolCall
 from tools import TOOL_SCHEMAS
 
-# Phrases that mean "this server/model cannot do function calling".
-# Used to drop tools and retry instead of failing the whole turn.
-_TOOLS_UNSUPPORTED_MARKERS = (
-    "tool",
-    "tools",
-    "function",
-    "functions",
-    "function calling",
-    "tool_choice",
-    "does not support",
-    "unsupported",
-    "unknown field",
-    "unrecognized",
-    "invalid parameter",
-    "not enabled",
+# A retry without tools is safe only when the response specifically
+# indicates that tool/function calling is unsupported. Do not match generic
+# words such as "tool", "function", or "unsupported" on their own: those
+# words also occur in unrelated validation and server errors, where a retry
+# would duplicate the request and hide the original failure.
+_TOOLS_UNSUPPORTED_PATTERNS = (
+    r"\b(?:tools?|tool_choice|functions?|function_call(?:ing)?)\b.{0,50}\b(?:does not support|doesn't support|not supported|unsupported|not enabled|not implemented|not allowed)\b",
+    r"\b(?:does not support|doesn't support|not supported|unsupported|not enabled|not implemented|not allowed)\b.{0,50}\b(?:tools?|tool_choice|functions?|function_call(?:ing)?)\b",
+    r"\bunknown (?:field|parameter)\b.{0,40}\b(?:tools?|tool_choice|functions?|function_call(?:ing)?)\b",
 )
 
 _STREAM_UNSUPPORTED_MARKERS = (
@@ -77,7 +72,7 @@ def _http_response(exc: Exception):
 
 
 def looks_like_tools_unsupported(exc: Exception) -> bool:
-    """True when an HTTP error is likely caused by sending tools."""
+    """True when an HTTP error specifically rejects tool/function calling."""
 
     response = _http_response(exc)
     status = getattr(response, "status_code", None)
@@ -86,7 +81,7 @@ def looks_like_tools_unsupported(exc: Exception) -> bool:
     text = (_response_text(exc) if response is None else (response.text or "")).lower()
     if not text:
         text = str(exc).lower()
-    return any(marker in text for marker in _TOOLS_UNSUPPORTED_MARKERS)
+    return any(re.search(pattern, text) for pattern in _TOOLS_UNSUPPORTED_PATTERNS)
 
 
 def looks_like_streaming_unsupported(exc: Exception) -> bool:

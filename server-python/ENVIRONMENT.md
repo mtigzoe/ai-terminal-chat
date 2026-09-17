@@ -4,7 +4,7 @@ This file documents the environment variables used by the Python backend. It is 
 
 ## Backend
 
-- `PROVIDER` — Provider used by `/chat` and `/stream`. Supported values: `gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`. Default: `gemini`.
+- `PROVIDER` — Provider used by `/chat` and `/stream`. Supported values: `gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`, `nvidia`. Default: `gemini`.
 - `PORT` — HTTP server port. Default: `9000`.
 - `HOST` — Bind address. Default: `127.0.0.1`; use `0.0.0.0` when the backend runs in Docker and must be reachable from the host.
 
@@ -57,6 +57,13 @@ This file documents the environment variables used by the Python backend. It is 
 - `ANTHROPIC_MODEL` — Anthropic model name. Default: `claude-sonnet-4-5`.
 - `ANTHROPIC_TIMEOUT` — Request timeout in seconds. Default: `120`.
 - `ANTHROPIC_MAX_TOKENS` — Maximum output tokens. Default: `8192`.
+
+## NVIDIA NIM
+
+- `NVIDIA_API_KEY` — NVIDIA API credential (`nvapi-...`). Never commit its value or expose it to the React frontend. Get one from https://build.nvidia.com.
+- `NVIDIA_BASE_URL` — NVIDIA NIM OpenAI-compatible API base URL. Default: `https://integrate.api.nvidia.com/v1`.
+- `NVIDIA_MODEL` — NVIDIA catalog model slug (`vendor/model`) passed through unchanged. Default: `meta/llama-3.1-8b-instruct`.
+- `NVIDIA_TIMEOUT` — Request timeout in seconds. Default: `120`.
 
 ## Security
 
