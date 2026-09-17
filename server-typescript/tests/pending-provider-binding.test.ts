@@ -14,6 +14,7 @@ vi.mock("../src/providers/factory.ts", () => ({
 import {
   clear,
   createPending,
+  getPending,
   popPending,
   type ResumeState,
 } from "../src/pending.ts";
@@ -43,7 +44,7 @@ describe("pending provider binding", () => {
     });
   });
 
-  it("does not consume a resumable action after the provider changes", () => {
+  it("invalidates a resumable action after the provider changes", () => {
     const action = createPending(
       "write_file",
       { path: "example.txt", contents: "new" },
@@ -58,18 +59,16 @@ describe("pending provider binding", () => {
     getProvider.mockReturnValue({ name: "openai", model: "gpt-5" });
 
     expect(popPending(action.action_id)).toBeUndefined();
+    expect(getPending(action.action_id)).toBeUndefined();
+  });
 
-    // The stale action remains available only as an invalidated pending entry;
-    // changing back to its original provider/model permits the normal resume
-    // path to consume it.
-    loadProviderSelection.mockReturnValue({
-      provider: "gemini",
-      model: "gemini-2.5-pro",
-    });
-    getProvider.mockReturnValue({
-      name: "gemini",
-      model: "gemini-2.5-pro",
-    });
+  it("allows a matching resumable action to be consumed", () => {
+    const action = createPending(
+      "write_file",
+      { path: "example.txt", contents: "new" },
+      { requires_confirmation: true },
+      resume,
+    );
 
     expect(popPending(action.action_id)?.action_id).toBe(action.action_id);
   });
