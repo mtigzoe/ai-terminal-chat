@@ -4,7 +4,7 @@ import { readFileWithinProject, safePath } from "./security.ts";
 
 export interface ConfirmationFileState {
   path: string;
-  exists: boolean;
+  status: "present" | "missing" | "unavailable";
   sha256: string | null;
 }
 
@@ -17,20 +17,20 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
   try {
     const resolved = safePath(normalized);
     if (!fs.existsSync(resolved)) {
-      return { path: normalized, exists: false, sha256: null };
+      return { path: normalized, status: "missing", sha256: null };
     }
 
     const read = readFileWithinProject(normalized, MAX_FINGERPRINT_BYTES);
     return {
       path: normalized,
-      exists: true,
-      sha256: crypto.createHash("sha256").update(Buffer.from(read.contents, "utf8")).digest("hex"),
+      status: "present",
+      sha256: crypto
+        .createHash("sha256")
+        .update(Buffer.from(read.contents, "utf8"))
+        .digest("hex"),
     };
   } catch {
-    // Treat an unreadable or unsafe target as a state mismatch. A pending
-    // confirmation must never become less restrictive because state capture
-    // failed.
-    return { path: normalized, exists: false, sha256: null };
+    return { path: normalized, status: "unavailable", sha256: null };
   }
 }
 
@@ -43,8 +43,9 @@ export function confirmationFileStatesMatch(
   expected: ConfirmationFileStates,
 ): boolean {
   return expected.every((state) => {
+    if (state.status === "unavailable") return false;
     const current = fingerprintFile(state.path);
-    return current.exists === state.exists && current.sha256 === state.sha256;
+    return current.status === state.status && current.sha256 === state.sha256;
   });
 }
 
