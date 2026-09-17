@@ -7,6 +7,13 @@
  * paused so a compound request (e.g. "add, commit, and push") can finish
  * across several Allow clicks instead of stopping after the first one.
  */
+import {
+  captureConfirmationFileStates,
+  confirmationFileStatesMatch,
+  confirmationPathsForPending,
+  type ConfirmationFileStates,
+} from "./confirmation-state.ts";
+
 export interface ResumeState {
   provider_fingerprint: string;
   contents: unknown[];
@@ -23,6 +30,9 @@ export interface PendingAction {
   tool_name: string;
   args: Record<string, unknown>;
   preview: Record<string, unknown>;
+  // Captured immediately after the preview and before the pending action is
+  // exposed to the user. Confirmation is rejected if any target changed.
+  confirmation_file_states?: ConfirmationFileStates;
   // Present when this action was created mid-agent-loop (as opposed to a
   // standalone/legacy pending action). See agent.resumeAgentLoop() for how
   // this is consumed.
@@ -38,11 +48,17 @@ export function createPending(
   preview: Record<string, unknown>,
   resume?: ResumeState
 ): PendingAction {
+  const paths = confirmationPathsForPending(toolName, args);
+  const confirmation_file_states = paths.length
+    ? captureConfirmationFileStates(paths)
+    : undefined;
+
   const action: PendingAction = {
     action_id: crypto.randomUUID(),
     tool_name: toolName,
     args: { ...args },
     preview: { ...preview },
+    ...(confirmation_file_states ? { confirmation_file_states } : {}),
     ...(resume ? { resume } : {}),
   };
 
@@ -61,9 +77,17 @@ export function getPending(actionId: string): PendingAction | undefined {
 
 export function popPending(actionId: string): PendingAction | undefined {
   const action = _PENDING.get(actionId);
-  if (action) {
+  if (!action) return undefined;
+
+  if (
+    action.confirmation_file_states &&
+    !confirmationFileStatesMatch(action.confirmation_file_states)
+  ) {
     _PENDING.delete(actionId);
+    return undefined;
   }
+
+  _PENDING.delete(actionId);
   return action;
 }
 
