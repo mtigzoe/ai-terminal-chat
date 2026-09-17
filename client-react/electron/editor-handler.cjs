@@ -46,7 +46,12 @@ async function handleEditorOpen({ spawn, openPath }, filePath, editorId) {
     return false;
   }
   try {
-    spawn(targetEditor.bin, [filePath], { detached: true, stdio: 'ignore' }).unref();
+    const child = spawn(targetEditor.bin, [filePath], { detached: true, stdio: 'ignore' });
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+    child.unref();
     return true;
   } catch (err) {
     console.error('Failed to spawn editor:', err);
