@@ -12,7 +12,7 @@
  */
 
 import dns from "node:dns/promises";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 import {
   createSafeRequestInit,
@@ -246,9 +246,64 @@ export type SafeFetchOptions = {
   lookupAll?: LookupAll;
   /** Follow one safe redirect (default false — manual only). */
   followRedirects?: boolean;
-  /** Fetch implementation; defaults to the global fetch implementation. */
+  /** Fetch implementation; defaults to the undici fetch implementation. */
   fetchImpl?: typeof globalThis.fetch;
 };
+
+/**
+ * Wrap a response body so the per-request dispatcher stays alive until the
+ * caller has finished consuming the body. Closing an undici Agent immediately
+ * after fetch() returns can race with response-body consumption because
+ * fetch() resolves before the body is read.
+ */
+function keepAgentAliveUntilBodyConsumed(
+  response: Response,
+  agent: Agent,
+): Response {
+  if (!response.body) {
+    void agent.close();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  let closed = false;
+
+  const closeAgent = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await agent.close();
+  };
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          await closeAgent();
+          controller.close();
+          return;
+        }
+        controller.enqueue(result.value);
+      } catch (error) {
+        await closeAgent();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        await closeAgent();
+      }
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 /**
  * Fetch with DNS pinning. The peer address is fixed at resolution time.
@@ -274,15 +329,20 @@ export async function safeFetch(
     connect: {
       // Force every connection for this request to the pinned address.
       // undici still uses url.hostname for TLS SNI / cert validation.
-      lookup: (_hostname, _opts, callback) => {
-        callback(null, pin.address, pin.family);
+      lookup: (_hostname, lookupOptions, callback) => {
+        if (lookupOptions.all) {
+          callback(null, [{ address: pin.address, family: pin.family }]);
+        } else {
+          callback(null, pin.address, pin.family);
+        }
       },
     },
   });
 
+  let keepAgentAlive = false;
   try {
     const safeInit = createSafeRequestInit(init);
-    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = options.fetchImpl ?? undiciFetch;
     const pinnedInit = {
       ...safeInit,
       dispatcher: agent,
@@ -312,10 +372,14 @@ export async function safeFetch(
       }
     }
 
-    // undici Response is compatible with the fetch Response used by providers.
-    return response as unknown as Response;
+    // Keep the request-specific dispatcher alive until the response body has
+    // been fully consumed or cancelled by the caller.
+    keepAgentAlive = true;
+    return keepAgentAliveUntilBodyConsumed(response, agent);
   } finally {
-    await agent.close();
+    if (!keepAgentAlive) {
+      await agent.close();
+    }
   }
 }
 

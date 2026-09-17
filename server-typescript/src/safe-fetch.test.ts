@@ -1,12 +1,14 @@
 /**
  * DNS pinning / SSRF address-policy tests.
  */
+import { createServer } from "node:http";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   blockedAddressReason,
   hostnameAllowsLoopback,
   resolveAndPinHostname,
+  safeFetch,
   type LookupAll,
 } from "./safe-fetch.ts";
 
@@ -90,4 +92,34 @@ test("IPv6 private ranges blocked", async () => {
   ];
   const result = await resolveAndPinHostname("ipv6.example", lookup);
   assert.equal(result.ok, false);
+});
+
+test("safeFetch keeps the pinned dispatcher alive until the response body is consumed", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("safe-fetch-body");
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const lookup: LookupAll = async () => [
+      { address: "127.0.0.1", family: 4 },
+    ];
+
+    const response = await safeFetch(
+      `http://localhost:${address.port}/body`,
+      {},
+      { originalHostname: "localhost", lookupAll: lookup },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "safe-fetch-body");
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
