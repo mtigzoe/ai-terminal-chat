@@ -6,6 +6,8 @@ the HTTP layer.
 """
 
 import os
+import sys
+from types import ModuleType
 
 import app_original as _original
 from flask import request
@@ -20,10 +22,6 @@ _provider_status = _original._provider_status
 PROJECT_ROOT = _original.PROJECT_ROOT
 get_project_root = _original.get_project_root
 set_project_root = _original.set_project_root
-
-# Keep the module-level provider compatible with the existing tests and
-# callers. The original module's provider is the authoritative value used by
-# the other route handlers, so successful switches update both references.
 provider = _original.provider
 
 
@@ -50,13 +48,11 @@ def _restore_provider_runtime_state(
             os.environ[env_name] = previous_api_key
 
     # get_provider() may activate and persist a request's project_path before
-    # returning its candidate. Restore the in-memory root first; then restore
-    # the saved configuration when possible. A rollback error must never hide
-    # the original persistence failure.
+    # returning its candidate. Restore the saved project root in both the
+    # config file and the in-memory proxy when possible. A rollback error
+    # must never hide the original provider-persistence failure.
     try:
-        PROJECT_ROOT.set(previous_project_root)
-        if get_project_root() != previous_project_root:
-            set_project_root(str(previous_project_root))
+        set_project_root(str(previous_project_root))
     except Exception as exc:
         print(f"[Warning] Could not restore project root after provider rollback: {exc}")
         try:
@@ -147,6 +143,18 @@ def select_provider():
 
 # Replace the original view function while retaining its existing URL rule.
 app.view_functions["select_provider"] = select_provider
+
+
+class _AppModule(ModuleType):
+    """Keep provider assignment compatible with the original app module."""
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        if name == "provider":
+            _original.provider = value
+
+
+sys.modules[__name__].__class__ = _AppModule
 
 
 if __name__ == "__main__":
