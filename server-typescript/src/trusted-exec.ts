@@ -11,7 +11,7 @@
  */
 
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 
 import { isPathWithinRoot } from "./security.ts";
 
@@ -43,7 +43,11 @@ function windowsExtensions(): string[] {
 function pathDirectories(): string[] {
   const pathEnv = process.env.Path || process.env.PATH || "";
   const pathDelimiter = process.platform === "win32" ? ";" : delimiter;
-  return pathEnv.split(pathDelimiter).map((dir) => dir.trim()).filter(Boolean);
+  return pathEnv
+    .split(pathDelimiter)
+    .map((dir) => dir.trim())
+    .filter(Boolean)
+    .filter((dir) => isAbsolute(dir));
 }
 
 function tryResolveFile(candidate: string): string | null {

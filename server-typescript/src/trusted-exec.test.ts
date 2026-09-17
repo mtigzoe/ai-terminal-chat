@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   rmSync,
   writeFileSync,
   realpathSync,
@@ -49,6 +50,44 @@ test("resolveTrustedExecutable refuses path-qualified names", () => {
     () => resolveTrustedExecutable("/usr/bin/git"),
     (err: unknown) => err instanceof TrustedExecutableError,
   );
+});
+
+test("resolveTrustedExecutable ignores relative PATH entries", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "relative-path-cwd-"));
+  const relativeDir = join(cwd, "tools");
+  const originalCwd = process.cwd();
+  const originalPath = process.env.PATH;
+  const originalPathWin = process.env.Path;
+  try {
+    mkdirSync(relativeDir);
+    if (process.platform === "win32") {
+      writeFileSync(join(cwd, "relative-tool.cmd"), "@echo off\r\n", "utf8");
+    } else {
+      writeFileSync(join(cwd, "relative-tool"), "#!/bin/sh\n", {
+        encoding: "utf8",
+        mode: 0o755,
+      });
+    }
+    process.chdir(cwd);
+    process.env.PATH = `.${pathDelimiter}tools`;
+    if (process.platform === "win32") process.env.Path = process.env.PATH;
+
+    assert.throws(
+      () => resolveTrustedExecutable("relative-tool"),
+      (err: unknown) =>
+        err instanceof TrustedExecutableError &&
+        err.message.includes("not installed or not on PATH"),
+    );
+  } finally {
+    process.chdir(originalCwd);
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (process.platform === "win32") {
+      if (originalPathWin === undefined) delete process.env.Path;
+      else process.env.Path = originalPathWin;
+    }
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("resolveTrustedExecutable skips project-root shims", () => {
