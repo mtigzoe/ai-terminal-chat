@@ -39,6 +39,7 @@ def client(tmp_path, monkeypatch):
 
     original_root = security.get_project_root()
     original_provider = app.provider
+    original_ollama_url = os.environ.get("OLLAMA_BASE_URL")
 
     app.app.testing = True
     with app.app.test_client() as client:
@@ -48,6 +49,10 @@ def client(tmp_path, monkeypatch):
     security.PROJECT_ROOT.set(Path(original_root))
     with app._provider_lock:
         app.provider = original_provider
+    if original_ollama_url is None:
+        os.environ.pop("OLLAMA_BASE_URL", None)
+    else:
+        os.environ["OLLAMA_BASE_URL"] = original_ollama_url
 
 
 def test_rejected_provider_switch_does_not_move_project_root(client, monkeypatch, tmp_path):
@@ -160,12 +165,10 @@ def test_ollama_url_restored_on_startup(monkeypatch, tmp_path):
     and then restarting (re-loading the provider from config), the active
     provider must use the persisted URL, not the default localhost."""
 
-    # Isolate config.
     config_dir = tmp_path / "config"
     monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
     monkeypatch.setattr(security, "_CONFIG_FILE", config_dir / "config.json")
 
-    # Step 1: persist the Ollama selection.
     security.persist_provider_selection(
         "ollama", model="llama3.1", ollama_base_url="cyber.local:11434"
     )
@@ -173,15 +176,11 @@ def test_ollama_url_restored_on_startup(monkeypatch, tmp_path):
         "http://cyber.local:11434"
     )
 
-    # Step 2: simulate server startup by clearing the in-memory provider
-    # and the env var, then re-running the startup restore block.
     with app._provider_lock:
         app.provider = app.get_provider()
 
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
 
-    # Re-execute the startup restore logic (mirrors the module-level block
-    # in app.py).
     try:
         _saved = security.load_provider_selection()
     except Exception:
@@ -195,7 +194,6 @@ def test_ollama_url_restored_on_startup(monkeypatch, tmp_path):
             _saved["provider"], model=_saved.get("model")
         )
 
-    # Step 3: verify the active provider uses the restored URL.
     assert app.provider.name == "ollama"
     assert app.provider.model == "llama3.1"
     assert os.environ.get("OLLAMA_BASE_URL") == "http://cyber.local:11434"
@@ -205,7 +203,6 @@ def test_switching_from_ollama_clears_ollama_url(monkeypatch, tmp_path, client):
     """Switching from Ollama to a non-Ollama provider must not leave a
     stale OLLAMA_BASE_URL in the environment."""
 
-    # Set up: Ollama with a custom URL is the active selection.
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://cyber.local:11434/v1")
     response = client.post(
         "/providers/select",
@@ -214,14 +211,12 @@ def test_switching_from_ollama_clears_ollama_url(monkeypatch, tmp_path, client):
     assert response.status_code == 200
     assert os.environ.get("OLLAMA_BASE_URL") == "http://cyber.local:11434/v1"
 
-    # Act: switch to Gemini.
     response = client.post(
         "/providers/select",
         json={"provider": "gemini", "model": "gemini-2.0-flash"},
     )
     assert response.status_code == 200
 
-    # Assert: OLLAMA_BASE_URL is cleared.
     assert "OLLAMA_BASE_URL" not in os.environ
     saved = security.load_provider_selection()
     assert saved.get("provider") == "gemini"
@@ -234,23 +229,19 @@ def test_restart_after_switching_away_from_ollama_does_not_use_stale_url(
     """After switching from Ollama to Gemini, a simulated restart must not
     re-apply the old Ollama URL."""
 
-    # Isolate config.
     config_dir = tmp_path / "config"
     monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
     monkeypatch.setattr(security, "_CONFIG_FILE", config_dir / "config.json")
 
-    # Step 1: select Ollama with custom URL.
     security.persist_provider_selection(
         "ollama", model="llama3.1", ollama_base_url="cyber.local:11434"
     )
 
-    # Step 2: switch to Gemini (which clears ollama_base_url from config).
     security.persist_provider_selection("gemini", model="gemini-2.0-flash")
     saved = security.load_provider_selection()
     assert saved["provider"] == "gemini"
     assert "ollama_base_url" not in saved
 
-    # Step 3: simulate restart.
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
     try:
         _saved = security.load_provider_selection()
@@ -265,6 +256,53 @@ def test_restart_after_switching_away_from_ollama_does_not_use_stale_url(
             _saved["provider"], model=_saved.get("model")
         )
 
-    # Assert: Gemini is active and no Ollama URL is in the environment.
     assert app.provider.name == "gemini"
     assert "OLLAMA_BASE_URL" not in os.environ
+
+
+def test_persistence_failure_rolls_back_provider_and_ollama_url(client, monkeypatch):
+    """A failed config write must leave the active provider and Ollama URL unchanged."""
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://old-host:11434/v1")
+    before_provider = app.provider
+    before_url = os.environ["OLLAMA_BASE_URL"]
+
+    def fail_persist(*args, **kwargs):
+        raise ValueError("simulated config write failure")
+
+    monkeypatch.setattr(app, "persist_provider_selection", fail_persist)
+
+    response = client.post(
+        "/providers/select",
+        json={"provider": "gemini", "model": "gemini-test"},
+    )
+
+    assert response.status_code == 400
+    assert app.provider is before_provider
+    assert app.provider.name == before_provider.name
+    assert os.environ.get("OLLAMA_BASE_URL") == before_url
+
+
+def test_persistence_failure_rolls_back_api_key(client, monkeypatch):
+    """A failed config write must restore a replaced API key too."""
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "old-key")
+    before_provider = app.provider
+
+    def fail_persist(*args, **kwargs):
+        raise ValueError("simulated config write failure")
+
+    monkeypatch.setattr(app, "persist_provider_selection", fail_persist)
+
+    response = client.post(
+        "/providers/select",
+        json={
+            "provider": "gemini",
+            "model": "gemini-test",
+            "api_key": "new-key",
+        },
+    )
+
+    assert response.status_code == 400
+    assert app.provider is before_provider
+    assert os.environ.get("GOOGLE_API_KEY") == "old-key"
