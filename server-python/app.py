@@ -24,6 +24,23 @@ PROJECT_ROOT = _original.PROJECT_ROOT
 get_project_root = _original.get_project_root
 provider = _original.provider
 
+# Re-export the public names historically provided by ``app``. Tests and
+# callers patch these names on the compatibility module, so assignments are
+# mirrored to ``app_original`` by _AppModule below.
+run_agent_loop = _original.run_agent_loop
+resume_agent_loop = _original.resume_agent_loop
+provider_fingerprint = _original.provider_fingerprint
+TOOL_FUNCTIONS = _original.TOOL_FUNCTIONS
+TOOL_EXECUTOR = _original.TOOL_EXECUTOR
+TOOL_TIMEOUTS = _original.TOOL_TIMEOUTS
+DEFAULT_TOOL_TIMEOUT = _original.DEFAULT_TOOL_TIMEOUT
+GIT_CONFIRM_TOOL_NAMES = _original.GIT_CONFIRM_TOOL_NAMES
+WRITE_TOOL_NAMES = _original.WRITE_TOOL_NAMES
+safe_path = _original.safe_path
+is_sensitive_filename = _original.is_sensitive_filename
+is_command_allowed = _original.is_command_allowed
+run_command = _original.run_command
+
 
 def _restore_provider_runtime_state(
     previous_provider,
@@ -143,12 +160,31 @@ app.view_functions["select_provider"] = select_provider
 
 
 class _AppModule(ModuleType):
-    """Keep provider assignment compatible with the original app module."""
+    """Keep assignments compatible with the original app module."""
+
+    _MIRRORED_NAMES = {
+        "provider",
+        "run_agent_loop",
+        "resume_agent_loop",
+        "provider_fingerprint",
+        "get_provider",
+        "TOOL_FUNCTIONS",
+        "TOOL_EXECUTOR",
+        "TOOL_TIMEOUTS",
+        "DEFAULT_TOOL_TIMEOUT",
+        "GIT_CONFIRM_TOOL_NAMES",
+        "WRITE_TOOL_NAMES",
+        "safe_path",
+        "is_sensitive_filename",
+        "is_command_allowed",
+        "run_command",
+        "get_project_root",
+    }
 
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
-        if name == "provider":
-            _original.provider = value
+        if name in self._MIRRORED_NAMES:
+            setattr(_original, name, value)
 
 
 sys.modules[__name__].__class__ = _AppModule
