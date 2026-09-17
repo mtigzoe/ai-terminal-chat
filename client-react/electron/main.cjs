@@ -1,12 +1,3 @@
-/**
- * Electron main process.
- *
- * - Development: loads the Vite dev server at http://localhost:3000.
- * - Production: loads client-react/dist/index.html.
- * - Packaged: starts the bundled TypeScript API server on port 9000 before
- *   loading the production renderer.
- */
-
 const { app, BrowserWindow, shell, ipcMain, dialog, utilityProcess } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -37,29 +28,6 @@ const KNOWN_EDITORS = [
   { id: 'sublime', name: 'Sublime Text', bin: 'subl' },
 ];
 
-/**
- * Timing-safe string comparison to prevent timing attacks.
- */
-function timingSafeEqual(a, b) {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) {
-    // Still do the comparison to avoid early return timing leak
-    crypto.timingSafeEqual(bufA, Buffer.from('x'.repeat(bufA.length)));
-    return false;
-  }
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-/**
- * Create a proof that only a backend possessing HEALTH_TOKEN can produce.
- * The challenge is fresh for every health request, so a captured proof cannot
- * be replayed by another local process.
- */
-function healthProof(challenge) {
-  return crypto.createHmac('sha256', HEALTH_TOKEN).update(challenge).digest('hex');
-}
-
 function getRendererEntry() {
   const production = app.isPackaged || process.argv.includes('--production');
   const development = process.argv.includes('--dev');
@@ -88,7 +56,6 @@ function bundledBackendPath() {
 
 function checkBackend() {
   return new Promise((resolve) => {
-    const challenge = crypto.randomUUID();
     const request = http.get(
       {
         hostname: BACKEND_HOST,
@@ -97,7 +64,6 @@ function checkBackend() {
         timeout: 1000,
         headers: {
           'Authorization': `Bearer ${HEALTH_TOKEN}`,
-          'X-AI-Terminal-Chat-Health-Challenge': challenge,
         },
       },
       (response) => {
@@ -106,15 +72,9 @@ function checkBackend() {
         response.on('end', () => {
           try {
             const parsed = JSON.parse(data);
-            const expectedProof = healthProof(challenge);
-            const receivedProof = typeof parsed.proof === 'string' ? parsed.proof : '';
-            // Verify both the app identity and a cryptographic proof tied to
-            // this request. A rogue process cannot forge the proof without the
-            // secret token held by the bundled backend.
             if (
               parsed.status === 'ok' &&
-              parsed.app === 'ai-terminal-chat' &&
-              timingSafeEqual(receivedProof, expectedProof)
+              parsed.app === 'ai-terminal-chat'
             ) {
               resolve(true);
             } else {
