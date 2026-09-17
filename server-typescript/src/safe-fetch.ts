@@ -151,9 +151,12 @@ export function blockedAddressReason(
       }
     }
 
+    const firstHextet = Number.parseInt(normalized.split(":")[0] || "0", 16);
+    const isIpv6LinkLocal = firstHextet >= 0xfe80 && firstHextet <= 0xfebf;
+
     if (
       normalized === "::" ||
-      normalized.startsWith("fe80:") ||
+      isIpv6LinkLocal ||
       normalized.startsWith("fc") ||
       normalized.startsWith("fd") ||
       normalized.startsWith("ff")
