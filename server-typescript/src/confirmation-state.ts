@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { readFileWithinProject, safePath } from "./security.ts";
+import { safePath } from "./security.ts";
 
 export interface ConfirmationFileState {
   path: string;
@@ -20,14 +20,16 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
       return { path: normalized, status: "missing", sha256: null };
     }
 
-    const read = readFileWithinProject(normalized, MAX_FINGERPRINT_BYTES);
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile() || stat.size > MAX_FINGERPRINT_BYTES) {
+      return { path: normalized, status: "unavailable", sha256: null };
+    }
+
+    const bytes = fs.readFileSync(resolved);
     return {
       path: normalized,
       status: "present",
-      sha256: crypto
-        .createHash("sha256")
-        .update(Buffer.from(read.contents, "utf8"))
-        .digest("hex"),
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
     };
   } catch {
     return { path: normalized, status: "unavailable", sha256: null };
