@@ -66,7 +66,11 @@ export function confirmationPathsForPending(
   toolName: string,
   args: Record<string, unknown>,
 ): string[] {
-  if (toolName === "write_file" || toolName === "delete_file") {
+  if (
+    toolName === "write_file" ||
+    toolName === "delete_file" ||
+    toolName === "git_add"
+  ) {
     const target = typeof args.path === "string" ? args.path.trim() : "";
     return target ? [target] : [];
   }
