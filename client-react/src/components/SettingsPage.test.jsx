@@ -336,3 +336,133 @@ describe('page structure', () => {
     expect(activeProject.compareDocumentPosition(providerSettings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+describe('NVIDIA NIM provider', () => {
+  function mockNvidiaLoad({ currentProvider = 'nvidia', models = [], modelsError = '' } = {}) {
+    axios.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers?probe=0`) {
+        return Promise.resolve({
+          data: {
+            providers: ['gemini', 'ollama', 'openai', 'xai', 'openrouter', 'anthropic', 'nvidia'],
+            name: currentProvider,
+            model: currentProvider === 'nvidia' ? 'meta/llama-3.1-8b-instruct' : 'gemini-3.6-flash',
+          },
+        });
+      }
+      if (url === `${HOST}/project-root`) {
+        return Promise.resolve({ data: { path: '/tmp/project' } });
+      }
+      if (url === `${HOST}/allowed-commands`) {
+        return Promise.resolve({ data: { commands: [] } });
+      }
+      if (url === `${HOST}/providers/nvidia/models`) {
+        return Promise.resolve({
+          data: {
+            models: modelsError ? [] : models,
+            supports_listing: true,
+            ...(modelsError ? { error: modelsError } : {}),
+          },
+        });
+      }
+      if (url.startsWith(`${HOST}/providers/`) && url.endsWith('/models')) {
+        return Promise.resolve({ data: { models: [], supports_listing: false } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+  }
+
+  const NIM_MODELS = [
+    { id: 'meta/llama-3.1-8b-instruct' },
+    { id: 'nvidia/llama-3.1-nemotron-ultra-253b-v1' },
+  ];
+
+  test('lists the NVIDIA NIM provider in the AI Provider selector', async () => {
+    mockNvidiaLoad({ currentProvider: 'gemini' });
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    const select = screen.getByLabelText(/ai provider/i);
+    const option = Array.from(select.options).find((opt) => opt.value === 'nvidia');
+    expect(option).toBeTruthy();
+    expect(option.textContent).toBe('nvidia');
+  });
+
+  test('loads the NVIDIA model catalog into an accessible model selector', async () => {
+    mockNvidiaLoad({ currentProvider: 'nvidia', models: NIM_MODELS });
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    expect(axios.get).toHaveBeenCalledWith(`${HOST}/providers/nvidia/models`);
+    const modelSelect = screen.getByLabelText(/^model$/i);
+    expect(modelSelect.tagName).toBe('SELECT');
+    const values = Array.from(modelSelect.options).map((opt) => opt.value);
+    expect(values).toEqual([
+      'meta/llama-3.1-8b-instruct',
+      'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+    ]);
+    expect(modelSelect).toHaveValue('meta/llama-3.1-8b-instruct');
+  });
+
+  test('saves the NVIDIA NIM selection with the api key and keeps the key out of saved state', async () => {
+    mockNvidiaLoad({ currentProvider: 'nvidia', models: NIM_MODELS });
+    axios.post.mockResolvedValue({
+      data: {
+        name: 'nvidia',
+        model: 'meta/llama-3.1-8b-instruct',
+        base_url: 'https://integrate.api.nvidia.com/v1',
+        available: true,
+      },
+    });
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    const apiKeyInput = screen.getByLabelText(/api key/i);
+    expect(apiKeyInput).toHaveAttribute('type', 'password');
+    fireEvent.change(apiKeyInput, { target: { value: 'nvapi-test-key' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await screen.findByText(/settings saved for nvidia/i);
+    expect(axios.post).toHaveBeenCalledWith(`${HOST}/providers/select`, {
+      provider: 'nvidia',
+      model: 'meta/llama-3.1-8b-instruct',
+      api_key: 'nvapi-test-key',
+    });
+    // The key field is cleared after saving so the secret does not linger in state.
+    expect(screen.getByLabelText(/api key/i)).toHaveValue('');
+  });
+
+  test('announces model catalog errors via a live status region', async () => {
+    mockNvidiaLoad({ currentProvider: 'nvidia', modelsError: 'NVIDIA NIM returned HTTP 401 from https://integrate.api.nvidia.com/v1/models.' });
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    const error = await screen.findByText(/returned HTTP 401/i);
+    expect(error).toHaveAttribute('role', 'status');
+    expect(error).toHaveAttribute('aria-live', 'polite');
+    // The error must not echo the API key (none was entered here, but the
+    // message content must not come from user secrets).
+    expect(error.textContent).not.toContain('nvapi-');
+  });
+
+  test('keeps the api key, provider, and model controls keyboard-reachable with associated labels', async () => {
+    mockNvidiaLoad({ currentProvider: 'nvidia', models: NIM_MODELS });
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    const providerSelect = screen.getByLabelText(/ai provider/i);
+    const modelSelect = screen.getByLabelText(/^model$/i);
+    const apiKeyInput = screen.getByLabelText(/api key/i);
+
+    expect(providerSelect.id).toBe('settings-provider');
+    expect(modelSelect.id).toBe('settings-model');
+    expect(apiKeyInput.id).toBe('settings-api-key');
+    // Controls are rendered in a logical DOM order inside the same form.
+    expect(
+      providerSelect.compareDocumentPosition(modelSelect) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      modelSelect.compareDocumentPosition(apiKeyInput) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+});
