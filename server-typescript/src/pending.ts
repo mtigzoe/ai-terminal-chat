@@ -9,6 +9,8 @@
  */
 export interface ResumeState {
   provider_fingerprint: string;
+  /** Absolute, resolved project root where this action was created. */
+  project_root: string;
   contents: unknown[];
   round_index: number;
   tool_results: { name: string; result: unknown }[];
