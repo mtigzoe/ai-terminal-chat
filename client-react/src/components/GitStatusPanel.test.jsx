@@ -35,7 +35,7 @@ describe('parseGitStatus', () => {
       branch: 'main',
       clean: false,
       staged: 1,
-      modified: 2,
+      modified: 1,
       untracked: 1,
       conflicts: 1,
     });
