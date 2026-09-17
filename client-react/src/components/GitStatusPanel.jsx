@@ -107,18 +107,26 @@ export default function GitStatusPanel() {
   }, [host]);
 
   useEffect(() => {
+    let cancelled = false;
+
     const schedule = () => {
+      if (cancelled) return;
       const delay = document.visibilityState === 'hidden' ? POLL_MS_HIDDEN : POLL_MS_ACTIVE;
       timerRef.current = window.setTimeout(async () => {
+        if (cancelled) return;
         await fetchStatus();
-        schedule();
+        if (!cancelled) schedule();
       }, delay);
     };
 
-    fetchStatus();
+    void fetchStatus();
     schedule();
     return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
+      cancelled = true;
+      if (timerRef.current) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [fetchStatus]);
 
