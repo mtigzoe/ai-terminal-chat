@@ -58,7 +58,6 @@ def _restore_provider_runtime_state(
     provider = previous_provider
 
 
-@app.route("/providers/select", methods=["POST"])
 def select_provider():
     global provider
 
