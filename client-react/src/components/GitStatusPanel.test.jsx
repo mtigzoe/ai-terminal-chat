@@ -95,22 +95,24 @@ describe('GitStatusPanel', () => {
     });
   });
 
-  test('does not reschedule polling after an in-flight request finishes after unmount', async () => {
+  test('does not reschedule polling after an in-flight poll request finishes after unmount', async () => {
     vi.useFakeTimers();
-    let resolveRequest;
-    axios.post.mockImplementation(() => new Promise((resolve) => {
-      resolveRequest = resolve;
-    }));
+    let resolvePoll;
+    axios.post
+      .mockResolvedValueOnce({ data: { stdout: '## main...origin/main\n' } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolvePoll = resolve;
+      }));
 
     const { unmount } = render(<GitStatusPanel />);
-
+    await Promise.resolve();
     await vi.advanceTimersByTimeAsync(2500);
-    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post).toHaveBeenCalledTimes(2);
 
     unmount();
-    resolveRequest({ data: { stdout: '## main...origin/main\n' } });
+    resolvePoll({ data: { stdout: '## main...origin/main\n' } });
     await vi.runOnlyPendingTimersAsync();
 
-    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post).toHaveBeenCalledTimes(2);
   });
 });
