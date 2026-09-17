@@ -7,6 +7,9 @@
  * paused so a compound request (e.g. "add, commit, and push") can finish
  * across several Allow clicks instead of stopping after the first one.
  */
+import { getProvider } from "./providers/factory.ts";
+import { loadProviderSelection } from "./security.ts";
+
 export interface ResumeState {
   provider_fingerprint: string;
   contents: unknown[];
@@ -31,6 +34,15 @@ export interface PendingAction {
 
 const MAX_PENDING_ACTIONS = 100;
 const _PENDING = new Map<string, PendingAction>();
+
+function currentProviderFingerprint(): string {
+  const saved = loadProviderSelection();
+  const provider = getProvider(
+    saved.provider,
+    saved.model ? { model: saved.model } : undefined,
+  );
+  return `${provider.name}:${provider.model || ""}`;
+}
 
 export function createPending(
   toolName: string,
@@ -61,9 +73,22 @@ export function getPending(actionId: string): PendingAction | undefined {
 
 export function popPending(actionId: string): PendingAction | undefined {
   const action = _PENDING.get(actionId);
-  if (action) {
-    _PENDING.delete(actionId);
+  if (!action) {
+    return undefined;
   }
+
+  // Resumable confirmations are bound to the provider/model that generated
+  // their saved loop state. A provider/model switch must invalidate the old
+  // confirmation instead of allowing /confirm to fall back to legacy
+  // execution of the saved write.
+  if (
+    action.resume &&
+    action.resume.provider_fingerprint !== currentProviderFingerprint()
+  ) {
+    return undefined;
+  }
+
+  _PENDING.delete(actionId);
   return action;
 }
 
