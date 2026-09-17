@@ -12,7 +12,7 @@ import { getProjectRoot } from "./security.ts";
 export interface ResumeState {
   provider_fingerprint: string;
   /** Absolute, resolved project root where this action was created. */
-  project_root: string;
+  project_root?: string;
   contents: unknown[];
   round_index: number;
   tool_results: { name: string; result: unknown }[];
@@ -47,7 +47,14 @@ export function createPending(
     tool_name: toolName,
     args: { ...args },
     preview: { ...preview },
-    ...(resume ? { resume } : {}),
+    ...(resume
+      ? {
+          resume: {
+            ...resume,
+            project_root: resume.project_root ?? getProjectRoot(),
+          },
+        }
+      : {}),
   };
 
   if (_PENDING.size >= MAX_PENDING_ACTIONS) {
@@ -70,7 +77,7 @@ export function popPending(actionId: string): PendingAction | undefined {
   // A pending action contains project-relative paths and saved model/tool
   // state. Do not let confirmation execute it against a different project
   // root after the user switches projects while the confirmation is open.
-  if (action.resume && action.resume.project_root !== getProjectRoot()) {
+  if (action.resume?.project_root && action.resume.project_root !== getProjectRoot()) {
     return undefined;
   }
 
