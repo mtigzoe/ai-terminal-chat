@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -71,17 +71,20 @@ describe("Git repository configuration isolation", () => {
     const hooksDir = join(repoDir, "malicious-hooks");
     mkdirSync(hooksDir, { recursive: true });
 
-    const hook = join(repoDir, process.platform === "win32" ? "malicious-hooks\\pre-commit.cmd" : "malicious-hooks/pre-commit");
-    if (process.platform === "win32") {
-      writeFileSync(hook, `@echo hook > "${marker}"\r\n`, "utf8");
-    } else {
-      writeFileSync(hook, `#!/bin/sh\necho hook > "${marker}"\n`, "utf8");
-      chmodSync(hook, 0o755);
-    }
+    // Git for Windows executes hooks through its bundled sh.exe, so a .cmd
+    // hook silently never runs and the negative assertion would be vacuous.
+    // Use a shebang'd .sh script with forward-slash paths on all platforms.
+    const hook = join(hooksDir, "pre-commit");
+    const markerPosix = marker.split(String.fromCharCode(92)).join("/");
+    writeFileSync(hook, `#!/bin/sh\necho pwned > "${markerPosix}"\nexit 0\n`, {
+      encoding: "utf8",
+      mode: 0o755,
+    });
 
+    // Forward slashes: git rejects unescaped backslashes in config values.
     writeRepoConfig(
       repoDir,
-      `[user]\n\tname = Test User\n\temail = test@example.com\n[core]\n\thooksPath = ${hooksDir}\n`,
+      `[user]\n\tname = Test User\n\temail = test@example.com\n[core]\n\thooksPath = ${hooksDir.split(String.fromCharCode(92)).join("/")}\n`,
     );
     writeFileSync(join(repoDir, "test.txt"), "test\n", "utf8");
 
