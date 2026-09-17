@@ -53,11 +53,22 @@ export function confirmationFileStatesMatch(
 
 function patchTargetPaths(patch: string): string[] {
   const paths: string[] = [];
-  for (const match of patch.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)) {
-    const oldPath = match[1]?.trim();
-    const newPath = match[2]?.trim();
-    if (oldPath) paths.push(oldPath);
-    if (newPath) paths.push(newPath);
+  for (const line of patch.split(/\n/)) {
+    const diffGit = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (diffGit) {
+      const oldPath = diffGit[1]?.trim();
+      const newPath = diffGit[2]?.trim();
+      if (oldPath) paths.push(oldPath);
+      if (newPath) paths.push(newPath);
+      continue;
+    }
+
+    for (const prefix of ["--- a/", "+++ b/"]) {
+      if (!line.startsWith(prefix)) continue;
+      const candidate = line.slice(prefix.length).split("\t")[0]?.trim();
+      if (candidate && candidate !== "/dev/null") paths.push(candidate);
+      break;
+    }
   }
   return [...new Set(paths)];
 }
