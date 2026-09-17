@@ -57,7 +57,7 @@ Flask server (:9000)
         v
 Provider layer
    |       |       |       |       |       |
- Gemini  Ollama   Kilo   OpenAI    xAI  OpenRouter  Anthropic
+ Gemini  Ollama   Kilo   OpenAI    xAI  OpenRouter  Anthropic  NVIDIA NIM
         |
         | tool calls
         v
@@ -358,10 +358,10 @@ Backend configuration is driven by `server-python/.env` (see `.env.example`). Im
 
 | Variable | Purpose |
 |---|---|
-| `PROVIDER` | Active provider id (`gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`) |
+| `PROVIDER` | Active provider id (`gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`, `nvidia`) |
 | `PORT` | Flask listen port (default `9000`) |
 | `HOST` | Backend bind address (default `127.0.0.1`; Docker uses `0.0.0.0`) |
-| Provider-specific keys and models | See `.env.example` (for example `GOOGLE_API_KEY` / `GEMINI_MODEL`, `OLLAMA_*`, `OPENAI_*`, `XAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`) |
+| Provider-specific keys and models | See `.env.example` (for example `GOOGLE_API_KEY` / `GEMINI_MODEL`, `OLLAMA_*`, `OPENAI_*`, `XAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `NVIDIA_*`) |
 
 API keys remain on the backend only. They are never returned by the provider status or selection endpoints.
 
@@ -380,6 +380,7 @@ Supported provider identifiers (from `server-python/providers.py`):
 | xAI / Grok | `xai` |
 | OpenRouter | `openrouter` |
 | Anthropic | `anthropic` |
+| NVIDIA NIM | `nvidia` |
 
 The same agent and tool layer is used across providers. Provider capabilities (tools, streaming, model listing, local, requires API key) are reported by the backend so the UI can adapt.
 
@@ -413,7 +414,7 @@ Notes:
 3. In the application **Settings** page, choose provider `ollama`. The model dropdown lists models reported by Ollama’s native `/api/tags` endpoint.
 4. If the list is empty or Ollama is unreachable, Settings shows an actionable error (start the server, pull a model, or correct the URL). You can still type a model name manually and save; chat will then report a clear error if that model is not installed.
 
-Cloud providers remain available and unchanged. Switching back to Gemini, OpenAI, xAI, OpenRouter, Anthropic, or Kilo is done through the same Settings flow and does not require restarting the backend.
+Cloud providers remain available and unchanged. Switching back to Gemini, OpenAI, xAI, OpenRouter, Anthropic, NVIDIA NIM, or Kilo is done through the same Settings flow and does not require restarting the backend.
 
 ### Helper scripts
 

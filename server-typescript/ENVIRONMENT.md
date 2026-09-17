@@ -9,6 +9,7 @@ The TypeScript server supports these providers:
 - xAI
 - OpenRouter
 - Anthropic
+- NVIDIA NIM
 
 The provider configuration is defined in `src/providers/config.ts`.
 
@@ -61,8 +62,18 @@ Default base URL: `http://localhost:11434/v1`.
 - `ANTHROPIC_BASE_URL` — API base URL. Defaults to `https://api.anthropic.com`.
 - `ANTHROPIC_TIMEOUT` — request timeout in seconds. Defaults to `120`.
 
+
+## NVIDIA NIM
+
+- `NVIDIA_API_KEY` - NVIDIA API key (`nvapi-...`), required. Get one from https://build.nvidia.com.
+- `NVIDIA_MODEL` - model name. Defaults to `meta/llama-3.1-8b-instruct`. Model ids are NVIDIA catalog `vendor/model` slugs and are passed through unchanged.
+- `NVIDIA_BASE_URL` - API base URL. Defaults to the documented OpenAI-compatible endpoint `https://integrate.api.nvidia.com/v1`.
+- `NVIDIA_TIMEOUT` - request timeout in seconds. Defaults to `120`.
+
 ## Security
 
 Never commit actual API keys or other credentials. Use environment variables or your deployment platform's secret/environment-variable settings for secret values.
 
 `.env.example` remains intentionally named as a conventional example environment file. AI coding tools may refuse to read it because they classify `.env`-style files as potentially sensitive. This document provides the non-secret configuration reference that coding agents can safely read.
+
+
