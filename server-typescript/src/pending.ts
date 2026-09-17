@@ -35,13 +35,19 @@ export interface PendingAction {
 const MAX_PENDING_ACTIONS = 100;
 const _PENDING = new Map<string, PendingAction>();
 
-function currentProviderFingerprint(): string {
-  const saved = loadProviderSelection();
-  const provider = getProvider(
-    saved.provider,
-    saved.model ? { model: saved.model } : undefined,
-  );
-  return `${provider.name}:${provider.model || ""}`;
+function currentProviderFingerprint(): string | undefined {
+  try {
+    const saved = loadProviderSelection();
+    const provider = getProvider(
+      saved.provider,
+      saved.model ? { model: saved.model } : undefined,
+    );
+    return `${provider.name}:${provider.model || ""}`;
+  } catch {
+    // A provider/configuration failure must not make a previously generated
+    // resumable write executable without a verified matching fingerprint.
+    return undefined;
+  }
 }
 
 export function createPending(
