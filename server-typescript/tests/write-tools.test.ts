@@ -268,6 +268,15 @@ describe("apply_patch", () => {
     expect((result as { error: string }).error.toLowerCase()).toContain("invalid path");
   });
 
+  it("rejects a file header without hunks", () => {
+    const patch = `--- a/header-only.txt
++++ b/header-only.txt
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("without any hunks");
+    expect(fs.existsSync(path.join(root, "header-only.txt"))).toBe(false);
+  });
+
   it("rejects oversized patches", () => {
     const oversized = SAMPLE_PATCH + "x".repeat(200_100);
     const result = apply_patch(oversized, false);
