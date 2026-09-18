@@ -28,7 +28,7 @@ describe("Git index confirmation state", () => {
     ]);
     expect(confirmationPathsForPending("git_restore", { path: "file.txt", staged: false })).toEqual([
       "file.txt",
-      "__git_head__",
+      "__git_index__",
     ]);
   });
 
@@ -69,6 +69,13 @@ describe("Git index confirmation state", () => {
 
     execFileSync("git", ["remote", "set-url", "origin", "https://example.com/two.git"], { cwd: root });
     expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
+  it("binds normal git_restore confirmations to the worktree target and index source", () => {
+    expect(confirmationPathsForPending("git_restore", { path: "file.txt", staged: false })).toEqual([
+      "file.txt",
+      "__git_index__",
+    ]);
   });
 
   it("binds git_pull confirmations to HEAD and the index", () => {
