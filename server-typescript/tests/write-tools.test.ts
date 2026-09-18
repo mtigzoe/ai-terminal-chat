@@ -102,6 +102,17 @@ describe("write_file", () => {
     expect(diff).toBe("--- a/doc.txt\n+++ b/doc.txt\n@@ -2,0 +2,1 @@\n+second");
   });
 
+
+  it("generates a standard preview for an EOF newline-only change", () => {
+    fs.writeFileSync(path.join(root, "newline-preview.txt"), "hello");
+    const result = write_file("newline-preview.txt", "hello\n", false);
+    const diff = (result as { diff: string }).diff;
+    expect(diff).toContain("@@ -1,1 +1,1 @@");
+    expect(diff).toContain("-hello");
+    expect(diff).toContain("+hello");
+    expect(diff).toContain("\\ No newline at end of file");
+  });
+
   it("preview reports create for new file", () => {
     const result = write_file("brand-new.txt", "content", false);
     expect((result as { requires_confirmation: boolean }).requires_confirmation).toBe(true);
@@ -294,7 +305,7 @@ describe("apply_patch", () => {
   });
 
   it("rejects unsupported patch path changes", () => {
-    fs.writeFileSync(path.join(root, "old.txt"), "old\\n");
+    fs.writeFileSync(path.join(root, "old.txt"), "old\n");
     const patch = `--- a/old.txt
 +++ b/new.txt
 @@ -1 +1 @@
@@ -304,7 +315,7 @@ describe("apply_patch", () => {
 
     const result = apply_patch(patch, true);
     expect((result as { error?: string }).error).toContain("path changes/renames are not supported");
-    expect(fs.readFileSync(path.join(root, "old.txt"), "utf-8")).toBe("old\\n");
+    expect(fs.readFileSync(path.join(root, "old.txt"), "utf-8")).toBe("old\n");
     expect(fs.existsSync(path.join(root, "new.txt"))).toBe(false);
   });
 
