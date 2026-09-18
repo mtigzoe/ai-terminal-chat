@@ -317,7 +317,12 @@ function applyUnifiedDiffSecure(
   }
 
   // Parse per-file hunks from the unified diff.
-  const filePatches = parseUnifiedDiff(patchText);
+  let filePatches: FilePatch[];
+  try {
+    filePatches = parseUnifiedDiff(patchText);
+  } catch (exc) {
+    return { files: [], error: exc instanceof Error ? exc.message : String(exc) };
+  }
   if (filePatches.length === 0) {
     return { files: [], error: "Could not parse any file hunks from the patch." };
   }
@@ -463,6 +468,9 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
           break;
         }
         if (hl.startsWith("\\")) {
+          if (hl !== "\\ No newline at end of file") {
+            throw new Error("Malformed unified diff newline marker.");
+          }
           // "\ No newline at end of file" applies to the immediately
           // preceding hunk line. A new-side/context line determines the
           // resulting file's trailing-newline state.
@@ -483,7 +491,11 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
           i += 1;
           continue;
         }
-        // Blank line ends the hunk (not context)
+        // Blank line ends the hunk (not context). Any other non-diff
+        // line inside a hunk is malformed and must not be silently ignored.
+        if (hl.length > 0) {
+          throw new Error(`Malformed unified diff line: ${hl}`);
+        }
         break;
       }
       current.hunks.push(hunk);
