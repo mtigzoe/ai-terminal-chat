@@ -330,6 +330,18 @@ function applyUnifiedDiffSecure(
     return { files: [], error: "Patch contains a file header without any hunks." };
   }
 
+  // A path must occur only once in a unified patch. Applying duplicate file
+  // entries sequentially would otherwise let a later entry overwrite an earlier
+  // preflighted result.
+  const patchPaths = new Set<string>();
+  for (const fp of filePatches) {
+    const rel = fp.newPath === "/dev/null" ? fp.oldPath : fp.newPath;
+    if (patchPaths.has(rel)) {
+      return { files: [], error: `Patch contains duplicate file entry: ${rel}` };
+    }
+    patchPaths.add(rel);
+  }
+
   // Preflight every file before mutating any of them.
   const operations: Array<
     | { kind: "delete"; rel: string }
