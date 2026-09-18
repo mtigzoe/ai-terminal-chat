@@ -415,6 +415,7 @@ type DiffHunk = {
   oldCount: number;
   newStart: number;
   newCount: number;
+  newTrailingNewline?: boolean;
   lines: string[]; // including leading ' ', '+', '-'
 };
 
@@ -508,6 +509,7 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
   }
   const out: string[] = [];
   let srcIndex = 0; // 0-based
+  let trailingNewline = hadTrailingNewline;
 
   for (const hunk of hunks) {
     const targetStart = hunk.oldStart === 0 ? 0 : hunk.oldStart - 1;
@@ -559,15 +561,18 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
       throw new Error(
         `patch hunk line counts do not match header: expected ${hunk.oldCount}/${hunk.newCount}, got ${oldLinesConsumed}/${newLinesProduced}`,
       );
-      }
     }
+    if (hunk.newTrailingNewline !== undefined) {
+      trailingNewline = hunk.newTrailingNewline;
+    }
+  }
   }
   while (srcIndex < src.length) {
     out.push(src[srcIndex]!);
     srcIndex += 1;
   }
   if (out.length === 0) return "";
-  return out.join("\n") + (hadTrailingNewline ? "\n" : "");
+  return out.join("\n") + (trailingNewline ? "\n" : "");
 }
 
 export function apply_patch(
