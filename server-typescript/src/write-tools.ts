@@ -1,3 +1,612 @@
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { getProjectRoot, isSensitivePath, isPathWithinRoot, safePath, writeFileWithinProject, unlinkWithinProject, readFileWithinProject, SecurityValidationError } from "./security.ts";
+import { getGitSshCommand } from "./git.ts";
+import { resolveTrustedExecutable } from "./trusted-exec.ts";
+
+const PREVIEW_CHAR_LIMIT = 2000;
+const MAX_PATCH_SIZE = 200_000;
+const GIT_TIMEOUT = 15;
+
+/**
+ * Same defense-in-depth -c overrides used by git.ts so repository-local
+ * configuration cannot supply command-executing settings.
+ */
+const GIT_CONFIG_OVERRIDES: string[] = [
+  "-c", "core.hooksPath=",
+  "-c", "core.fsmonitor=",
+  "-c", "core.fsmonitorHook=",
+  "-c", "gpg.program=",
+  "-c", "sendemail.smtpserver=",
+  "-c", "sendemail.smtpencryption=",
+  "-c", "sendemail.smtpuser=",
+  "-c", "sendemail.smtppass=",
+  "-c", "sendemail.smtpdomain=",
+  "-c", "http.extraHeader=",
+  "-c", "http.proxy=",
+  "-c", "http.postBuffer=",
+  "-c", "credential.helper=",
+  "-c", "core.gitProxy=none",
+];
+
+function relativePath(filePath: string): string {
+  return path.relative(getProjectRoot(), filePath);
+}
+
+function ensureParentDir(filePath: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function writeText(filePath: string, contents: string): void {
+  fs.writeFileSync(filePath, contents, "utf-8");
+}
+
+function readText(filePath: string): string {
+  return fs.readFileSync(filePath, "utf-8");
+}
+
+function unlinkFile(filePath: string): void {
+  fs.unlinkSync(filePath);
+}
+
+/**
+ * Run Git with the same isolation boundary as git.ts:
+ * empty GIT_CONFIG, disabled system/global config, SSH isolation,
+ * and -c overrides that neutralize command-executing settings.
+ */
+function runGit(
+  args: string[],
+  input?: string
+): { code: number; stdout: string; stderr: string } {
+  const isolationDir = fs.mkdtempSync(path.join(tmpdir(), "git-isolation-"));
+  const emptyConfigPath = path.join(isolationDir, "config");
+  fs.writeFileSync(emptyConfigPath, "", { encoding: "utf8", mode: 0o600 });
+
+  try {
+    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
+    const result = spawnSync(resolveTrustedExecutable("git", { projectRoot: getProjectRoot() }), safeArgs, {
+      cwd: getProjectRoot(),
+      encoding: "utf-8",
+      timeout: GIT_TIMEOUT * 1000,
+      stdio: ["pipe", "pipe", "pipe"],
+      input,
+      shell: false,
+      windowsHide: true,
+      env: (() => {
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        delete env.GIT_EXTERNAL_DIFF;
+        delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
+        return {
+          ...env,
+          GIT_CONFIG: emptyConfigPath,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_ASKPASS: "",
+          SSH_ASKPASS: "",
+          GIT_SSH_COMMAND: getGitSshCommand(),
+          GIT_PROXY_COMMAND: "none",
+        };
+      })(),
+    });
+    return {
+      code: result.status ?? (result.error ? 1 : 0),
+      stdout: result.stdout || "",
+      stderr: result.stderr || (result.error ? result.error.message : ""),
+    };
+  } catch (exc) {
+    const message = exc instanceof Error ? exc.message : String(exc);
+    return { code: 1, stdout: "", stderr: `git command failed: ${message}` };
+  } finally {
+    try {
+      fs.rmSync(isolationDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
+function hasGitRepo(): boolean {
+  if (fs.existsSync(path.join(getProjectRoot(), ".git"))) {
+    return true;
+  }
+  const result = runGit(["rev-parse", "--show-toplevel"]);
+  return result.code === 0;
+}
+
+function gitRepoError(): Record<string, unknown> | undefined {
+  if (fs.existsSync(path.join(getProjectRoot(), ".git"))) {
+    return undefined;
+  }
+  const result = runGit(["rev-parse", "--show-toplevel"]);
+  if (result.code === 127) {
+    return { error: "git is not installed or not on PATH." };
+  }
+  if (result.code !== 0) {
+    return {
+      error:
+        "This operation requires the project to be inside a git repository (no .git found in PROJECT_ROOT or any parent directory).",
+    };
+  }
+  return undefined;
+}
+
+export function create_file(
+  relPath: string,
+  contents = "",
+  confirm = false
+): Record<string, unknown> {
+  let filePath: string;
+  try {
+    filePath = safePath(relPath);
+  } catch (exc) {
+    return { error: String(exc) };
+  }
+
+  if (isSensitivePath(filePath)) {
+    return { error: `Refusing to create sensitive file: ${relPath}` };
+  }
+
+  if (fs.existsSync(filePath)) {
+    return {
+      error: `File already exists: ${relPath}. Use write_file to modify it.`,
+    };
+  }
+
+  if (!confirm) {
+    const preview = contents.slice(0, PREVIEW_CHAR_LIMIT);
+    const truncated = contents.length > PREVIEW_CHAR_LIMIT;
+    return {
+      requires_confirmation: true,
+      path: relativePath(filePath),
+      preview,
+      preview_truncated: truncated,
+      message: `'${relPath}' was NOT created. Show the user the preview and ask them to explicitly confirm creating this file, then call create_file again with confirm=true.`,
+    };
+  }
+
+  try {
+    const { resolvedPath, bytesWritten } = writeFileWithinProject(relPath, contents, {
+      exclusive: true,
+    });
+    return {
+      path: relativePath(resolvedPath),
+      created: true,
+      bytes_written: bytesWritten,
+    };
+  } catch (exc) {
+    if (exc instanceof SecurityValidationError) {
+      return { error: exc.message };
+    }
+    const code = (exc as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
+      return { error: `File already exists: ${relPath}` };
+    }
+    return { error: `Could not create file: ${exc}` };
+  }
+}
+
+export function write_file(
+  relPath: string,
+  contents: string,
+  confirm = false
+): Record<string, unknown> {
+  let filePath: string;
+  try {
+    filePath = safePath(relPath);
+  } catch (exc) {
+    return { error: String(exc) };
+  }
+
+  if (isSensitivePath(filePath)) {
+    return { error: `Refusing to write to sensitive file: ${relPath}` };
+  }
+
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+    return { error: `Cannot write to a directory: ${relPath}` };
+  }
+
+  const existed = fs.existsSync(filePath);
+
+  if (!confirm) {
+    let oldText = "";
+    if (existed) {
+      try {
+        // O_NOFOLLOW fd read — do not follow a final-component symlink to
+        // an outside file when building the confirmation diff.
+        oldText = readFileWithinProject(relPath, PREVIEW_CHAR_LIMIT * 4).contents;
+      } catch {
+        oldText = "";
+      }
+    }
+
+    let diffPreview: string | undefined;
+    if (existed) {
+      diffPreview = generateUnifiedDiff(
+        oldText,
+        contents,
+        `a/${relPath}`,
+        `b/${relPath}`
+      ).slice(0, PREVIEW_CHAR_LIMIT);
+    }
+
+    return {
+      requires_confirmation: true,
+      path: relativePath(filePath),
+      action: existed ? "overwrite" : "create",
+      diff: diffPreview,
+      message: `'${relPath}' was NOT written. Show the user the diff and ask them to explicitly confirm this change, then call write_file again with confirm=true.`,
+    };
+  }
+
+  try {
+    const { resolvedPath, bytesWritten } = writeFileWithinProject(relPath, contents, {
+      exclusive: false,
+    });
+    return {
+      path: relativePath(resolvedPath),
+      overwritten: existed,
+      bytes_written: bytesWritten,
+    };
+  } catch (exc) {
+    if (exc instanceof SecurityValidationError) {
+      return { error: exc.message };
+    }
+    return { error: `Could not write file: ${exc}` };
+  }
+}
+
+/**
+ * Apply a unified diff entirely through race-resistant project I/O.
+ * Does not invoke `git apply`, so a symlink/junction replacement between
+ * validation and write cannot redirect Git's path-based open.
+ *
+ * Supported: text unified diffs for existing files, new files (--- /dev/null),
+ * and deletions (+++ /dev/null). Binary patches and rename headers are rejected.
+ */
+function applyUnifiedDiffSecure(
+  patchText: string,
+  dryRun: boolean,
+): { files: string[]; error?: string } {
+  const files = extractPatchTargetPaths(patchText);
+  if (files.length === 0) {
+    return {
+      files: [],
+      error:
+        "Could not find any '--- a/<path>' / '+++ b/<path>' headers in the patch. Provide a standard unified diff.",
+    };
+  }
+
+  // Reject binary / rename-only patches we do not implement.
+  if (/^delta \d+/m.test(patchText) || /^GIT binary patch/m.test(patchText)) {
+    return { files: [], error: "Binary patches are not supported by apply_patch." };
+  }
+  if (/^rename from /m.test(patchText) || /^copy from /m.test(patchText)) {
+    return {
+      files: [],
+      error: "Rename/copy patches are not supported; use write_file/delete_file instead.",
+    };
+  }
+
+  const resolvedRel: string[] = [];
+  for (const targetPath of files) {
+    let filePath: string;
+    try {
+      filePath = safePath(targetPath);
+    } catch (exc) {
+      return {
+        files: [],
+        error: `Patch touches an invalid path '${targetPath}': ${exc}`,
+      };
+    }
+    if (isSensitivePath(filePath)) {
+      return { files: [], error: `Refusing to patch sensitive file: ${targetPath}` };
+    }
+    resolvedRel.push(relativePath(filePath));
+  }
+
+  try {
+    assertPatchTargetsNotOutsideSymlinks(resolvedRel);
+  } catch (exc) {
+    return {
+      files: [],
+      error: exc instanceof Error ? exc.message : String(exc),
+    };
+  }
+
+  // Parse per-file hunks from the unified diff.
+  let filePatches: FilePatch[];
+  try {
+    filePatches = parseUnifiedDiff(patchText);
+  } catch (exc) {
+    return { files: [], error: exc instanceof Error ? exc.message : String(exc) };
+  }
+  if (filePatches.length === 0) {
+    return { files: [], error: "Could not parse any file hunks from the patch." };
+  }
+  if (filePatches.some((fp) => fp.hunks.length === 0)) {
+    return { files: [], error: "Patch contains a file header without any hunks." };
+  }
+
+  // Preflight every file before mutating any of them.
+  const operations: Array<
+    | { kind: "delete"; rel: string }
+    | { kind: "write"; rel: string; next: string; create: boolean }
+  > = [];
+  for (const fp of filePatches) {
+    const rel = fp.newPath === "/dev/null" ? fp.oldPath : fp.newPath;
+    if (!rel || rel === "/dev/null") return { files: [], error: "Patch entry missing a usable path." };
+    if (fp.oldPath !== fp.newPath && fp.oldPath !== "/dev/null" && fp.newPath !== "/dev/null") {
+      return { files: [], error: `Patch path changes/renames are not supported: '${fp.oldPath}' -> '${fp.newPath}'.` };
+    }
+    try { safePath(rel); } catch (exc) { return { files: [], error: `Invalid path in patch: ${rel}: ${exc}` }; }
+    if (fp.newPath === "/dev/null") {
+      try { readFileWithinProject(rel, MAX_PATCH_SIZE * 2); }
+      catch { return { files: [], error: `Patch deletes missing file: ${rel}` }; }
+      operations.push({ kind: "delete", rel });
+      continue;
+    }
+    const create = fp.oldPath === "/dev/null";
+    let current = "";
+    if (!create) {
+      try { current = readFileWithinProject(rel, MAX_PATCH_SIZE * 2).contents; }
+      catch (exc) { return { files: [], error: `Cannot read '${rel}' to apply patch: ${exc instanceof Error ? exc.message : String(exc)}` }; }
+    }
+    let next: string;
+    try { next = applyHunksToText(current, fp.hunks); }
+    catch (exc) { return { files: [], error: `Patch does not apply cleanly to '${rel}': ${exc instanceof Error ? exc.message : String(exc)}` }; }
+    operations.push({ kind: "write", rel, next, create });
+  }
+  if (dryRun) return { files: resolvedRel };
+  for (const operation of operations) {
+    try {
+      assertPatchTargetsNotOutsideSymlinks([operation.rel]);
+      if (operation.kind === "delete") unlinkWithinProject(operation.rel);
+      else writeFileWithinProject(operation.rel, operation.next, { exclusive: operation.create });
+    } catch (exc) {
+      return { files: [], error: `Failed to ${operation.kind === "delete" ? "delete" : "write"} '${operation.rel}': ${exc instanceof Error ? exc.message : String(exc)}` };
+    }
+  }
+
+  return { files: resolvedRel };
+}
+
+type DiffHunk = {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  newTrailingNewline?: boolean;
+  lines: string[]; // including leading ' ', '+', '-'
+};
+
+type FilePatch = {
+  oldPath: string;
+  newPath: string;
+  hunks: DiffHunk[];
+};
+
+function parseUnifiedDiff(patchText: string): FilePatch[] {
+  const result: FilePatch[] = [];
+  let current: FilePatch | null = null;
+  const lines = patchText.split(/\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    const oldHdr = /^--- (?:a\/)?(.+)$/.exec(line);
+    if (oldHdr) {
+      const oldPath = stripPatchPath(oldHdr[1] ?? "");
+      const next = lines[i + 1] ?? "";
+      const newHdr = /^\+\+\+ (?:b\/)?(.+)$/.exec(next);
+      if (!newHdr) {
+        throw new Error("Malformed unified diff header: missing +++ line.");
+      }
+      const newPath = stripPatchPath(newHdr[1] ?? "");
+      current = { oldPath, newPath, hunks: [] };
+      result.push(current);
+      i += 2;
+      continue;
+    }
+    const hunkHdr = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (hunkHdr && current) {
+      const hunk: DiffHunk = {
+        oldStart: parseInt(hunkHdr[1]!, 10),
+        oldCount: hunkHdr[2] !== undefined ? parseInt(hunkHdr[2], 10) : 1,
+        newStart: parseInt(hunkHdr[3]!, 10),
+        newCount: hunkHdr[4] !== undefined ? parseInt(hunkHdr[4], 10) : 1,
+        lines: [],
+      };
+      i += 1;
+      while (i < lines.length) {
+        const hl = lines[i] ?? "";
+        if (hl.startsWith("@@ ") || hl.startsWith("diff --git") || hl.startsWith("--- ")) {
+          break;
+        }
+        if (hl.startsWith("\\")) {
+          if (hl !== "\\ No newline at end of file") {
+            throw new Error("Malformed unified diff newline marker.");
+          }
+          // "\ No newline at end of file" applies to the immediately
+          // preceding hunk line. A new-side/context line determines the
+          // resulting file's trailing-newline state.
+          const previous = hunk.lines[hunk.lines.length - 1];
+          if (previous?.startsWith("+") || previous?.startsWith(" ")) {
+            hunk.newTrailingNewline = false;
+          } else if (previous?.startsWith("-")) {
+            const next = lines[i + 1] ?? "";
+            if (next.startsWith("+") || next.startsWith(" ")) {
+              hunk.newTrailingNewline = true;
+            }
+          }
+          i += 1;
+          continue;
+        }
+        if (hl.startsWith(" ") || hl.startsWith("+") || hl.startsWith("-")) {
+          hunk.lines.push(hl);
+          i += 1;
+          continue;
+        }
+        // Blank line ends the hunk (not context). Any other non-diff
+        // line inside a hunk is malformed and must not be silently ignored.
+        if (hl.length > 0) {
+          throw new Error(`Malformed unified diff line: ${hl}`);
+        }
+        break;
+      }
+      current.hunks.push(hunk);
+      continue;
+    }
+    i += 1;
+  }
+  return result;
+}
+
+function stripPatchPath(raw: string): string {
+  let candidate = raw.split("\t")[0]!.trim();
+  if (
+    candidate.length >= 2 &&
+    ((candidate.startsWith('"') && candidate.endsWith('"')) ||
+      (candidate.startsWith("'") && candidate.endsWith("'")))
+  ) {
+    candidate = candidate.slice(1, -1);
+  }
+  return candidate;
+}
+
+/**
+ * Apply unified-diff hunks to text. Throws if context does not match.
+ * Line numbers in hunks are 1-based.
+ */
+function applyHunksToText(original: string, hunks: DiffHunk[]): string {
+  // Preserve whether original ended with newline
+  const hadTrailingNewline = original.endsWith("\n");
+  const src = original.split("\n");
+  // split leaves trailing empty string if ends with \n
+  if (hadTrailingNewline && src.length > 0 && src[src.length - 1] === "") {
+    src.pop();
+  }
+  const out: string[] = [];
+  let srcIndex = 0; // 0-based
+  let trailingNewline = hadTrailingNewline;
+
+  for (const hunk of hunks) {
+    const targetStart = hunk.oldStart === 0 ? 0 : hunk.oldStart - 1;
+    if (
+      (hunk.oldStart < 0 || (hunk.oldCount === 0 ? hunk.oldStart < 0 : hunk.oldStart < 1)) ||
+      targetStart < srcIndex
+    ) {
+      throw new Error("patch hunks are out of order or overlap");
+    }
+    while (srcIndex < targetStart) {
+      out.push(src[srcIndex]!);
+      srcIndex += 1;
+    }
+    const expectedNewStart = hunk.newCount === 0 ? out.length : out.length + 1;
+    if (hunk.newStart !== expectedNewStart) {
+      throw new Error("patch hunk new-side range is out of order or inconsistent");
+    }
+    let oldLinesConsumed = 0;
+    let newLinesProduced = 0;
+    for (const hl of hunk.lines) {
+      const tag = hl.charAt(0);
+      const body = hl.slice(1);
+      if (tag === " ") {
+        oldLinesConsumed += 1;
+        newLinesProduced += 1;
+        if (srcIndex >= src.length || src[srcIndex] !== body) {
+          throw new Error(
+            `context mismatch at line ${srcIndex + 1}: expected '${body}', got '${src[srcIndex] ?? "<eof>"}'`,
+          );
+        }
+        out.push(body);
+        srcIndex += 1;
+      } else if (tag === "-") {
+        oldLinesConsumed += 1;
+        if (srcIndex >= src.length || src[srcIndex] !== body) {
+          throw new Error(
+            `removal mismatch at line ${srcIndex + 1}: expected '${body}', got '${src[srcIndex] ?? "<eof>"}'`,
+          );
+        }
+        srcIndex += 1;
+      } else if (tag === "+") {
+        newLinesProduced += 1;
+        out.push(body);
+      } else {
+        throw new Error(`invalid patch line prefix: ${tag || "<empty>"}`);
+      }
+    }
+    if (oldLinesConsumed !== hunk.oldCount || newLinesProduced !== hunk.newCount) {
+      throw new Error(
+        `patch hunk line counts do not match header: expected ${hunk.oldCount}/${hunk.newCount}, got ${oldLinesConsumed}/${newLinesProduced}`,
+      );
+    }
+    if (hunk.newTrailingNewline !== undefined) {
+      trailingNewline = hunk.newTrailingNewline;
+    }
+  }
+  while (srcIndex < src.length) {
+    out.push(src[srcIndex]!);
+    srcIndex += 1;
+  }
+  if (out.length === 0) return "";
+  return out.join("\n") + (trailingNewline ? "\n" : "");
+}
+
+export function apply_patch(
+  patch: string,
+  confirm = false
+): Record<string, unknown> {
+  if (!patch || !patch.trim()) {
+    return { error: "No patch text was provided." };
+  }
+
+  if (patch.length > MAX_PATCH_SIZE) {
+    return {
+      error: `Patch is too large (${patch.length} chars). Maximum is ${MAX_PATCH_SIZE} chars — split it into smaller, more targeted patches.`,
+    };
+  }
+
+  // Preview / confirm: dry-run through secure applicator (no git apply).
+  const dry = applyUnifiedDiffSecure(patch, true);
+  if (dry.error) {
+    return { error: dry.error };
+  }
+
+  if (!confirm) {
+    return {
+      requires_confirmation: true,
+      files: dry.files,
+      message: `This patch was NOT applied. It would modify: ${dry.files.join(", ")}. Show the user the patch and ask them to explicitly confirm it, then call apply_patch again with confirm=true.`,
+    };
+  }
+
+  const applied = applyUnifiedDiffSecure(patch, false);
+  if (applied.error) {
+    return { error: applied.error };
+  }
+  return { files: applied.files, applied: true };
+}
+
+export function delete_file(relPath: string, confirm = false): Record<string, unknown> {
+  const root = getProjectRoot();
+  const lexicalPath = path.resolve(root, relPath.trim());
+  let lexicalStat: fs.Stats;
+  try { lexicalStat = fs.lstatSync(lexicalPath); }
+  catch { return { error: `File does not exist: ${relPath}` }; }
+  let filePath: string;
+  try { filePath = safePath(relPath); }
+  catch (exc) {
+    if (!lexicalStat.isSymbolicLink()) return { error: String(exc) };
+    try {
+      const target = fs.readlinkSync(lexicalPath, "utf8");
+      const targetPath = path.resolve(path.dirname(lexicalPath), target);
+      const resolvedTarget = fs.realpathSync(path.dirname(targetPath));
+      if (!isPathWithinRoot(root, resolvedTarget)) return { error: `Refusing to delete a symlink targeting outside the project: ${relPath}` };
+      filePath = lexicalPath;
+    } catch (targetError) {
+      return { error: `Could not validate symlink: ${targetError instanceof Error ? targetError.message : String(targetError)}` };
     }
   }
   if (isSensitivePath(filePath)) return { error: `Refusing to delete sensitive file: ${relPath}` };
@@ -12,3 +621,4 @@
     return { error: `Could not delete file: ${exc}` };
   }
 }
+=
