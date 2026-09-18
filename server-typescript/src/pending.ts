@@ -7,6 +7,9 @@
  * paused so a compound request (e.g. "add, commit, and push") can finish
  * across several Allow clicks instead of stopping after the first one.
  */
+import { getProjectRoot } from "./security.ts";
+import { getProvider } from "./providers/factory.ts";
+import { loadProviderSelection } from "./security.ts";
 import {
   captureConfirmationFileStates,
   confirmationFileStatesMatch,
@@ -16,6 +19,8 @@ import {
 
 export interface ResumeState {
   provider_fingerprint: string;
+  /** Absolute, resolved project root where this action was created. */
+  project_root?: string;
   contents: unknown[];
   round_index: number;
   tool_results: { name: string; result: unknown }[];
@@ -59,7 +64,9 @@ export function createPending(
     args: { ...args },
     preview: { ...preview },
     ...(confirmation_file_states ? { confirmation_file_states } : {}),
-    ...(resume ? { resume } : {}),
+    ...(resume
+      ? { resume: { ...resume, project_root: resume.project_root ?? getProjectRoot() } }
+      : {}),
   };
 
   if (_PENDING.size >= MAX_PENDING_ACTIONS) {
@@ -75,9 +82,32 @@ export function getPending(actionId: string): PendingAction | undefined {
   return _PENDING.get(actionId);
 }
 
+function currentProviderFingerprint(): string | undefined {
+  try {
+    const saved = loadProviderSelection();
+    const provider = getProvider(saved.provider, saved.model ? { model: saved.model } : undefined);
+    return `${provider.name}:${provider.model || ""}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function popPending(actionId: string): PendingAction | undefined {
   const action = _PENDING.get(actionId);
   if (!action) return undefined;
+
+  if (action.resume?.project_root && action.resume.project_root !== getProjectRoot()) {
+    _PENDING.delete(actionId);
+    return undefined;
+  }
+
+  if (
+    action.resume &&
+    action.resume.provider_fingerprint !== currentProviderFingerprint()
+  ) {
+    _PENDING.delete(actionId);
+    return undefined;
+  }
 
   if (
     action.confirmation_file_states &&
