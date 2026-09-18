@@ -466,6 +466,25 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "new.txt"), "utf-8")).toBe("created\n");
   });
 
+  it("preflights all files before mutating a multi-file patch", () => {
+    fs.writeFileSync(path.join(root, "first.txt"), "first\n");
+    const patch = `--- a/first.txt
++++ b/first.txt
+@@ -1 +1 @@
+-first
++changed
+--- a/missing.txt
++++ b/missing.txt
+@@ -1 +1 @@
+-missing
++still missing
+`;
+
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("Cannot read 'missing.txt'");
+    expect(fs.readFileSync(path.join(root, "first.txt"), "utf-8")).toBe("first\n");
+  });
+
   it("accepts an insertion hunk at end of file", () => {
     fs.writeFileSync(path.join(root, "append.txt"), "one\ntwo\n");
     const patch = `--- a/append.txt
