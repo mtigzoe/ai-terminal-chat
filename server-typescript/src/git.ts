@@ -367,9 +367,9 @@ export async function gitAdd(path: string, confirm = false): Promise<Record<stri
   if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` }; if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${path}` };
   try { const repository = await runGit(["rev-parse", "--show-toplevel"], GIT_ADD_TIMEOUT_MS); if (repository.code !== 0) return { error: "git_add requires the project to be inside a git repository." }; } catch (error) { return { error: errorText(error) }; }
   const { statSync } = await import("node:fs"); try { if (!statSync(filePath).isFile()) return { error: "git_add can only stage a single file, not a directory." }; } catch { return { error: `File does not exist: ${path}` }; }
-  const root = getProjectRoot(); const relativePath = filePath.slice(root.length).replace(/^[/\\]+/, "");
+  const root = getProjectRoot(); const lexicalPath = require("node:path").resolve(root, path); const relativePath = filePath.slice(root.length).replace(/^[/\\]+/, "");
   if (!confirm) return { requires_confirmation: true, path: relativePath, message: `'${relativePath}' was NOT staged. Ask the user to explicitly confirm it, then call git_add again with confirm=true.` };
-  try { await stageFileWithoutFilters(relativePath, filePath); return { path: relativePath, staged: true }; } catch (error) { return { error: `Could not stage file: ${errorText(error)}` }; }
+  try { await stageFileWithoutFilters(relativePath, filePath, lexicalPath); return { path: relativePath, staged: true }; } catch (error) { return { error: `Could not stage file: ${errorText(error)}` }; }
 }
 
 const PREVIEW_CHAR_LIMIT = 2000;
