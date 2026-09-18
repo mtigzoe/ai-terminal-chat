@@ -254,26 +254,16 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
   if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
     return null;
   }
-  const selectedPath = result.filePaths[0];
+  const selectedPath = fs.realpathSync.native(result.filePaths[0]);
   projectRoot = selectedPath; // Store for path validation
   return selectedPath;
 });
 
-ipcMain.handle('project:setRoot', async (event, nextRoot) => {
-  if (!nextRoot || typeof nextRoot !== 'string' || !nextRoot.trim()) {
-    return false;
-  }
-  try {
-    const resolved = fs.realpathSync.native(nextRoot.trim());
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-      return false;
-    }
-    projectRoot = resolved;
-    return true;
-  } catch (err) {
-    console.error('project:setRoot failed:', err instanceof Error ? err.message : String(err));
-    return false;
-  }
+ipcMain.handle('project:setRoot', async () => {
+  // The renderer is not trusted to choose an arbitrary filesystem root.
+  // Only a path that was selected through the native directory picker may
+  // become the privileged root used by editor/reveal IPC handlers.
+  return Boolean(projectRoot);
 });
 
 ipcMain.handle('editor:open', async (event, { filePath, editorId }) => {
