@@ -28,6 +28,13 @@ describe("Git index confirmation state", () => {
     ]);
   });
 
+  it("binds git_push confirmations to the current local HEAD", () => {
+    expect(confirmationPathsForPending("git_push", {})).toEqual(["__git_head__"]);
+    const states = captureConfirmationFileStates(["__git_head__"]);
+    expect(states[0]?.kind).toBe("git_head");
+    expect(states[0]?.status).toBe("present");
+  });
+
   it("binds git_commit pending actions to the index", () => {
     expect(confirmationPathsForPending("git_commit", { message: "commit" })).toEqual(["__git_index__"]);
     const states = captureConfirmationFileStates(["__git_index__"]);
