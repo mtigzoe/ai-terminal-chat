@@ -1235,6 +1235,19 @@ export function writeFileWithinProject(
     }
 
     try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile()) {
+        throw new SecurityValidationError("Refusing to write to a non-file object.");
+      }
+      // A hard-linked file can have another directory entry outside the
+      // project. Mutating the inode in place would therefore modify that
+      // outside file too. Refuse multi-link files rather than crossing the
+      // project boundary through an otherwise ordinary-looking path.
+      if (opened.nlink > 1) {
+        throw new SecurityValidationError(
+          "Refusing to modify a hard-linked file with multiple directory entries.",
+        );
+      }
       const resolvedPath = assertOpenedWithinProject(fd, fileOpenPath);
       const bytesWritten = writeBufferToFd(fd, contents);
       return { resolvedPath, bytesWritten };
