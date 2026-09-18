@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { safePath } from "./security.ts";
 
 export interface ConfirmationFileState {
+  kind?: "file" | "git_index";
   path: string;
   status: "present" | "missing" | "unavailable";
   sha256: string | null;
@@ -36,9 +37,21 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
   }
 }
 
-export function captureConfirmationFileStates(paths: string[]): ConfirmationFileStates {
+function fingerprintGitIndex(): ConfirmationFileState {
+  const path = "__git_index__";
+  try {
+    const gitEntry = require("node:path").join(require("node:fs").realpathSync(require("node:path").join(require("node:fs").realpathSync(require("node:process").cwd()), ".git")), "index");
+    if (!fs.existsSync(gitEntry)) return { kind: "git_index", path, status: "missing", sha256: null };
+    const bytes = fs.readFileSync(gitEntry);
+    return { kind: "git_index", path, status: "present", sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
+  } catch { return { kind: "git_index", path, status: "unavailable", sha256: null }; }
+}
+
+export function captureConfirmationFileStates(paths: string[], includeGitIndex = false): ConfirmationFileStates {
   const unique = [...new Set(paths.map((value) => String(value)).filter(Boolean))];
-  return unique.map(fingerprintFile);
+  const states = unique.map(fingerprintFile);
+  if (includeGitIndex) states.push(fingerprintGitIndex());
+  return states;
 }
 
 export function confirmationFileStatesMatch(
@@ -46,7 +59,7 @@ export function confirmationFileStatesMatch(
 ): boolean {
   return expected.every((state) => {
     if (state.status === "unavailable") return false;
-    const current = fingerprintFile(state.path);
+    const current = state.kind === "git_index" ? fingerprintGitIndex() : fingerprintFile(state.path);
     return current.status === state.status && current.sha256 === state.sha256;
   });
 }
@@ -87,6 +100,7 @@ export function confirmationPathsForPending(
     const target = typeof args.path === "string" ? args.path.trim() : "";
     return target ? [target] : [];
   }
+  if (toolName === "git_commit") return ["__git_index__"];
   if (toolName === "apply_patch") {
     return patchTargetPaths(typeof args.patch === "string" ? args.patch : "");
   }
