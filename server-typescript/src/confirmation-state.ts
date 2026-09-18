@@ -27,8 +27,25 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
     const lexicalPath = path.resolve(getProjectRoot(), normalized);
     const lexicalStat = fs.lstatSync(lexicalPath);
     if (lexicalStat.isSymbolicLink()) {
+      // A write through a symlink changes its resolved target. Bind both the
+      // link target and the target contents so approval cannot overwrite
+      // changes made after the preview was generated.
       const target = fs.readlinkSync(lexicalPath, "utf8");
-      const payload = Buffer.from("symlink\\0" + target, "utf8");
+      const resolvedTarget = safePath(normalized);
+      const targetStat = fs.statSync(resolvedTarget);
+      if (!targetStat.isFile() || targetStat.size > MAX_FINGERPRINT_BYTES) {
+        const payload = Buffer.from("symlink\\0" + target, "utf8");
+        return {
+          path: normalized,
+          status: "present",
+          sha256: crypto.createHash("sha256").update(payload).digest("hex"),
+        };
+      }
+      const targetBytes = fs.readFileSync(resolvedTarget);
+      const payload = Buffer.concat([
+        Buffer.from("symlink\\0" + target + "\\0target\\0", "utf8"),
+        targetBytes,
+      ]);
       return {
         path: normalized,
         status: "present",
