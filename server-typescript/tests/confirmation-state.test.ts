@@ -17,6 +17,17 @@ describe("Git index confirmation state", () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
+  it("binds git_add and staged restore confirmations to the index", () => {
+    expect(confirmationPathsForPending("git_add", { path: "file.txt" })).toEqual([
+      "file.txt",
+      "__git_index__",
+    ]);
+    expect(confirmationPathsForPending("git_restore", { path: "file.txt", staged: true })).toEqual([
+      "file.txt",
+      "__git_index__",
+    ]);
+  });
+
   it("binds git_commit pending actions to the index", () => {
     expect(confirmationPathsForPending("git_commit", { message: "commit" })).toEqual(["__git_index__"]);
     const states = captureConfirmationFileStates(["__git_index__"]);
