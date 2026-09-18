@@ -64,8 +64,7 @@ describe("git tool security", () => {
     );
 
     expect(result).toEqual({ path: "allowed.txt", restored: true, unstaged: false });
-    expect(fs.readFileSync(path.join(root, "allowed.txt"), "utf8")).toBe("allowed
-");
+    expect(fs.readFileSync(path.join(root, "allowed.txt"), "utf8")).toBe("allowed\\n");
   });
 
   it("rejects a pull branch when no remote is supplied", async () => {
