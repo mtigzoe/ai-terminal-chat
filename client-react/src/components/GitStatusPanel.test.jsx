@@ -88,6 +88,7 @@ describe('GitStatusPanel', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -116,6 +117,27 @@ describe('GitStatusPanel', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not reschedule polling after an in-flight poll request finishes after unmount', async () => {
+    vi.useFakeTimers();
+    let resolvePoll;
+    axios.post
+      .mockResolvedValueOnce({ data: { stdout: '## main...origin/main\\n' } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolvePoll = resolve;
+      }));
+
+    const { unmount } = render(<GitStatusPanel />);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(axios.post).toHaveBeenCalledTimes(2);
+
+    unmount();
+    resolvePoll({ data: { stdout: '## main...origin/main\\n' } });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(axios.post).toHaveBeenCalledTimes(2);
   });
 
   test('queries the terminal endpoint with git status', async () => {
