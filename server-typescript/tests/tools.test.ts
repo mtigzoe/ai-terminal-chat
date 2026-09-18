@@ -484,6 +484,30 @@ describe("gitRestore", () => {
     }
   });
 
+  it("restores executable mode from the index without replacing it with a regular file", async () => {
+    if (process.platform === "win32") return;
+    const repoDir = path.join(os.tmpdir(), `git-restore-mode-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    const file = path.join(repoDir, "script.sh");
+    fs.writeFileSync(file, "#!/bin/sh\necho ok\n");
+    fs.chmodSync(file, 0o755);
+    spawnSync("git", ["add", "script.sh"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+    try {
+      fs.chmodSync(file, 0o644);
+      const result = await gitRestore("script.sh", false, true);
+      expect((result as { error?: string }).error).toBeUndefined();
+      expect(fs.statSync(file).mode & 0o111).not.toBe(0);
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects sensitive files", async () => {
     const repoDir = path.join(os.tmpdir(), `git-restore-sensitive-${Date.now()}`);
     fs.mkdirSync(repoDir, { recursive: true });
