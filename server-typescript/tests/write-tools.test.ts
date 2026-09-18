@@ -99,9 +99,7 @@ describe("write_file", () => {
     fs.writeFileSync(path.join(root, "doc.txt"), "first\n");
     const result = write_file("doc.txt", "first\nsecond\n", false);
     const diff = (result as { diff: string }).diff;
-    expect(diff).toContain("+second");
-    expect(diff).not.toContain("+-");
-    expect(diff).not.toContain("+");
+    expect(diff).toBe("--- a/doc.txt\n+++ b/doc.txt\n@@ -2,0 +2,1 @@\n+second");
   });
 
   it("preview reports create for new file", () => {
