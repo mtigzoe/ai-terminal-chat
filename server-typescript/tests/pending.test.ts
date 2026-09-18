@@ -78,6 +78,42 @@ describe("pending", () => {
     }
   });
 
+  it("invalidates git push confirmation when a legacy remote file changes", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const { execFileSync } = await import("node:child_process");
+    const { getProjectRoot, setProjectRoot } = await import("../src/security.ts");
+
+    const originalRoot = getProjectRoot();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pending-legacy-remote-"));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+      fs.writeFileSync(path.join(root, "file.txt"), "one\n");
+      execFileSync("git", ["add", "file.txt"], { cwd: root });
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "one"], { cwd: root });
+
+      const remotesDir = path.join(root, ".git", "remotes");
+      fs.mkdirSync(remotesDir, { recursive: true });
+      const remoteFile = path.join(remotesDir, "origin");
+      fs.writeFileSync(remoteFile, "URL: https://example.com/one.git\nPush: refs/heads/main:refs/heads/main\n");
+
+      setProjectRoot(root);
+      const action = createPending(
+        "git_push",
+        { remote: "origin", branch: "main" },
+        { requires_confirmation: true },
+      );
+
+      fs.writeFileSync(remoteFile, "URL: https://example.com/two.git\nPush: refs/heads/main:refs/heads/main\n");
+
+      expect(popPending(action.action_id)).toBeUndefined();
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("invalidates git push HEAD confirmation when HEAD advances", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
