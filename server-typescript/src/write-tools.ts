@@ -595,9 +595,11 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
   let lexicalStat: fs.Stats;
   try { lexicalStat = fs.lstatSync(lexicalPath); }
   catch { return { error: `File does not exist: ${relPath}` }; }
+
   let filePath: string;
-  try { filePath = safePath(relPath); }
-  catch (exc) {
+  try {
+    filePath = safePath(relPath);
+  } catch (exc) {
     if (!lexicalStat.isSymbolicLink()) return { error: String(exc) };
     try {
       const target = fs.readlinkSync(lexicalPath, "utf8");
@@ -620,4 +622,268 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
     if (exc instanceof SecurityValidationError) return { error: exc.message };
     return { error: `Could not delete file: ${exc}` };
   }
+}
+
+function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string, lexicalPath = absolutePath): void {
+  const lexicalStat = fs.lstatSync(lexicalPath);
+  if (lexicalStat.isSymbolicLink()) {
+    const target = fs.readlinkSync(lexicalPath, "utf8");
+    const hashed = runGit(["hash-object", "-w", "--no-filters", "--stdin"], target);
+    if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
+    const oid = hashed.stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
+    const updated = runGit(["update-index", "--add", "--cacheinfo", `120000,${oid},${relativePath}`]);
+    if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+    return;
+  }
+
+  const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  let payload: Buffer;
+  let mode = "100644";
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory.");
+    mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";
+    payload = Buffer.alloc(st.size);
+    let offset = 0;
+    while (offset < st.size) {
+      const n = fs.readSync(fd, payload, offset, st.size - offset, offset);
+      if (n === 0) break;
+      offset += n;
+    }
+    if (offset < st.size) payload = payload.subarray(0, offset);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const hashInput = path.join(tmpdir(), `git-add-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+  try {
+    fs.writeFileSync(hashInput, payload, { mode: 0o600 });
+    const hashed = runGit(["hash-object", "-w", "--no-filters", hashInput]);
+    if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
+    const oid = hashed.stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
+    const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
+    if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+  } finally {
+    try { fs.unlinkSync(hashInput); } catch { /* best effort */ }
+  }
+}
+
+export function git_add(relPath: string, confirm = false): Record<string, unknown> {
+  const root = getProjectRoot();
+  const lexicalPath = path.resolve(root, relPath.trim());
+  let lexicalStat: fs.Stats;
+  try { lexicalStat = fs.lstatSync(lexicalPath); }
+  catch { return { error: `File does not exist: ${relPath}` }; }
+
+  let filePath: string;
+  try {
+    filePath = safePath(relPath);
+  } catch (exc) {
+    if (!lexicalStat.isSymbolicLink()) return { error: String(exc) };
+    try {
+      const target = fs.readlinkSync(lexicalPath, "utf8");
+      const targetPath = path.resolve(path.dirname(lexicalPath), target);
+      const resolvedTarget = fs.realpathSync(path.dirname(targetPath));
+      if (!isPathWithinRoot(root, resolvedTarget)) return { error: `Refusing to stage a symlink targeting outside the project: ${relPath}` };
+      filePath = lexicalPath;
+    } catch (targetError) {
+      return { error: `Could not validate symlink: ${targetError instanceof Error ? targetError.message : String(targetError)}` };
+    }
+  }
+
+  if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${relPath}` };
+  const gitError = gitRepoError();
+  if (gitError) return gitError;
+  if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) return { error: "git_add can only stage a single file, not a directory." };
+
+  const rel = path.relative(root, lexicalPath);
+  if (!confirm) {
+    return {
+      requires_confirmation: true,
+      path: rel,
+      message: `'${rel}' was NOT staged. Show the user what would be staged and ask them to explicitly confirm it, then call git_add again with confirm=true.`,
+    };
+  }
+  try {
+    stageFileWithoutFiltersForWriteTool(rel, filePath, lexicalPath);
+  } catch (exc) {
+    return { error: `git add failed: ${exc instanceof Error ? exc.message : String(exc)}` };
+  }
+  return { path: rel, staged: true };
+}
+
+function extractPatchTargetPaths(patchText: string): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (raw: string) => {
+    let candidate = raw.split("\t")[0].trim();
+    // Strip optional git path quotes: "foo bar.txt"
+    if (
+      candidate.length >= 2 &&
+      ((candidate.startsWith('"') && candidate.endsWith('"')) ||
+        (candidate.startsWith("'") && candidate.endsWith("'")))
+    ) {
+      candidate = candidate.slice(1, -1);
+    }
+    if (!candidate || candidate === "/dev/null") return;
+    if (seen.has(candidate)) return;
+    seen.add(candidate);
+    paths.push(candidate);
+  };
+
+  for (const line of patchText.split("\n")) {
+    // diff --git a/<path> b/<path> (unquoted paths without spaces)
+    const diffGit = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+    if (diffGit) {
+      add(diffGit[1] ?? "");
+      add(diffGit[2] ?? "");
+      continue;
+    }
+
+    for (const prefix of ["+++ b/", "--- a/", "+++ ", "--- "]) {
+      if (line.startsWith(prefix)) {
+        add(line.slice(prefix.length));
+        break;
+      }
+    }
+  }
+
+  return paths;
+}
+
+/**
+ * Refuse patch targets that are final-component symlinks/junctions pointing
+ * outside the project. Closes a TOCTOU class where safePath passed, then
+ * `git apply` followed a replaced symlink to an outside file.
+ */
+function assertPatchTargetsNotOutsideSymlinks(relPaths: string[]): void {
+  const root = getProjectRoot();
+  for (const rel of relPaths) {
+    let abs: string;
+    try {
+      abs = safePath(rel);
+    } catch (exc) {
+      throw new SecurityValidationError(
+        `Patch touches an invalid path '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
+      );
+    }
+    if (!fs.existsSync(abs)) {
+      // New file: ensure parent stays inside the project.
+      const parent = path.dirname(abs);
+      if (fs.existsSync(parent)) {
+        let parentReal: string;
+        try {
+          parentReal = fs.realpathSync(parent);
+        } catch {
+          throw new SecurityValidationError(
+            `Patch parent path is not accessible: ${rel}`,
+          );
+        }
+        if (!isPathWithinRoot(root, parentReal)) {
+          throw new SecurityValidationError(
+            `Patch would write outside the project via parent path: ${rel}`,
+          );
+        }
+      }
+      continue;
+    }
+    try {
+      const st = fs.lstatSync(abs);
+      if (st.isSymbolicLink()) {
+        // Refuse all final-component symlinks: git apply / path opens would
+        // follow them, and a replace-after-validate race is a classic TOCTOU.
+        throw new SecurityValidationError(
+          `Refusing to patch a symbolic link or reparse point: ${rel}`,
+        );
+      }
+      const target = fs.realpathSync(abs);
+      if (!isPathWithinRoot(root, target)) {
+        throw new SecurityValidationError(
+          `Refusing to patch path outside the project: ${rel}`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof SecurityValidationError) throw err;
+      throw new SecurityValidationError(
+        `Could not verify patch target '${rel}': ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
+function generateUnifiedDiff(
+  oldText: string,
+  newText: string,
+  fromfile: string,
+  tofile: string
+): string {
+  const splitLines = (text: string): { lines: string[]; trailingNewline: boolean } => {
+    const trailingNewline = text.endsWith("\n");
+    const lines = text.split("\n");
+    if (trailingNewline) lines.pop();
+    return { lines, trailingNewline };
+  };
+
+  const oldData = splitLines(oldText);
+  const newData = splitLines(newText);
+  const oldLines = oldData.lines;
+  const newLines = newData.lines;
+
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix += 1;
+  }
+
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] ===
+      newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+
+  // If EOF newline state changes, the hunk must reach the final line so the
+  // standard newline marker can be attached to a line in the hunk.
+  if (oldData.trailingNewline !== newData.trailingNewline) {
+    prefix = 0;
+    suffix = 0;
+  }
+
+  const oldChangedEnd = oldLines.length - suffix;
+  const newChangedEnd = newLines.length - suffix;
+  const oldChanged = oldLines.slice(prefix, oldChangedEnd);
+  const newChanged = newLines.slice(prefix, newChangedEnd);
+
+  const diff: string[] = [
+    `--- ${fromfile}`,
+    `+++ ${tofile}`,
+  ];
+
+  if (oldChanged.length === 0 && newChanged.length === 0) {
+    return diff.join("\n");
+  }
+
+  const oldStart = prefix + 1;
+  const newStart = prefix + 1;
+  diff.push(`@@ -${oldStart},${oldChanged.length} +${newStart},${newChanged.length} @@`);
+
+  for (const line of oldChanged) diff.push(`-${line}`);
+  if (oldChanged.length > 0 && !oldData.trailingNewline && suffix === 0) {
+    diff.push("\\ No newline at end of file");
+  }
+
+  for (const line of newChanged) diff.push(`+${line}`);
+  if (newChanged.length > 0 && !newData.trailingNewline && suffix === 0) {
+    diff.push("\\ No newline at end of file");
+  }
+
+  return diff.join("\n");
 }
