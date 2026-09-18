@@ -3,7 +3,8 @@ import { gitCommit, gitRestore } from "../src/git.ts";
 import { runWithAllowedReadPaths, setProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";\nimport { execFileSync } from "node:child_process";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 
 function makeRepoDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "git-tools-"));
@@ -11,7 +12,7 @@ function makeRepoDir(): string {
   return dir;
 }
 
-describe("git_restore read permissions", () => {
+describe("git tool security", () => {
   let root: string;
 
   beforeEach(() => {
@@ -29,21 +30,31 @@ describe("git_restore read permissions", () => {
     const result = await runWithAllowedReadPaths(["allowed.txt"], () =>
       gitRestore("secret.txt", false, false),
     );
-
     expect(result).toEqual({
-      error:
-        "Access denied: 'secret.txt' is not selected for the agent.",
+      error: "Access denied: 'secret.txt' is not selected for the agent.",
     });
   });
 
-  it("refuses a commit containing staged paths outside the agent selection", async () => {\n    execFileSync("git", ["init", "-q"], { cwd: root });\n    fs.writeFileSync(path.join(root, "allowed.txt"), "allowed\n");\n    fs.writeFileSync(path.join(root, "secret.txt"), "secret\n");\n    execFileSync("git", ["add", "allowed.txt", "secret.txt"], { cwd: root });\n\n    const result = await runWithAllowedReadPaths(["allowed.txt"], () =>\n      gitCommit("test commit", false),\n    );\n\n    expect(result).toEqual({\n      error: "Refusing to commit staged file outside the agent selected paths: secret.txt",\n    });\n  });\n\n  it("denies an index restore for a path not selected by the agent", async () => {
+  it("denies an index restore for a path not selected by the agent", async () => {
     const result = await runWithAllowedReadPaths(["allowed.txt"], () =>
       gitRestore("secret.txt", true, false),
+    );
+    expect(result).toEqual({
+      error: "Access denied: 'secret.txt' is not selected for the agent.",
+    });
+  });
+
+  it("refuses a commit containing staged paths outside the agent selection", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", "allowed.txt", "secret.txt"], { cwd: root });
+
+    const result = await runWithAllowedReadPaths(["allowed.txt"], () =>
+      gitCommit("test commit", false),
     );
 
     expect(result).toEqual({
       error:
-        "Access denied: 'secret.txt' is not selected for the agent.",
+        "Refusing to commit staged file outside the agent selected paths: secret.txt",
     });
   });
 });
