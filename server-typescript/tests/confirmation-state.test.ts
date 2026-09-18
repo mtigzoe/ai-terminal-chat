@@ -110,6 +110,23 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
+  it("invalidates missing-file confirmations when a parent symlink is retargeted", () => {
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    fs.mkdirSync(first);
+    fs.mkdirSync(second);
+    fs.symlinkSync("first", path.join(root, "dir"));
+
+    const states = captureConfirmationFileStates(["dir/new.txt"]);
+    expect(states[0]?.status).toBe("missing");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    fs.unlinkSync(path.join(root, "dir"));
+    fs.symlinkSync("second", path.join(root, "dir"));
+
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
   it("invalidates write confirmations when an in-project symlink target changes", () => {
     const target = path.join(root, "target.txt");
     const link = path.join(root, "link.txt");
