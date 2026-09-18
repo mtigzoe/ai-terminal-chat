@@ -122,7 +122,9 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
   } catch {
     return { kind: "git_head", path: marker, status: "unavailable", sha256: null };
   }
-}function fingerprintGitRemote(remote: string): ConfirmationFileState {
+}
+
+function fingerprintGitRemote(remote: string): ConfirmationFileState {
   const marker = GIT_REMOTE_PREFIX + remote;
   try {
     const gitEntry = path.join(getProjectRoot(), ".git");
@@ -240,7 +242,7 @@ export function confirmationPathsForPending(
     if (toolName === "git_restore") {
       return args.staged === true
         ? [GIT_HEAD_MARKER, GIT_INDEX_MARKER]
-        : [target, GIT_HEAD_MARKER];
+        : [target, GIT_INDEX_MARKER];
     }
     return [target];
   }
