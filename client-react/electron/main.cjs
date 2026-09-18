@@ -5,7 +5,7 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { handleEditorOpen, getAvailableEditors } = require('./editor-handler.cjs');
-const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl } = require('./security-utils.cjs');
+const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl, isAuthorizedProjectRoot } = require('./security-utils.cjs');
 const { createHealthChallenge, verifyHealthProof } = require('./health-check.cjs');
 
 /** @type {BrowserWindow | null} */
@@ -267,12 +267,11 @@ ipcMain.handle('project:setRoot', async (event, nextRoot) => {
   }
 
   try {
-    const resolved = fs.realpathSync.native(nextRoot.trim());
-    if (!authorizedProjectRoots.has(resolved)) {
+    if (!isAuthorizedProjectRoot(nextRoot, authorizedProjectRoots)) {
       console.warn('project:setRoot rejected an unapproved project root');
       return false;
     }
-    projectRoot = resolved;
+    projectRoot = fs.realpathSync.native(nextRoot.trim());
     return true;
   } catch (err) {
     console.error('project:setRoot failed:', err instanceof Error ? err.message : String(err));
