@@ -1,25 +1,4 @@
-i\n\nfunction fingerprintGitHead(): ConfirmationFileState {
-  try {
-    const gitEntry = path.join(getProjectRoot(), ".git");
-    let gitDir = gitEntry;
-    if (fs.lstatSync(gitEntry).isFile()) {
-      const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
-      if (!match) return { kind: "git_head", path: GIT_HEAD_MARKER, status: "unavailable", sha256: null };
-      gitDir = path.resolve(getProjectRoot(), match[1]!.trim());
-    }
-    const headPath = path.join(gitDir, "HEAD");
-    const head = fs.readFileSync(headPath, "utf8");
-    let state = head;
-    const ref = /^ref:\s*(.+)\s*$/m.exec(head)?.[1]?.trim();
-    if (ref && /^[A-Za-z0-9._/-]+$/.test(ref)) {
-      const refPath = path.join(gitDir, ...ref.split("/"));
-      try { state += "\n" + fs.readFileSync(refPath, "utf8"); } catch { state += "\n<missing-ref>"; }
-    }
-    return { kind: "git_head", path: GIT_HEAD_MARKER, status: "present", sha256: crypto.createHash("sha256").update(state).digest("hex") };
-  } catch {
-    return { kind: "git_head", path: GIT_HEAD_MARKER, status: "unavailable", sha256: null };
-  }
-}mport crypto from "node:crypto";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getProjectRoot, safePath } from "./security.ts";
@@ -102,7 +81,9 @@ export function confirmationFileStatesMatch(
     const current =
       state.kind === "git_index"
         ? fingerprintGitIndex()
-        : fingerprintFile(state.path);
+        : state.kind === "git_head"
+          ? fingerprintGitHead()
+          : fingerprintFile(state.path);
     return current.status === state.status && current.sha256 === state.sha256;
   });
 }
@@ -148,6 +129,7 @@ export function confirmationPathsForPending(
   }
   if (toolName === "git_commit") return [GIT_INDEX_MARKER];
   if (toolName === "git_push") return [GIT_HEAD_MARKER];
+  if (toolName === "git_pull") return [GIT_HEAD_MARKER, GIT_INDEX_MARKER];
   if (toolName === "apply_patch") {
     return patchTargetPaths(typeof args.patch === "string" ? args.patch : "");
   }
