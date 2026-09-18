@@ -68,8 +68,65 @@ function isIpv4(str: string): boolean {
 }
 
 function isIpv6(str: string): boolean {
-  // Accept both pure IPv6 and IPv4-mapped forms (::ffff:192.168.1.1 / ::ffff:c0a8:0101)
   return str.includes(":");
+}
+
+function expandIpv6(ip: string): number[] | null {
+  const normalized = ip.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!normalized.includes(":")) return null;
+
+  let address = normalized;
+  const lastColon = address.lastIndexOf(":");
+  if (address.includes(".") && lastColon >= 0) {
+    const ipv4 = address.slice(lastColon + 1);
+    if (!isIpv4(ipv4)) return null;
+    const octets = ipv4.split(".").map(Number);
+    const high = ((octets[0]! << 8) | octets[1]!).toString(16);
+    const low = ((octets[2]! << 8) | octets[3]!).toString(16);
+    address = `${address.slice(0, lastColon + 1)}${high}:${low}`;
+  }
+
+  const compressed = address.split("::");
+  if (compressed.length > 2) return null;
+
+  const left = compressed[0] ? compressed[0].split(":") : [];
+  const right = compressed.length === 2 && compressed[1] ? compressed[1].split(":") : [];
+  const parts = [...left, ...right];
+  if (parts.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) return null;
+
+  if (compressed.length === 2) {
+    const missing = 8 - parts.length;
+    if (missing < 1) return null;
+    return [
+      ...left.map((part) => Number.parseInt(part, 16)),
+      ...Array.from({ length: missing }, () => 0),
+      ...right.map((part) => Number.parseInt(part, 16)),
+    ];
+  }
+
+  if (parts.length !== 8) return null;
+  return parts.map((part) => Number.parseInt(part, 16));
+}
+
+function mappedIpv4FromIpv6(ip: string): string | null {
+  const hextets = expandIpv6(ip);
+  if (
+    !hextets ||
+    hextets.length !== 8 ||
+    hextets.slice(0, 5).some((part) => part !== 0) ||
+    hextets[5] !== 0xffff
+  ) {
+    return null;
+  }
+
+  const high = hextets[6]!;
+  const low = hextets[7]!;
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join(".");
 }
 
 function isLoopbackIpv4(ip: string): boolean {
@@ -120,35 +177,12 @@ export function blockedAddressReason(
     }
     const normalized = ip.toLowerCase();
 
-    // IPv4-mapped IPv6 (must be checked before generic prefix rules;
-    // "ffff" would otherwise match the multicast prefix check).
-    // Handles both dotted-decimal (::ffff:192.168.1.1) and hex (::ffff:c0a8:0101).
-    const mappedMatch = normalized.match(/^::ffff:([0-9a-f:.]+)$/);
-    if (mappedMatch) {
-      const mappedPart = mappedMatch[1]!;
-
-      // Hex form: ::ffff:c0a8:0101 or ::ffff:c0a8:101
-      if (mappedPart.includes(":") && !mappedPart.includes(".")) {
-        const hexParts = mappedPart.split(":");
-        if (hexParts.length === 2) {
-          const high = parseInt(hexParts[0]!, 16);
-          const low = parseInt(hexParts[1]!, 16);
-          if (!Number.isNaN(high) && !Number.isNaN(low)) {
-            const ipv4 = [
-              (high >> 8) & 0xff,
-              high & 0xff,
-              (low >> 8) & 0xff,
-              low & 0xff,
-            ].join(".");
-            return blockedAddressReason(ipv4, allowLoopback);
-          }
-        }
-      }
-
-      // Dotted form: ::ffff:192.168.1.1
-      if (/^\d+\.\d+\.\d+\.\d+$/.test(mappedPart)) {
-        return blockedAddressReason(mappedPart, allowLoopback);
-      }
+    // IPv4-mapped IPv6 addresses can be returned by DNS in compressed,
+    // expanded, or dotted-decimal notation. Normalize all equivalent forms
+    // before applying the IPv4 SSRF policy.
+    const mappedIpv4 = mappedIpv4FromIpv6(normalized);
+    if (mappedIpv4) {
+      return blockedAddressReason(mappedIpv4, allowLoopback);
     }
 
     const firstHextet = Number.parseInt(normalized.split(":")[0] || "0", 16);
@@ -220,11 +254,6 @@ export async function resolveAndPinHostname(
   for (const rec of records) {
     const reason = blockedAddressReason(rec.address, allowLoopback);
     if (reason) {
-      // Strict dual-stack policy (intentional): if DNS returns any private,
-      // link-local, or metadata address alongside public ones, reject the
-      // entire set. Prefer a temporary resolution failure over connecting
-      // when the name is dual-homed with an internal address (classic
-      // rebinding pattern). Do not "prefer the public A/AAAA" here.
       return {
         ok: false,
         error: `${reason} (${rec.address})`,
@@ -238,28 +267,17 @@ export async function resolveAndPinHostname(
     return { ok: false, error: "No allowed addresses after DNS resolution" };
   }
 
-  // Prefer IPv4 for broader reachability when both are present.
   const pin = allowed.find((a) => a.family === 4) ?? allowed[0]!;
   return { ok: true, pin, addresses: allowed };
 }
 
 export type SafeFetchOptions = {
-  /** Original configured hostname (for loopback policy + redirect checks). */
   originalHostname: string;
-  /** Override DNS lookup (tests). */
   lookupAll?: LookupAll;
-  /** Follow one safe redirect (default false — manual only). */
   followRedirects?: boolean;
-  /** Fetch implementation; defaults to the undici fetch implementation. */
   fetchImpl?: typeof globalThis.fetch;
 };
 
-/**
- * Wrap a response body so the per-request dispatcher stays alive until the
- * caller has finished consuming the body. Closing an undici Agent immediately
- * after fetch() returns can race with response-body consumption because
- * fetch() resolves before the body is read.
- */
 function keepAgentAliveUntilBodyConsumed(
   response: Response,
   agent: Agent,
@@ -309,9 +327,6 @@ function keepAgentAliveUntilBodyConsumed(
   });
 }
 
-/**
- * Fetch with DNS pinning. The peer address is fixed at resolution time.
- */
 export async function safeFetch(
   input: string | URL,
   init: RequestInit = {},
@@ -331,8 +346,6 @@ export async function safeFetch(
   const { pin } = resolved;
   const agent = new Agent({
     connect: {
-      // Force every connection for this request to the pinned address.
-      // undici still uses url.hostname for TLS SNI / cert validation.
       lookup: (_hostname, lookupOptions, callback) => {
         if (lookupOptions.all) {
           callback(null, [{ address: pin.address, family: pin.family }]);
@@ -353,7 +366,6 @@ export async function safeFetch(
     } as RequestInit & { dispatcher: Agent };
     const response = await fetchImpl(url.toString(), pinnedInit);
 
-    // Manual redirect handling: validate + optional single hop with re-pin.
     const status = response.status;
     if (status >= 300 && status < 400) {
       const location = response.headers.get("location");
@@ -370,14 +382,12 @@ export async function safeFetch(
           response.body?.cancel?.();
           return safeFetch(next, { ...init, method: "GET", body: undefined }, {
             ...options,
-            followRedirects: false, // one hop only
+            followRedirects: false,
           });
         }
       }
     }
 
-    // Keep the request-specific dispatcher alive until the response body has
-    // been fully consumed or cancelled by the caller.
     keepAgentAlive = true;
     return keepAgentAliveUntilBodyConsumed(response, agent);
   } finally {
@@ -387,7 +397,6 @@ export async function safeFetch(
   }
 }
 
-/** Async request-time URL validation including DNS (for callers that only need check). */
 export async function validateUrlAtRequestTimeAsync(
   url: URL,
   originalHostname: string,
@@ -400,7 +409,6 @@ export async function validateUrlAtRequestTimeAsync(
   if (!resolved.ok) {
     return { valid: false, error: resolved.error };
   }
-  // Ensure redirect/original hostname policy is consistent.
   void originalHostname;
   return { valid: true, url };
 }

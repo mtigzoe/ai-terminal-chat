@@ -48,6 +48,16 @@ test("IPv4-mapped IPv6 applies the same reserved-address policy", () => {
   assert.equal(blockedAddressReason("::ffff:8.8.8.8", false), null);
 });
 
+test("expanded IPv4-mapped IPv6 applies the same IPv4 policy", () => {
+  assert.ok(blockedAddressReason("0:0:0:0:0:ffff:c0a8:0101", false));
+  assert.ok(blockedAddressReason("0:0:0:0:0:ffff:e000:0001", false));
+  assert.ok(blockedAddressReason("0:0:0:0:0:ffff:f000:0001", false));
+  assert.ok(blockedAddressReason("0:0:0:0:0:ffff:a9fe:a9fe", false));
+  assert.equal(blockedAddressReason("0:0:0:0:0:ffff:0808:0808", false), null);
+  assert.equal(blockedAddressReason("0:0:0:0:0:ffff:7f00:0001", true), null);
+  assert.ok(blockedAddressReason("0:0:0:0:0:ffff:7f00:0001", false));
+});
+
 test("IPv6 link-local /10 range is fully blocked", () => {
   assert.ok(blockedAddressReason("fe80::1", false));
   assert.ok(blockedAddressReason("fe81::1", false));
@@ -93,13 +103,10 @@ test("resolveAndPinHostname allows loopback only for localhost hostname", async 
 });
 
 test("resolveAndPinHostname simulates DNS rebind: validation uses first resolution only", async () => {
-  // Caller pins once; subsequent Agent lookup is forced to that pin.
-  // Here we only assert the pin is fixed from a single resolution snapshot.
   let calls = 0;
   const lookup: LookupAll = async () => {
     calls += 1;
     if (calls === 1) return [{ address: "8.8.8.8", family: 4 }];
-    // Rebind attempt — would return private on a second lookup
     return [{ address: "169.254.169.254", family: 4 }];
   };
   const first = await resolveAndPinHostname("rebind.example", lookup);
@@ -107,7 +114,6 @@ test("resolveAndPinHostname simulates DNS rebind: validation uses first resoluti
   if (first.ok) {
     assert.equal(first.pin.address, "8.8.8.8");
   }
-  // Second independent resolution would fail — proves policy on rebind answers
   const second = await resolveAndPinHostname("rebind.example", lookup);
   assert.equal(second.ok, false);
 });
