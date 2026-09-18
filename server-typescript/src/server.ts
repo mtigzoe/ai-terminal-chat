@@ -2,6 +2,7 @@ import "dotenv/config";
 import { serve } from "@hono/node-server";
 import { app, type AppType } from "./routes.ts";
 import { runWithAllowedReadPaths } from "./security.ts";
+import { limitRequestBody } from "./request-body-limit.ts";
 import crypto from "node:crypto";
 
 // Default 127.0.0.1 keeps the non-Docker local workflow unchanged.
@@ -73,6 +74,15 @@ async function securedFetch(request: Request): Promise<Response> {
       },
     });
   }
+
+  // Enforce the request-size boundary before cloning/parsing JSON. The /chat
+  // and /stream paths otherwise parse a clone before Hono can apply route
+  // middleware, allowing oversized bodies to consume memory first.
+  const limitedRequest = await limitRequestBody(request);
+  if (limitedRequest instanceof Response) {
+    return limitedRequest;
+  }
+  request = limitedRequest;
 
   const pathname = new URL(request.url).pathname;
   if (request.method !== "POST" || (pathname !== "/chat" && pathname !== "/stream")) {
