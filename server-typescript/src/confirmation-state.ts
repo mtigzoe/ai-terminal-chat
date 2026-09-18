@@ -78,6 +78,7 @@ export function confirmationPathsForPending(
   args: Record<string, unknown>,
 ): string[] {
   if (
+    toolName === "create_file" ||
     toolName === "write_file" ||
     toolName === "delete_file" ||
     toolName === "git_add" ||
