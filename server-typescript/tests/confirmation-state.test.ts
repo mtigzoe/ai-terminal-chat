@@ -61,6 +61,16 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
+  it("invalidates push confirmations when push refspec configuration changes", () => {
+    execFileSync("git", ["remote", "add", "origin", "https://example.com/one.git"], { cwd: root });
+    const states = captureConfirmationFileStates(["__git_remote__:origin"]);
+    expect(states[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    execFileSync("git", ["config", "--add", "remote.origin.push", "HEAD:refs/heads/release"], { cwd: root });
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
   it("invalidates push confirmations when remote configuration changes", () => {
     execFileSync("git", ["remote", "add", "origin", "https://example.com/one.git"], { cwd: root });
     const states = captureConfirmationFileStates(["__git_remote__:origin"]);
