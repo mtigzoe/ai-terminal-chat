@@ -277,6 +277,21 @@ describe("apply_patch", () => {
     expect(fs.existsSync(path.join(root, "header-only.txt"))).toBe(false);
   });
 
+  it("rejects unsupported patch path changes", () => {
+    fs.writeFileSync(path.join(root, "old.txt"), "old\\n");
+    const patch = `--- a/old.txt
++++ b/new.txt
+@@ -1 +1 @@
+-old
++new
+`;
+
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("path changes/renames are not supported");
+    expect(fs.readFileSync(path.join(root, "old.txt"), "utf-8")).toBe("old\\n");
+    expect(fs.existsSync(path.join(root, "new.txt"))).toBe(false);
+  });
+
   it("rejects oversized patches", () => {
     const oversized = SAMPLE_PATCH + "x".repeat(200_100);
     const result = apply_patch(oversized, false);
