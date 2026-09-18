@@ -68,10 +68,10 @@ describe("git tool security", () => {
       execFileSync("git", ["remote", "add", "origin", "https://example.com/repo.git"], { cwd: root });
 
       setProjectRoot(worktree);
-      const result = await runIsolatedGit(["config", "--get", "url.file:///outside/.insteadOf"]);
+      const result = await runIsolatedGit(["remote", "get-url", "origin"]);
 
-      expect(result.code).not.toBe(0);
-      expect(result.stdout.trim()).toBe("");
+      expect(result.code).toBe(0);
+      expect(result.stdout.trim()).toBe("https://example.com/repo.git");
     } finally {
       setProjectRoot(root);
       try { execFileSync("git", ["worktree", "remove", "-f", worktree], { cwd: root }); } catch {}
