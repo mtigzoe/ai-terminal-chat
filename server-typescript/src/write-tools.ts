@@ -463,7 +463,18 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
           break;
         }
         if (hl.startsWith("\\")) {
-          // "\ No newline at end of file"
+          // "\ No newline at end of file" applies to the immediately
+          // preceding hunk line. A new-side/context line determines the
+          // resulting file's trailing-newline state.
+          const previous = hunk.lines[hunk.lines.length - 1];
+          if (previous?.startsWith("+") || previous?.startsWith(" ")) {
+            hunk.newTrailingNewline = false;
+          } else if (previous?.startsWith("-")) {
+            const next = lines[i + 1] ?? "";
+            if (next.startsWith("+") || next.startsWith(" ")) {
+              hunk.newTrailingNewline = true;
+            }
+          }
           i += 1;
           continue;
         }
@@ -565,7 +576,6 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
     if (hunk.newTrailingNewline !== undefined) {
       trailingNewline = hunk.newTrailingNewline;
     }
-  }
   }
   while (srcIndex < src.length) {
     out.push(src[srcIndex]!);
