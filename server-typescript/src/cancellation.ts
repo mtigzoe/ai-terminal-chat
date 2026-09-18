@@ -9,6 +9,8 @@ export function register(requestId: string): AbortSignal {
   const controller = new AbortController();
   if (_EVENTS.size >= MAX_TRACKED_REQUESTS) {
     const oldestId = _EVENTS.keys().next().value!;
+    const oldestController = _EVENTS.get(oldestId);
+    oldestController?.abort();
     _EVENTS.delete(oldestId);
   }
   _EVENTS.set(requestId, controller);
@@ -28,5 +30,8 @@ export function release(requestId: string): void {
 }
 
 export function clear(): void {
+  for (const controller of _EVENTS.values()) {
+    controller.abort();
+  }
   _EVENTS.clear();
 }
