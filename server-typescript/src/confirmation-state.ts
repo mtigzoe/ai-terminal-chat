@@ -220,8 +220,13 @@ export function confirmationPathsForPending(
   ) {
     const target = typeof args.path === "string" ? args.path.trim() : "";
     if (!target) return [];
-    if (toolName === "git_add" || (toolName === "git_restore" && args.staged === true)) {
+    if (toolName === "git_add") {
       return [target, GIT_INDEX_MARKER];
+    }
+    if (toolName === "git_restore") {
+      return args.staged === true
+        ? [GIT_HEAD_MARKER, GIT_INDEX_MARKER]
+        : [target, GIT_HEAD_MARKER];
     }
     return [target];
   }
