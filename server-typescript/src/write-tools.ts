@@ -894,6 +894,7 @@ function generateUnifiedDiff(
   // If EOF newline state changes, the hunk must reach the final line so the
   // standard newline marker can be attached to a line in the hunk.
   if (oldData.trailingNewline !== newData.trailingNewline) {
+    prefix = 0;
     suffix = 0;
   }
 
