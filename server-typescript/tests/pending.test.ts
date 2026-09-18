@@ -78,6 +78,39 @@ describe("pending", () => {
     }
   });
 
+  it("invalidates git push HEAD confirmation when HEAD advances", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const { execFileSync } = await import("node:child_process");
+    const { getProjectRoot, setProjectRoot } = await import("../src/security.ts");
+
+    const originalRoot = getProjectRoot();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pending-push-head-"));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+      fs.writeFileSync(path.join(root, "file.txt"), "one\n");
+      execFileSync("git", ["add", "file.txt"], { cwd: root });
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "one"], { cwd: root });
+
+      setProjectRoot(root);
+      const action = createPending(
+        "git_push",
+        { remote: "origin", branch: "HEAD" },
+        { requires_confirmation: true },
+      );
+
+      fs.writeFileSync(path.join(root, "file.txt"), "two\n");
+      execFileSync("git", ["add", "file.txt"], { cwd: root });
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "two"], { cwd: root });
+
+      expect(popPending(action.action_id)).toBeUndefined();
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("invalidates git_add confirmation when a symlink is retargeted", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
