@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { create_file, write_file, delete_file, apply_patch } from "../src/write-tools.ts";
+import { create_file, write_file, delete_file, apply_patch, git_add } from "../src/write-tools.ts";
 import { setProjectRoot, getProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -188,6 +188,59 @@ describe("delete_file", () => {
     const result = delete_file(".", true);
     expect((result as { error: string }).error).toBeDefined();
     expect(fs.existsSync(root)).toBe(true);
+  });
+});
+
+
+describe("git_add", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = makeRepoDir();
+    setProjectRoot(root);
+  });
+
+  afterEach(() => {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it("stages a symlink as a symlink instead of its target contents", () => {
+    fs.writeFileSync(path.join(root, "target.txt"), "target\n");
+    fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+
+    const result = git_add("link.txt", true);
+
+    expect(result).toEqual({ path: "link.txt", staged: true });
+    const staged = execSync("git ls-files --stage -- link.txt", {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    expect(staged.startsWith("120000 ")).toBe(true);
+    expect(execSync("git show :link.txt", {
+      cwd: root,
+      encoding: "utf8",
+    })).toBe("target.txt");
+  });
+
+  it("stages a dangling symlink", () => {
+    fs.symlinkSync("missing-target.txt", path.join(root, "dangling.txt"));
+
+    const result = git_add("dangling.txt", true);
+
+    expect(result).toEqual({ path: "dangling.txt", staged: true });
+    const staged = execSync("git ls-files --stage -- dangling.txt", {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    expect(staged.startsWith("120000 ")).toBe(true);
+    expect(execSync("git show :dangling.txt", {
+      cwd: root,
+      encoding: "utf8",
+    })).toBe("missing-target.txt");
   });
 });
 
