@@ -184,6 +184,17 @@ describe("delete_file", () => {
     expect((result as { error: string }).error.toLowerCase()).toContain("directory");
   });
 
+  it("deletes a symlink itself instead of its target", () => {
+    fs.writeFileSync(path.join(root, "target.txt"), "keep me");
+    fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+
+    const result = delete_file("link.txt", true);
+
+    expect((result as { deleted: boolean }).deleted).toBe(true);
+    expect(fs.existsSync(path.join(root, "link.txt"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, "target.txt"), "utf8")).toBe("keep me");
+  });
+
   it("refuses the project root itself", () => {
     const result = delete_file(".", true);
     expect((result as { error: string }).error).toBeDefined();
