@@ -174,3 +174,28 @@ test("git_restore pending action is invalidated when the target changes", () => 
   assert.equal(popPending(action.action_id), undefined);
   assert.equal(getPending(action.action_id), undefined);
 });
+
+
+test("resumable pending action is invalidated when the project root changes", () => {
+  const first = makeProject();
+  const action = createPending("write_file", { path: "x.txt" }, { requires_confirmation: true }, {
+    provider_fingerprint: "test-provider", contents: [], round_index: 0, tool_results: [], remaining_calls: [],
+    last_call_signature: null, consecutive_repeat_count: 0, consecutive_error_count: 0,
+  });
+  const second = mkdtempSync(join(tmpdir(), "pending-file-state-other-"));
+  projects.push(second);
+  __setProjectRootForTests(second);
+  assert.equal(popPending(action.action_id), undefined);
+  assert.equal(getPending(action.action_id), undefined);
+  assert.notEqual(first, second);
+});
+
+test("resumable pending action is invalidated when provider fingerprint changes", () => {
+  makeProject();
+  const action = createPending("write_file", { path: "x.txt" }, { requires_confirmation: true }, {
+    provider_fingerprint: "definitely-not-the-active-provider", contents: [], round_index: 0, tool_results: [], remaining_calls: [],
+    last_call_signature: null, consecutive_repeat_count: 0, consecutive_error_count: 0,
+  });
+  assert.equal(popPending(action.action_id), undefined);
+  assert.equal(getPending(action.action_id), undefined);
+});
