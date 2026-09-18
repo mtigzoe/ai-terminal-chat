@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { getProjectRoot, safePath } from "./security.ts";
+import { getProjectRoot, isPathWithinRoot, safePath } from "./security.ts";
 
 export interface ConfirmationFileState {
   kind?: "file" | "git_index" | "git_head" | "git_remote";
@@ -86,7 +86,7 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
         const parent = fs.realpathSync(path.dirname(lexicalPath));
         if (!fs.existsSync(parent)) throw new Error("missing parent");
         const root = getProjectRoot();
-        if (!path.resolve(parent).startsWith(path.resolve(root) + path.sep)) {
+        if (!isPathWithinRoot(root, parent)) {
           return { path: normalized, status: "unavailable", sha256: null };
         }
         resolved = path.join(parent, path.basename(lexicalPath));
