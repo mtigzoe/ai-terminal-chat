@@ -621,4 +621,3 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
     return { error: `Could not delete file: ${exc}` };
   }
 }
-=
