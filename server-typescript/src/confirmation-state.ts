@@ -68,47 +68,60 @@ function fingerprintGitIndex(): ConfirmationFileState {
 }
 
 function fingerprintGitHead(branch?: string): ConfirmationFileState {
+  const marker = branch ? `${GIT_PUSH_HEAD_PREFIX}${branch}` : GIT_HEAD_MARKER;
   try {
     const gitEntry = path.join(getProjectRoot(), ".git");
     let gitDir = gitEntry;
     if (fs.lstatSync(gitEntry).isFile()) {
       const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
-      if (!match) return { kind: "git_head", path: GIT_HEAD_MARKER, status: "unavailable", sha256: null };
+      if (!match) return { kind: "git_head", path: marker, status: "unavailable", sha256: null };
       const target = match[1]!.trim();
       gitDir = path.resolve(getProjectRoot(), target);
     }
+
     const headPath = path.join(gitDir, "HEAD");
     const head = fs.readFileSync(headPath, "utf8");
-    let state = head;
-    const ref = /^ref:\s*(.+)\s*$/m.exec(head)?.[1]?.trim();
-    if (ref && /^[A-Za-z0-9._/-]+$/.test(ref)) {
-      const refPath = path.join(gitDir, ...ref.split("/"));
+    const ref = branch
+      ? `refs/heads/${branch}`
+      : /^ref:\s*(.+)\s*$/.exec(head)?.[1]?.trim();
+
+    if (!ref || !/^[A-Za-z0-9._/-]+$/.test(ref)) {
+      return {
+        kind: "git_head",
+        path: marker,
+        status: "present",
+        sha256: crypto.createHash("sha256").update(head).digest("hex"),
+      };
+    }
+
+    let refState = "";
+    const refPath = path.join(gitDir, ...ref.split("/"));
+    try {
+      refState = fs.readFileSync(refPath, "utf8");
+    } catch {
       try {
-        state += "\n" + fs.readFileSync(refPath, "utf8");
+        const packed = fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8");
+        const packedRef = packed.split(/\r?\n/).find((line) => {
+          const match = /^([0-9a-f]{40,64})\s+(\S+)$/.exec(line);
+          return match?.[2] === ref;
+        });
+        refState = packedRef ?? "<missing-ref>";
       } catch {
-        try {
-          const packed = fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8");
-          const packedRef = packed.split(/\r?\n/).find((line) => {
-            const match = /^([0-9a-f]{40,64})\s+(\S+)$/.exec(line);
-            return match?.[2] === ref;
-          });
-          state += "\n" + (packedRef ?? "<missing-ref>");
-        } catch {
-          state += "\n<missing-ref>";
-        }
+        refState = "<missing-ref>";
       }
     }
+
+    const state = branch ? refState : head + "\n" + refState;
     return {
       kind: "git_head",
-      path: GIT_HEAD_MARKER,
+      path: marker,
       status: "present",
       sha256: crypto.createHash("sha256").update(state).digest("hex"),
     };
   } catch {
-    return { kind: "git_head", path: GIT_HEAD_MARKER, status: "unavailable", sha256: null };
+    return { kind: "git_head", path: marker, status: "unavailable", sha256: null };
   }
 }
-
 export function captureConfirmationFileStates(paths: string[]): ConfirmationFileStates {
   const unique = [...new Set(paths.map((value) => String(value)).filter(Boolean))];
   return unique.map((value) =>
