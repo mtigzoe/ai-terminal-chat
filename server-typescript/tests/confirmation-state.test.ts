@@ -110,6 +110,20 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
+  it("keeps dangling symlink deletion confirmations valid until the link changes", () => {
+    const link = path.join(root, "dangling.txt");
+    fs.symlinkSync("missing-target.txt", link);
+
+    const states = captureConfirmationFileStates(["dangling.txt"]);
+    expect(states[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    fs.unlinkSync(link);
+    fs.symlinkSync("another-target.txt", link);
+
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
   it("invalidates missing-file confirmations when a parent symlink is retargeted", () => {
     const first = path.join(root, "first");
     const second = path.join(root, "second");
