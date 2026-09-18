@@ -495,6 +495,24 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "first.txt"), "utf-8")).toBe("first\n");
   });
 
+  it("rejects duplicate file entries instead of overwriting an earlier result", () => {
+    fs.writeFileSync(path.join(root, "duplicate.txt"), "one\n");
+    const patch = `--- a/duplicate.txt
++++ b/duplicate.txt
+@@ -1 +1 @@
+-one
++two
+--- a/duplicate.txt
++++ b/duplicate.txt
+@@ -1 +1 @@
+-one
++three
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("duplicate file entry");
+    expect(fs.readFileSync(path.join(root, "duplicate.txt"), "utf-8")).toBe("one\n");
+  });
+
   it("accepts an insertion hunk at end of file", () => {
     fs.writeFileSync(path.join(root, "append.txt"), "one\ntwo\n");
     const patch = `--- a/append.txt
