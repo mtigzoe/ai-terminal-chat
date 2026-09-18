@@ -508,6 +508,10 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
       out.push(src[srcIndex]!);
       srcIndex += 1;
     }
+    const expectedNewStart = hunk.newCount === 0 ? out.length : out.length + 1;
+    if (hunk.newStart !== expectedNewStart) {
+      throw new Error("patch hunk new-side range is out of order or inconsistent");
+    }
     let oldLinesConsumed = 0;
     let newLinesProduced = 0;
     for (const hl of hunk.lines) {
