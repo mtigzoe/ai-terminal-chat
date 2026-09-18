@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { getProvider, buildProviderStatus } from "./providers/factory.ts";
 import type { Provider } from "./providers/base.ts";
 import { SUPPORTED_PROVIDERS } from "./providers/config.ts";
@@ -51,6 +52,12 @@ import {
 type Env = Record<string, never>;
 
 export const app = new Hono<{ Bindings: Env }>();
+
+// Cap JSON request bodies before any route or the /chat and /stream request
+// cloning in server.ts can parse them. This bounds memory/CPU use for the
+// local API, including requests sent with chunked transfer encoding.
+const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+app.use("*", bodyLimit({ maxSize: MAX_REQUEST_BODY_BYTES }));
 
 // Flask keeps the successfully selected provider in process memory. Keep the
 // same lifetime here so /providers, /chat, and /stream all use the provider
