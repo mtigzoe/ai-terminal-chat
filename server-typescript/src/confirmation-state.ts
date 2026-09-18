@@ -118,7 +118,11 @@ export function confirmationPathsForPending(
     toolName === "git_restore"
   ) {
     const target = typeof args.path === "string" ? args.path.trim() : "";
-    return target ? [target] : [];
+    if (!target) return [];
+    if (toolName === "git_add" || (toolName === "git_restore" && args.staged === true)) {
+      return [target, GIT_INDEX_MARKER];
+    }
+    return [target];
   }
   if (toolName === "git_commit") return [GIT_INDEX_MARKER];
   if (toolName === "apply_patch") {
