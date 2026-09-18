@@ -128,7 +128,7 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
     if (remote === "<default>") {
       const gitEntry = path.join(getProjectRoot(), ".git");
       const gitDir = fs.lstatSync(gitEntry).isFile()
-        ? path.resolve(getProjectRoot(), fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\\s*(.+)\\s*$/im)?.[1]?.trim() ?? "")
+        ? path.resolve(getProjectRoot(), fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im)?.[1]?.trim() ?? "")
         : gitEntry;
       const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
       return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(config).digest("hex") };
