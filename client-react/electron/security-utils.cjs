@@ -109,8 +109,25 @@ function isAllowedNavigationUrl(urlString, rendererEntry) {
   return false;
 }
 
+/**
+ * Returns true only when the requested project root was previously approved
+ * through the native directory picker.
+ */
+function isAuthorizedProjectRoot(requestedPath, authorizedRoots) {
+  if (typeof requestedPath !== 'string' || !requestedPath.trim() || !authorizedRoots) {
+    return false;
+  }
+  try {
+    const resolved = fs.realpathSync.native(requestedPath.trim());
+    return authorizedRoots.has(resolved);
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   validateProjectPath,
   isSafeExternalUrl,
   isAllowedNavigationUrl,
+  isAuthorizedProjectRoot,
 };

@@ -5,7 +5,7 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { handleEditorOpen, getAvailableEditors } = require('./editor-handler.cjs');
-const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl } = require('./security-utils.cjs');
+const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl, isAuthorizedProjectRoot } = require('./security-utils.cjs');
 const { createHealthChallenge, verifyHealthProof } = require('./health-check.cjs');
 
 /** @type {BrowserWindow | null} */
@@ -15,6 +15,7 @@ let backendProcess = null;
 let backendExit = null;
 let backendStderr = '';
 let projectRoot = null; // Store the selected project root for path validation
+const authorizedProjectRoots = new Set();
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = 9000;
@@ -254,7 +255,8 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
   if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
     return null;
   }
-  const selectedPath = result.filePaths[0];
+  const selectedPath = fs.realpathSync.native(result.filePaths[0]);
+  authorizedProjectRoots.add(selectedPath);
   projectRoot = selectedPath; // Store for path validation
   return selectedPath;
 });
@@ -263,12 +265,13 @@ ipcMain.handle('project:setRoot', async (event, nextRoot) => {
   if (!nextRoot || typeof nextRoot !== 'string' || !nextRoot.trim()) {
     return false;
   }
+
   try {
-    const resolved = fs.realpathSync.native(nextRoot.trim());
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    if (!isAuthorizedProjectRoot(nextRoot, authorizedProjectRoots)) {
+      console.warn('project:setRoot rejected an unapproved project root');
       return false;
     }
-    projectRoot = resolved;
+    projectRoot = fs.realpathSync.native(nextRoot.trim());
     return true;
   } catch (err) {
     console.error('project:setRoot failed:', err instanceof Error ? err.message : String(err));
