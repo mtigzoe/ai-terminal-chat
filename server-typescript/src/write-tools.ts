@@ -713,20 +713,49 @@ export function git_add(relPath: string, confirm = false): Record<string, unknow
   return { path: rel, staged: true };
 }
 
+function unquoteGitPath(raw: string): string {
+  let candidate = raw.split("\t")[0]?.trim() ?? "";
+  if (
+    candidate.length >= 2 &&
+    candidate.startsWith('"') &&
+    candidate.endsWith('"')
+  ) {
+    candidate = candidate.slice(1, -1);
+    const bytes: number[] = [];
+    for (let i = 0; i < candidate.length; i += 1) {
+      if (candidate[i] !== "\\") {
+        bytes.push(...Buffer.from(candidate[i]!, "utf8"));
+        continue;
+      }
+      const next = candidate[i + 1] ?? "";
+      const escapes: Record<string, number> = {
+        a: 0x07, b: 0x08, t: 0x09, n: 0x0a,
+        v: 0x0b, f: 0x0c, r: 0x0d, "\\": 0x5c, '"': 0x22,
+      };
+      if (escapes[next] !== undefined) {
+        bytes.push(escapes[next]!);
+        i += 1;
+        continue;
+      }
+      const octal = candidate.slice(i + 1).match(/^[0-7]{1,3}/)?.[0];
+      if (octal) {
+        bytes.push(parseInt(octal, 8));
+        i += octal.length;
+        continue;
+      }
+      bytes.push(0x5c);
+    }
+    candidate = Buffer.from(bytes).toString("utf8");
+  }
+  return candidate;
+}
+
 function extractPatchTargetPaths(patchText: string): string[] {
   const paths: string[] = [];
   const seen = new Set<string>();
 
   const add = (raw: string) => {
-    let candidate = raw.split("\t")[0].trim();
-    // Strip optional git path quotes: "foo bar.txt"
-    if (
-      candidate.length >= 2 &&
-      ((candidate.startsWith('"') && candidate.endsWith('"')) ||
-        (candidate.startsWith("'") && candidate.endsWith("'")))
-    ) {
-      candidate = candidate.slice(1, -1);
-    }
+    const candidate = unquoteGitPath(raw);
     if (!candidate || candidate === "/dev/null") return;
     if (seen.has(candidate)) return;
     seen.add(candidate);
