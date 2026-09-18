@@ -379,7 +379,10 @@ function patchTargetPaths(patch: string): string[] {
     }
     for (const prefix of ["--- a/", "+++ b/", "--- ", "+++ "]) {
       if (!line.startsWith(prefix)) continue;
-      const candidate = unquoteGitPath(line.slice(prefix.length));
+      let candidate = unquoteGitPath(line.slice(prefix.length));
+      if ((prefix === "--- " || prefix === "+++ ") && /^(?:a|b)\//.test(candidate)) {
+        candidate = candidate.slice(2);
+      }
       if (candidate && candidate !== "/dev/null") paths.push(candidate);
       break;
     }
