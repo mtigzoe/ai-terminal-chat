@@ -45,7 +45,17 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
           sha256: crypto.createHash("sha256").update(payload).digest("hex"),
         };
       }
-      const targetStat = fs.statSync(resolvedTarget);
+      let targetStat: fs.Stats;
+      try {
+        targetStat = fs.statSync(resolvedTarget);
+      } catch {
+        const payload = Buffer.from("symlink\\0" + target, "utf8");
+        return {
+          path: normalized,
+          status: "present",
+          sha256: crypto.createHash("sha256").update(payload).digest("hex"),
+        };
+      }
       if (!targetStat.isFile() || targetStat.size > MAX_FINGERPRINT_BYTES) {
         const payload = Buffer.from("symlink\\0" + target, "utf8");
         return {
