@@ -330,88 +330,43 @@ function applyUnifiedDiffSecure(
     return { files: [], error: "Patch contains a file header without any hunks." };
   }
 
-  // Preflight every file before mutating any of them. A later bad hunk,
-  // missing target, or invalid deletion must not leave earlier files changed.
+  // Preflight every file before mutating any of them.
   const operations: Array<
     | { kind: "delete"; rel: string }
     | { kind: "write"; rel: string; next: string; create: boolean }
   > = [];
-
   for (const fp of filePatches) {
     const rel = fp.newPath === "/dev/null" ? fp.oldPath : fp.newPath;
-    if (!rel || rel === "/dev/null") {
-      return { files: [], error: "Patch entry missing a usable path." };
+    if (!rel || rel === "/dev/null") return { files: [], error: "Patch entry missing a usable path." };
+    if (fp.oldPath !== fp.newPath && fp.oldPath !== "/dev/null" && fp.newPath !== "/dev/null") {
+      return { files: [], error: `Patch path changes/renames are not supported: '${fp.oldPath}' -> '${fp.newPath}'.` };
     }
-    if (
-      fp.oldPath !== fp.newPath &&
-      fp.oldPath !== "/dev/null" &&
-      fp.newPath !== "/dev/null"
-    ) {
-      return {
-        files: [],
-        error: `Patch path changes/renames are not supported: '${fp.oldPath}' -> '${fp.newPath}'.`,
-      };
-    }
-
-    try {
-      safePath(rel);
-    } catch (exc) {
-      return { files: [], error: `Invalid path in patch: ${rel}: ${exc}` };
-    }
-
+    try { safePath(rel); } catch (exc) { return { files: [], error: `Invalid path in patch: ${rel}: ${exc}` }; }
     if (fp.newPath === "/dev/null") {
-      try {
-        readFileWithinProject(rel, MAX_PATCH_SIZE * 2);
-      } catch {
-        return { files: [], error: `Patch deletes missing file: ${rel}` };
-      }
+      try { readFileWithinProject(rel, MAX_PATCH_SIZE * 2); }
+      catch { return { files: [], error: `Patch deletes missing file: ${rel}` }; }
       operations.push({ kind: "delete", rel });
       continue;
     }
-
-    let current = "";
     const create = fp.oldPath === "/dev/null";
+    let current = "";
     if (!create) {
-      try {
-        current = readFileWithinProject(rel, MAX_PATCH_SIZE * 2).contents;
-      } catch (exc) {
-        return {
-          files: [],
-          error: `Cannot read '${rel}' to apply patch: ${exc instanceof Error ? exc.message : String(exc)}`,
-        };
-      }
+      try { current = readFileWithinProject(rel, MAX_PATCH_SIZE * 2).contents; }
+      catch (exc) { return { files: [], error: `Cannot read '${rel}' to apply patch: ${exc instanceof Error ? exc.message : String(exc)}` }; }
     }
-
     let next: string;
-    try {
-      next = applyHunksToText(current, fp.hunks);
-    } catch (exc) {
-      return {
-        files: [],
-        error: `Patch does not apply cleanly to '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
-      };
-    }
+    try { next = applyHunksToText(current, fp.hunks); }
+    catch (exc) { return { files: [], error: `Patch does not apply cleanly to '${rel}': ${exc instanceof Error ? exc.message : String(exc)}` }; }
     operations.push({ kind: "write", rel, next, create });
   }
-
   if (dryRun) return { files: resolvedRel };
-
-  // All reads and hunk validation succeeded. Only now mutate.
   for (const operation of operations) {
     try {
       assertPatchTargetsNotOutsideSymlinks([operation.rel]);
-      if (operation.kind === "delete") {
-        unlinkWithinProject(operation.rel);
-      } else {
-        writeFileWithinProject(operation.rel, operation.next, {
-          exclusive: operation.create,
-        });
-      }
+      if (operation.kind === "delete") unlinkWithinProject(operation.rel);
+      else writeFileWithinProject(operation.rel, operation.next, { exclusive: operation.create });
     } catch (exc) {
-      return {
-        files: [],
-        error: `Failed to ${operation.kind === "delete" ? "delete" : "write"} '${operation.rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
-      };
+      return { files: [], error: `Failed to ${operation.kind === "delete" ? "delete" : "write"} '${operation.rel}': ${exc instanceof Error ? exc.message : String(exc)}` };
     }
   }
 
@@ -638,46 +593,26 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
   const root = getProjectRoot();
   const lexicalPath = path.resolve(root, relPath.trim());
   let lexicalStat: fs.Stats;
-  try {
-    lexicalStat = fs.lstatSync(lexicalPath);
-  } catch {
-    return { error: `File does not exist: ${relPath}` };
-  }
-
+  try { lexicalStat = fs.lstatSync(lexicalPath); }
+  catch { return { error: `File does not exist: ${relPath}` }; }
   let filePath: string;
-  try {
-    filePath = safePath(relPath);
-  } catch (exc) {
+  try { filePath = safePath(relPath); }
+  catch (exc) {
     if (!lexicalStat.isSymbolicLink()) return { error: String(exc) };
     try {
       const target = fs.readlinkSync(lexicalPath, "utf8");
       const targetPath = path.resolve(path.dirname(lexicalPath), target);
       const resolvedTarget = fs.realpathSync(path.dirname(targetPath));
-      if (!isPathWithinRoot(root, resolvedTarget)) {
-        return { error: `Refusing to delete a symlink targeting outside the project: ${relPath}` };
-      }
+      if (!isPathWithinRoot(root, resolvedTarget)) return { error: `Refusing to delete a symlink targeting outside the project: ${relPath}` };
       filePath = lexicalPath;
     } catch (targetError) {
       return { error: `Could not validate symlink: ${targetError instanceof Error ? targetError.message : String(targetError)}` };
     }
   }
-
-  if (isSensitivePath(filePath)) {
-    return { error: `Refusing to delete sensitive file: ${relPath}` };
-  }
-  if (filePath === root) {
-    return { error: "Refusing to delete the project root." };
-  }
-  if (!lexicalStat.isSymbolicLink() && lexicalStat.isDirectory()) {
-    return { error: "delete_file can only delete a single file, not a directory." };
-  }
-  if (!confirm) {
-    return {
-      requires_confirmation: true,
-      path: path.relative(root, lexicalPath),
-      message: `'${relPath}' was NOT deleted. Ask the user to explicitly confirm this deletion in the chat, then call delete_file again with confirm=true.`,
-    };
-  }
+  if (isSensitivePath(filePath)) return { error: `Refusing to delete sensitive file: ${relPath}` };
+  if (filePath === root) return { error: "Refusing to delete the project root." };
+  if (!lexicalStat.isSymbolicLink() && lexicalStat.isDirectory()) return { error: "delete_file can only delete a single file, not a directory." };
+  if (!confirm) return { requires_confirmation: true, path: path.relative(root, lexicalPath), message: `'${relPath}' was NOT deleted. Ask the user to explicitly confirm this deletion in the chat, then call delete_file again with confirm=true.` };
   try {
     const { resolvedPath } = unlinkWithinProject(relPath);
     return { path: path.relative(root, resolvedPath), deleted: true };
@@ -686,78 +621,4 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
     return { error: `Could not delete file: ${exc}` };
   }
 }
-
-function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string, lexicalPath: string): void {
-  let payload: Buffer;
-  let mode = "100644";
-  const lexicalStat = fs.lstatSync(lexicalPath);
-
-  if (lexicalStat.isSymbolicLink()) {
-    payload = Buffer.from(fs.readlinkSync(lexicalPath, "utf8"), "utf8");
-    mode = "120000";
-  } else {
-    const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-    try {
-      const st = fs.fstatSync(fd);
-      if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory.");
-      mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";
-      payload = Buffer.alloc(st.size);
-      let offset = 0;
-      while (offset < st.size) {
-        const n = fs.readSync(fd, payload, offset, st.size - offset, offset);
-        if (n === 0) break;
-        offset += n;
-      }
-      if (offset < st.size) payload = payload.subarray(0, offset);
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
-
-  const hashInput = path.join(tmpdir(), `git-add-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
-  try {
-    fs.writeFileSync(hashInput, payload, { mode: 0o600 });
-    const hashed = runGit(["hash-object", "-w", "--no-filters", hashInput]);
-    if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
-    const oid = hashed.stdout.trim();
-    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
-    const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
-    if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
-  } finally {
-    try { fs.unlinkSync(hashInput); } catch { /* best effort */ }
-  }
-}
-
-export function git_add(relPath: string, confirm = false): Record<string, unknown> {
-  let filePath: string;
-  try {
-    filePath = safePath(relPath);
-  } catch (exc) {
-    return { error: String(exc) };
-  }
-
-  if (isSensitivePath(filePath)) {
-    return { error: `Refusing to stage sensitive file: ${relPath}` };
-  }
-
-  const gitError = gitRepoError();
-  if (gitError) {
-    return gitError;
-  }
-
-  const root = getProjectRoot();
-  const lexicalPath = path.resolve(root, relPath.trim());
-  let lexicalStat: fs.Stats;
-  try {
-    lexicalStat = fs.lstatSync(lexicalPath);
-  } catch {
-    return { error: `File does not exist: ${relPath}` };
-  }
-
-  if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) {
-    return { error: "git_add can only stage a single file, not a directory." };
-  }
-
-  const rel = path.relative(root, lexicalPath);
-
-  if (!confirm) {
+=
