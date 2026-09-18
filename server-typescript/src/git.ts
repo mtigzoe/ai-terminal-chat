@@ -144,6 +144,8 @@ export interface IsolatedGitOptions {
   timeout?: number;
   maxBuffer?: number;
   skipDynamicOverrides?: boolean;
+  /** Internal: precomputed dynamic overrides while repository config is sanitized. */
+  dynamicOverrides?: string[];
   holdLock?: boolean;
   input?: string | Buffer;
 }
@@ -311,13 +313,13 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
   writeFileSync(emptyConfigPath, "", { encoding: "utf8", mode: 0o600 });
   const isRemoteCommand = args[0]?.toLowerCase() === "remote";
   try {
-    const dynamic = options.skipDynamicOverrides ? [] : await dynamicConfigOverrides();
+    const dynamic = options.dynamicOverrides ?? (options.skipDynamicOverrides ? [] : await dynamicConfigOverrides());
     // Command-line -c cannot reliably neutralize multivars such as url.*.insteadOf
     // or filter.*.{clean,smudge,process}. Sanitize repository config when such keys
     // are present instead of appending an empty command-line value.
     if (!options.skipDynamicOverrides && dynamic.length > 0) {
       return await withSanitizedGitConfigUnlocked(() =>
-        runIsolatedGit(args, { ...options, skipDynamicOverrides: true, holdLock: true }),
+        runIsolatedGit(args, { ...options, skipDynamicOverrides: true, dynamicOverrides: dynamic, holdLock: true }),
       );
     }
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
