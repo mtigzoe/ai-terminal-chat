@@ -15,6 +15,7 @@ let backendProcess = null;
 let backendExit = null;
 let backendStderr = '';
 let projectRoot = null; // Store the selected project root for path validation
+const authorizedProjectRoots = new Set();
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = 9000;
@@ -255,15 +256,28 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
     return null;
   }
   const selectedPath = fs.realpathSync.native(result.filePaths[0]);
+  authorizedProjectRoots.add(selectedPath);
   projectRoot = selectedPath; // Store for path validation
   return selectedPath;
 });
 
-ipcMain.handle('project:setRoot', async () => {
-  // The renderer is not trusted to choose an arbitrary filesystem root.
-  // Only a path that was selected through the native directory picker may
-  // become the privileged root used by editor/reveal IPC handlers.
-  return Boolean(projectRoot);
+ipcMain.handle('project:setRoot', async (event, nextRoot) => {
+  if (!nextRoot || typeof nextRoot !== 'string' || !nextRoot.trim()) {
+    return false;
+  }
+
+  try {
+    const resolved = fs.realpathSync.native(nextRoot.trim());
+    if (!authorizedProjectRoots.has(resolved)) {
+      console.warn('project:setRoot rejected an unapproved project root');
+      return false;
+    }
+    projectRoot = resolved;
+    return true;
+  } catch (err) {
+    console.error('project:setRoot failed:', err instanceof Error ? err.message : String(err));
+    return false;
+  }
 });
 
 ipcMain.handle('editor:open', async (event, { filePath, editorId }) => {
