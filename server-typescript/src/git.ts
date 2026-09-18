@@ -199,6 +199,16 @@ async function dynamicConfigOverrides(): Promise<string[]> {
           const gitdir = m[1]!.trim();
           const abs = gitdir.startsWith("/") || /^[A-Za-z]:[\\/]/.test(gitdir) ? gitdir : join(root, gitdir);
           candidates.push(join(abs, "config"), join(abs, "config.worktree"));
+          const commondir = join(abs, "commondir");
+          if (existsSync(commondir)) {
+            const commonRef = readFileSync(commondir, "utf8").trim();
+            if (commonRef) {
+              const commonAbs = commonRef.startsWith("/") || /^[A-Za-z]:[\\/]/.test(commonRef)
+                ? commonRef
+                : join(abs, commonRef);
+              candidates.push(join(commonAbs, "config"));
+            }
+          }
         }
       }
     }
