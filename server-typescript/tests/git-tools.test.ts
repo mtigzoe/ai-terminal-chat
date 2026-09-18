@@ -96,6 +96,25 @@ describe("git tool security", () => {
     })).toBe("target.txt");
   });
 
+  it("stages a dangling symlink as a symlink", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.symlinkSync("missing-target.txt", path.join(root, "dangling.txt"));
+
+    const result = await runWithAllowedReadPaths(["dangling.txt"], () =>
+      gitAdd("dangling.txt", true),
+    );
+
+    expect(result).toEqual({ path: "dangling.txt", staged: true });
+    expect(execFileSync("git", ["ls-files", "--stage", "--", "dangling.txt"], {
+      cwd: root,
+      encoding: "utf8",
+    })).toMatch(/^120000 /);
+    expect(execFileSync("git", ["show", ":dangling.txt"], {
+      cwd: root,
+      encoding: "utf8",
+    })).toBe("missing-target.txt");
+  });
+
   it("refuses a commit containing staged paths outside the agent selection", async () => {
     execFileSync("git", ["init", "-q"], { cwd: root });
     execFileSync("git", ["add", "allowed.txt", "secret.txt"], { cwd: root });
