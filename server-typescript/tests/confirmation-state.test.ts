@@ -33,6 +33,17 @@ describe("Git index confirmation state", () => {
     const states = captureConfirmationFileStates(["__git_head__"]);
     expect(states[0]?.kind).toBe("git_head");
     expect(states[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    execFileSync("git", ["checkout", "-b", "other"], { cwd: root });
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
+  it("binds git_pull confirmations to HEAD and the index", () => {
+    expect(confirmationPathsForPending("git_pull", {})).toEqual([
+      "__git_head__",
+      "__git_index__",
+    ]);
   });
 
   it("binds git_commit pending actions to the index", () => {
