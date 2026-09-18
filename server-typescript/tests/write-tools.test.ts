@@ -312,8 +312,20 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "new.txt"), "utf-8")).toBe("created");
   });
 
+  it("accepts an insertion hunk at end of file", () => {
+    fs.writeFileSync(path.join(root, "append.txt"), "one\ntwo\n");
+    const patch = `--- a/append.txt
++++ b/append.txt
+@@ -3,0 +3,1 @@
++three
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "append.txt"), "utf-8")).toBe("one\ntwo\nthree\n");
+  });
+
   it("rejects mismatched unified hunk counts", () => {
-    fs.writeFileSync(path.join(root, "greeting.txt"), "hello\\n");
+    fs.writeFileSync(path.join(root, "greeting.txt"), "hello\n");
     const patch = `--- a/greeting.txt
 +++ b/greeting.txt
 @@ -1,2 +1,1 @@
