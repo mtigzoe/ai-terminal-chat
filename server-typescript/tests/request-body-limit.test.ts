@@ -17,7 +17,7 @@ describe("limitRequestBody", () => {
   it("rejects oversized chunked-style bodies without content-length", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode("x".repeat(2 * 1024 * 1024)));
+        controller.enqueue(new TextEncoder().encode("x".repeat(2 * 1024 * 1024 + 1)));
         controller.close();
       },
     });
