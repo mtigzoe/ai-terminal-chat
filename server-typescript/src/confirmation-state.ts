@@ -176,9 +176,41 @@ function fingerprintGitRemote(remote: string): ConfirmationFileState {
     const configParts: string[] = [];
     for (const configPath of configPaths) {
       if (!fs.existsSync(configPath)) continue;
+      const stat = fs.lstatSync(configPath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+      }
       configParts.push(configPath.endsWith("config.worktree") ? "\0worktree\0" : "\0config\0");
       configParts.push(fs.readFileSync(configPath, "utf8"));
     }
+
+    // Git also supports legacy file-based remotes in $GIT_DIR/remotes and
+    // $GIT_DIR/branches. Those files can change the destination/refspec
+    // without changing .git/config, so bind the confirmation to their full
+    // direct-file contents as well.
+    for (const directoryName of ["remotes", "branches"]) {
+      const directoryPath = path.join(gitDir, directoryName);
+      if (!fs.existsSync(directoryPath)) {
+        configParts.push(`\\0${directoryName}:missing\\0`);
+        continue;
+      }
+      const directoryStat = fs.lstatSync(directoryPath);
+      if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+        return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+      }
+      const entries = fs.readdirSync(directoryPath).sort();
+      configParts.push(`\\0${directoryName}:entries\\0`);
+      for (const entry of entries) {
+        const entryPath = path.join(directoryPath, entry);
+        const entryStat = fs.lstatSync(entryPath);
+        if (entryStat.isSymbolicLink() || !entryStat.isFile()) {
+          return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+        }
+        configParts.push(`\\0${directoryName}/${entry}\\0`);
+        configParts.push(fs.readFileSync(entryPath, "utf8"));
+      }
+    }
+
     return {
       kind: "git_remote",
       path: marker,
