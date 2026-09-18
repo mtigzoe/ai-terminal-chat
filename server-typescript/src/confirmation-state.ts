@@ -125,15 +125,6 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
 }function fingerprintGitRemote(remote: string): ConfirmationFileState {
   const marker = GIT_REMOTE_PREFIX + remote;
   try {
-    if (remote === "<default>") {
-      const gitEntry = path.join(getProjectRoot(), ".git");
-      const gitDir = fs.lstatSync(gitEntry).isFile()
-        ? path.resolve(getProjectRoot(), fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im)?.[1]?.trim() ?? "")
-        : gitEntry;
-      const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
-      return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(config).digest("hex") };
-    }
-    if (!/^[\w.-]+$/.test(remote) || !remote) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
     const gitEntry = path.join(getProjectRoot(), ".git");
     let gitDir = gitEntry;
     if (fs.lstatSync(gitEntry).isFile()) {
@@ -142,18 +133,31 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
       gitDir = path.resolve(getProjectRoot(), match[1]!.trim());
     }
     const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
-    const escaped = remote.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
-    const section = new RegExp("^\\[remote \"" + escaped + "\"\\]\\s*\\n([\\s\\S]*?)(?=^\\[|$)", "m").exec(config)?.[1] ?? "";
-    const urls = [...section.matchAll(/^\s*url\s*=\s*(.+)\s*$/gm)].map((m) => m[1]!.trim());
-    const pushUrls = [...section.matchAll(/^\s*pushurl\s*=\s*(.+)\s*$/gm)].map((m) => m[1]!.trim());
-    const fetch = section.match(/^\s*fetch\s*=\s*(.+)\s*$/m)?.[1]?.trim() ?? "";
-    const state = JSON.stringify({ urls, pushUrls, fetch });
+    if (remote === "<default>") {
+      return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(config).digest("hex") };
+    }
+    if (!/^[\w.-]+$/.test(remote) || !remote) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+    const lines = config.split(/\r?\n/);
+    const header = `[remote "${remote}"]`;
+    const values: string[] = [];
+    let inSection = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        inSection = trimmed === header;
+        continue;
+      }
+      if (!inSection) continue;
+      const match = /^(url|pushurl|fetch)\s*=\s*(.*)$/.exec(trimmed);
+      if (match) values.push(`${match[1]}=${match[2]!.trim()}`);
+    }
+    if (!inSection && values.length === 0) return { kind: "git_remote", path: marker, status: "missing", sha256: null };
+    const state = values.join("\n");
     return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(state).digest("hex") };
   } catch {
     return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
   }
 }
-
 export function captureConfirmationFileStates(paths: string[]): ConfirmationFileStates {
   const unique = [...new Set(paths.map((value) => String(value)).filter(Boolean))];
   return unique.map((value) =>
