@@ -134,38 +134,17 @@ function fingerprintGitRemote(remote: string): ConfirmationFileState {
       if (!match) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
       gitDir = path.resolve(getProjectRoot(), match[1]!.trim());
     }
-    const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
-    if (remote === "<default>") {
-      return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(config).digest("hex") };
-    }
-    if (!/^[\w.-]+$/.test(remote) || !remote) {
+    if (!remote || (remote !== "<default>" && !/^[\w.-]+$/.test(remote))) {
       return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
     }
-    const lines = config.split(/\r?\n/);
-    let inRemote = false;
-    const urls: string[] = [];
-    const pushUrls: string[] = [];
-    let fetch = "";
-    for (const line of lines) {
-      const section = /^\s*\[remote\s+"([^"]+)"\]\s*$/.exec(line);
-      if (section) {
-        inRemote = section[1] === remote;
-        continue;
-      }
-      if (/^\s*\[/.test(line)) {
-        inRemote = false;
-        continue;
-      }
-      if (!inRemote) continue;
-      const url = /^\s*url\s*=\s*(.+?)\s*$/.exec(line);
-      if (url) { urls.push(url[1]!.trim()); continue; }
-      const pushUrl = /^\s*pushurl\s*=\s*(.+?)\s*$/.exec(line);
-      if (pushUrl) { pushUrls.push(pushUrl[1]!.trim()); continue; }
-      const fetchValue = /^\s*fetch\s*=\s*(.+?)\s*$/.exec(line);
-      if (fetchValue) fetch = fetchValue[1]!.trim();
-    }
-    const state = JSON.stringify({ urls, pushUrls, fetch });
-    return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(state).digest("hex") };
+    const configPath = path.join(gitDir, "config");
+    const config = fs.readFileSync(configPath, "utf8");
+    return {
+      kind: "git_remote",
+      path: marker,
+      status: "present",
+      sha256: crypto.createHash("sha256").update(config).digest("hex"),
+    };
   } catch {
     return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
   }
