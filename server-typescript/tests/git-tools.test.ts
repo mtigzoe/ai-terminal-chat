@@ -18,8 +18,10 @@ describe("git tool security", () => {
   beforeEach(() => {
     root = makeRepoDir();
     setProjectRoot(root);
-    fs.writeFileSync(path.join(root, "allowed.txt"), "allowed\n");
-    fs.writeFileSync(path.join(root, "secret.txt"), "secret\n");
+    fs.writeFileSync(path.join(root, "allowed.txt"), "allowed
+");
+    fs.writeFileSync(path.join(root, "secret.txt"), "secret
+");
   });
 
   afterEach(() => {
@@ -64,10 +66,19 @@ describe("git tool security", () => {
     );
 
     expect(result).toEqual({ path: "allowed.txt", restored: true, unstaged: false });
-    expect(fs.readFileSync(path.join(root, "allowed.txt"), "utf8")).toBe("allowed\n");
+    expect(fs.readFileSync(path.join(root, "allowed.txt"), "utf8")).toBe("allowed
+");
   });
 
-  it("rejects a pull branch when no remote is supplied", async () => {\n    const result = await gitPull("", "main", true);\n\n    expect(result).toEqual({\n      error: "A remote is required when specifying a branch.",\n    });\n  });\n\n  it("refuses a commit containing staged paths outside the agent selection", async () => {
+  it("rejects a pull branch when no remote is supplied", async () => {
+    const result = await gitPull("", "main", true);
+
+    expect(result).toEqual({
+      error: "A remote is required when specifying a branch.",
+    });
+  });
+
+  it("refuses a commit containing staged paths outside the agent selection", async () => {
     execFileSync("git", ["init", "-q"], { cwd: root });
     execFileSync("git", ["add", "allowed.txt", "secret.txt"], { cwd: root });
 
