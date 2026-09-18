@@ -754,8 +754,11 @@ function extractPatchTargetPaths(patchText: string): string[] {
   const paths: string[] = [];
   const seen = new Set<string>();
 
-  const add = (raw: string) => {
-    const candidate = unquoteGitPath(raw);
+  const add = (raw: string, stripGitPrefix = false) => {
+    let candidate = unquoteGitPath(raw);
+    if (stripGitPrefix && /^(?:a|b)\//.test(candidate)) {
+      candidate = candidate.slice(2);
+    }
     if (!candidate || candidate === "/dev/null") return;
     if (seen.has(candidate)) return;
     seen.add(candidate);
@@ -773,7 +776,7 @@ function extractPatchTargetPaths(patchText: string): string[] {
 
     for (const prefix of ["+++ b/", "--- a/", "+++ ", "--- "]) {
       if (line.startsWith(prefix)) {
-        add(line.slice(prefix.length));
+        add(line.slice(prefix.length), prefix === "+++ " || prefix === "--- ");
         break;
       }
     }
