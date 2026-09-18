@@ -676,25 +676,33 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
   }
 }
 
-function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string): void {
-  const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string, lexicalPath: string): void {
   let payload: Buffer;
   let mode = "100644";
-  try {
-    const st = fs.fstatSync(fd);
-    if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory.");
-    mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";
-    payload = Buffer.alloc(st.size);
-    let offset = 0;
-    while (offset < st.size) {
-      const n = fs.readSync(fd, payload, offset, st.size - offset, offset);
-      if (n === 0) break;
-      offset += n;
+  const lexicalStat = fs.lstatSync(lexicalPath);
+
+  if (lexicalStat.isSymbolicLink()) {
+    payload = Buffer.from(fs.readlinkSync(lexicalPath, "utf8"), "utf8");
+    mode = "120000";
+  } else {
+    const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    try {
+      const st = fs.fstatSync(fd);
+      if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory.");
+      mode = (st.mode & 0o111) !== 0 ? "100755" : "100644";
+      payload = Buffer.alloc(st.size);
+      let offset = 0;
+      while (offset < st.size) {
+        const n = fs.readSync(fd, payload, offset, st.size - offset, offset);
+        if (n === 0) break;
+        offset += n;
+      }
+      if (offset < st.size) payload = payload.subarray(0, offset);
+    } finally {
+      fs.closeSync(fd);
     }
-    if (offset < st.size) payload = payload.subarray(0, offset);
-  } finally {
-    fs.closeSync(fd);
   }
+
   const hashInput = path.join(tmpdir(), `git-add-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
   try {
     fs.writeFileSync(hashInput, payload, { mode: 0o600 });
@@ -707,7 +715,6 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
   } finally {
     try { fs.unlinkSync(hashInput); } catch { /* best effort */ }
   }
-  return;
 }
 
 export function git_add(relPath: string, confirm = false): Record<string, unknown> {
@@ -727,15 +734,20 @@ export function git_add(relPath: string, confirm = false): Record<string, unknow
     return gitError;
   }
 
-  if (!fs.existsSync(filePath)) {
+  const root = getProjectRoot();
+  const lexicalPath = path.resolve(root, relPath.trim());
+  let lexicalStat: fs.Stats;
+  try {
+    lexicalStat = fs.lstatSync(lexicalPath);
+  } catch {
     return { error: `File does not exist: ${relPath}` };
   }
 
-  if (fs.statSync(filePath).isDirectory()) {
+  if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) {
     return { error: "git_add can only stage a single file, not a directory." };
   }
 
-  const rel = relativePath(filePath);
+  const rel = path.relative(root, lexicalPath);
 
   if (!confirm) {
     return {
@@ -746,7 +758,7 @@ export function git_add(relPath: string, confirm = false): Record<string, unknow
   }
 
   try {
-    stageFileWithoutFiltersForWriteTool(rel, filePath);
+    stageFileWithoutFiltersForWriteTool(rel, filePath, lexicalPath);
   } catch (exc) {
     return { error: `git add failed: ${exc instanceof Error ? exc.message : String(exc)}` };
   }
