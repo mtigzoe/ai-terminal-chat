@@ -632,26 +632,44 @@ export function apply_patch(
 }
 
 export function delete_file(relPath: string, confirm = false): Record<string, unknown> {
+  const root = getProjectRoot();
+  const lexicalPath = path.resolve(root, relPath.trim());
+  let lexicalStat: fs.Stats;
+  try {
+    lexicalStat = fs.lstatSync(lexicalPath);
+  } catch {
+    return { error: `File does not exist: ${relPath}` };
+  }
+
   let filePath: string;
   try {
     filePath = safePath(relPath);
   } catch (exc) {
-    return { error: String(exc) };
+    // A dangling in-project symlink has no resolvable target, but deleting
+    // the link itself is safe and should remain possible.
+    if (!lexicalStat.isSymbolicLink()) return { error: String(exc) };
+    try {
+      const target = fs.readlinkSync(lexicalPath, "utf8");
+      const targetPath = path.resolve(path.dirname(lexicalPath), target);
+      const targetParent = fs.realpathSync(path.dirname(targetPath));
+      if (!isPathWithinRoot(root, targetParent)) {
+        return { error: String(exc) };
+      }
+    } catch {
+      return { error: String(exc) };
+    }
+    filePath = lexicalPath;
   }
 
   if (isSensitivePath(filePath)) {
     return { error: `Refusing to delete sensitive file: ${relPath}` };
   }
 
-  if (filePath === getProjectRoot()) {
+  if (filePath === root) {
     return { error: "Refusing to delete the project root." };
   }
 
-  if (!fs.existsSync(filePath)) {
-    return { error: `File does not exist: ${relPath}` };
-  }
-
-  if (fs.statSync(filePath).isDirectory()) {
+  if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) {
     return {
       error: "delete_file can only delete a single file, not a directory.",
     };
@@ -660,14 +678,14 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
   if (!confirm) {
     return {
       requires_confirmation: true,
-      path: relativePath(filePath),
+      path: path.relative(root, lexicalPath),
       message: `'${relPath}' was NOT deleted. Ask the user to explicitly confirm this deletion in the chat, then call delete_file again with confirm=true.`,
     };
   }
 
   try {
     const { resolvedPath } = unlinkWithinProject(relPath);
-    return { path: relativePath(resolvedPath), deleted: true };
+    return { path: path.relative(root, resolvedPath), deleted: true };
   } catch (exc) {
     if (exc instanceof SecurityValidationError) {
       return { error: exc.message };
@@ -675,7 +693,6 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
     return { error: `Could not delete file: ${exc}` };
   }
 }
-
 function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string, lexicalPath: string): void {
   let payload: Buffer;
   let mode = "100644";
