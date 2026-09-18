@@ -36,6 +36,43 @@ describe("pending", () => {
     expect(getPending("tool-a")).toBeUndefined();
     expect(getPending("tool-b")).toBeUndefined();
   });
+
+  it("invalidates git_add confirmation when a symlink is retargeted", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { getProjectRoot } = await import("../src/security.ts");
+    const targetA = "__pending_symlink_target_a__.txt";
+    const targetB = "__pending_symlink_target_b__.txt";
+    const link = "__pending_symlink_link__.txt";
+    const root = getProjectRoot();
+    const absA = path.join(root, targetA);
+    const absB = path.join(root, targetB);
+    const absLink = path.join(root, link);
+    try {
+      fs.rmSync(absA, { force: true });
+      fs.rmSync(absB, { force: true });
+      fs.rmSync(absLink, { force: true });
+      fs.writeFileSync(absA, "same contents", "utf8");
+      fs.writeFileSync(absB, "same contents", "utf8");
+      fs.symlinkSync(targetA, absLink);
+
+      const action = createPending(
+        "git_add",
+        { path: link },
+        { requires_confirmation: true },
+      );
+
+      fs.unlinkSync(absLink);
+      fs.symlinkSync(targetB, absLink);
+
+      expect(popPending(action.action_id)).toBeUndefined();
+    } finally {
+      fs.rmSync(absLink, { force: true });
+      fs.rmSync(absA, { force: true });
+      fs.rmSync(absB, { force: true });
+    }
+  });
+
   it("invalidates create_file confirmation when the target appears", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
