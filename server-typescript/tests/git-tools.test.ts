@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { gitAdd, gitCommit, gitPull, gitRestore, runIsolatedGit } from "../src/git.ts";
+import { gitAdd, gitCommit, gitDiff, gitPull, gitRestore, runIsolatedGit } from "../src/git.ts";
 import { runWithAllowedReadPaths, setProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -163,6 +163,30 @@ describe("git tool security", () => {
       cwd: root,
       encoding: "utf8",
     })).toBe("missing-target.txt");
+  });
+
+  it("diffs the requested symlink instead of its target", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, "target.txt"), "target\\n");
+    fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+    execFileSync("git", ["add", "target.txt", "link.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    fs.writeFileSync(path.join(root, "target.txt"), "changed\\n");
+
+    const result = await runWithAllowedReadPaths(["link.txt"], () =>
+      gitDiff("link.txt", false),
+    );
+
+    expect(result).toMatchObject({ diff: "", truncated: false });
   });
 
   it("restores the requested symlink instead of its target", async () => {
