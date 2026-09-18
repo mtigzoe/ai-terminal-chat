@@ -101,8 +101,10 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
     // refs/heads/HEAD file. Otherwise a confirmed `git push ... HEAD`
     // could silently push a different commit after the preview.
     const isSymbolicHead = branch === "HEAD";
+    // git push accepts both short branch names and fully qualified refs such as
+    // refs/heads/main. Bind the confirmation to the ref Git will actually read.
     const ref = branch && !isSymbolicHead
-      ? `refs/heads/${branch}`
+      ? (branch.startsWith("refs/") ? branch : `refs/heads/${branch}`)
       : /^ref:\s*(.+)\s*$/.exec(head)?.[1]?.trim();
 
     if (!ref || !/^[A-Za-z0-9._/-]+$/.test(ref)) {
