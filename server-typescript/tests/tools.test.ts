@@ -591,6 +591,18 @@ describe("gitPush", () => {
   });
 });
 
+describe("git tool descriptions", () => {
+  it("describes restore as restoring from the index and keeps commit/push tools discoverable", async () => {
+    const { TOOL_SCHEMAS } = await import("../src/tools.ts");
+
+    expect(TOOL_SCHEMAS.git_restore.description).toContain("Git index");
+    expect(TOOL_SCHEMAS.git_restore.description).not.toContain("state in HEAD");
+    expect(TOOL_SCHEMAS.git_add.description).not.toContain("There is no git_commit or git_push tool");
+    expect(TOOL_SCHEMAS.git_commit).toBeDefined();
+    expect(TOOL_SCHEMAS.git_push).toBeDefined();
+  });
+});
+
 describe("new git tool registration", () => {
   it("has all new tools in TOOL_SCHEMAS", async () => {
     const { TOOL_SCHEMAS } = await import("../src/tools.ts");
