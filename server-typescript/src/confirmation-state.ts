@@ -239,7 +239,14 @@ export function confirmationPathsForPending(
       remote && /^[\w.-]+$/.test(remote) ? `${GIT_REMOTE_PREFIX}${remote}` : `${GIT_REMOTE_PREFIX}<default>`,
     ];
   }
-  if (toolName === "git_pull") return [GIT_HEAD_MARKER, GIT_INDEX_MARKER];
+  if (toolName === "git_pull") {
+    const remote = typeof args.remote === "string" ? args.remote.trim() : "";
+    return [
+      GIT_HEAD_MARKER,
+      GIT_INDEX_MARKER,
+      remote && /^[\w.-]+$/.test(remote) ? `${GIT_REMOTE_PREFIX}${remote}` : `${GIT_REMOTE_PREFIX}<default>`,
+    ];
+  }
   if (toolName === "apply_patch") {
     return patchTargetPaths(typeof args.patch === "string" ? args.patch : "");
   }
