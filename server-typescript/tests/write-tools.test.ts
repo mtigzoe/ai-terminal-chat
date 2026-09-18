@@ -399,6 +399,12 @@ describe("apply_patch", () => {
     expect((result as { error?: string }).error).toContain("Malformed unified diff line");
   });
 
+  it("rejects a malformed unified file header without a +++ line", () => {
+    const patch = `--- a/malformed-header.txt\n@@ -1 +1 @@\n-old\n+new\n`;
+    const result = apply_patch(patch, false);
+    expect((result as { error?: string }).error).toContain("missing +++ line");
+  });
+
   it("rejects mismatched unified hunk counts", () => {
     fs.writeFileSync(path.join(root, "greeting.txt"), "hello\n");
     const patch = `--- a/greeting.txt
