@@ -167,6 +167,46 @@ const SettingsPage = ({ host }) => {
     };
   }, [host]);
 
+  const persistSelection = async ({ providerName = provider, modelName = model, ollamaHost = ollamaHostname } = {}) => {
+    if (!providerName) return false;
+
+    const payload = {
+      provider: providerName,
+      model: modelName || undefined,
+    };
+    if (providerName.toLowerCase() === 'ollama') {
+      const hostname = String(ollamaHost || '').trim();
+      if (hostname) {
+        payload.ollama_base_url = hostname;
+      }
+    }
+
+    try {
+      const response = await axios.post(`${host}/providers/select`, payload);
+      const savedName = response.data.name || providerName;
+      const savedModel = response.data.model || modelName || '';
+      if (savedName.toLowerCase() === 'ollama') {
+        const savedHostname = formatOllamaHostname(response.data.base_url || ollamaHost);
+        writeStoredProvider({
+          provider: savedName,
+          model: savedModel,
+          ollama_hostname: savedHostname,
+        });
+      } else {
+        writeStoredProvider({ provider: savedName, model: savedModel });
+      }
+      return true;
+    } catch (error) {
+      setStatusIsError(true);
+      setStatusMessage(
+        error?.response?.data?.error ||
+          error?.message ||
+          'Could not persist provider selection.'
+      );
+      return false;
+    }
+  };
+
   const handleProviderChange = async (event) => {
     const nextProvider = event.target.value;
     setProvider(nextProvider);
@@ -183,8 +223,24 @@ const SettingsPage = ({ host }) => {
       setOllamaCliInstalled(null);
       setOllamaRunStatus('');
     }
-    writeStoredProvider({ provider: nextProvider });
+
+    // Provider selection is an application setting, not just a form draft.
+    // Persist it immediately so closing the app without pressing Save still
+    // restores the selected provider on the next launch.
+    await persistSelection({
+      providerName: nextProvider,
+      modelName: '',
+      ollamaHost: nextProvider.toLowerCase() === 'ollama'
+        ? (ollamaHostname.trim() || 'localhost:11434')
+        : '',
+    });
     await loadModels(nextProvider);
+  };
+
+  const handleModelChange = async (event) => {
+    const nextModel = event.target.value;
+    setModel(nextModel);
+    await persistSelection({ providerName: provider, modelName: nextModel });
   };
 
   const handleRunOllama = async () => {
@@ -415,6 +471,7 @@ const SettingsPage = ({ host }) => {
                   type="text"
                   value={ollamaHostname}
                   onChange={(event) => setOllamaHostname(event.target.value)}
+                  onBlur={() => persistSelection({ providerName: provider, modelName: model, ollamaHost: ollamaHostname })}
                   disabled={saving}
                   placeholder="localhost:11434"
                   autoComplete="url"
@@ -493,7 +550,7 @@ const SettingsPage = ({ host }) => {
                 <select
                   id="settings-model"
                   value={model}
-                  onChange={(event) => setModel(event.target.value)}
+                  onChange={handleModelChange}
                   disabled={saving || loadingModels}
                   aria-describedby="settings-model-help"
                   aria-busy={loadingModels}
@@ -513,6 +570,7 @@ const SettingsPage = ({ host }) => {
                     type="text"
                     value={model}
                     onChange={(event) => setModel(event.target.value)}
+                    onBlur={() => persistSelection({ providerName: provider, modelName: model })}
                     disabled={saving}
                     placeholder="Or type a custom model name"
                     aria-describedby="settings-model-help"
@@ -527,6 +585,7 @@ const SettingsPage = ({ host }) => {
                 type="text"
                 value={model}
                 onChange={(event) => setModel(event.target.value)}
+                onBlur={() => persistSelection({ providerName: provider, modelName: model })}
                 disabled={saving}
                 placeholder={loadingModels ? 'Loading models…' : 'Enter model name'}
                 aria-describedby="settings-model-help"
