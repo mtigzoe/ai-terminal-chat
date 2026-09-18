@@ -24,9 +24,12 @@ export function parseGitStatus(stdout = '') {
 
     const x = line[0] || ' ';
     const y = line[1] || ' ';
-    const isConflict = x === 'U' || y === 'U' || x === 'A' && y === 'A';
-    if (isConflict) conflicts += 1;
-    if (x !== ' ' && !isConflict) staged += 1;
+    const isConflict = x === 'U' || y === 'U' || x === 'A' && y === 'A' || x === 'D' && y === 'D';
+    if (isConflict) {
+      conflicts += 1;
+      continue;
+    }
+    if (x !== ' ') staged += 1;
     if (y !== ' ') modified += 1;
   }
 

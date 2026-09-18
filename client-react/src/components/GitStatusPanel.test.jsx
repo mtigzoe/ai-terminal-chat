@@ -35,9 +35,27 @@ describe('parseGitStatus', () => {
       branch: 'main',
       clean: false,
       staged: 1,
-      modified: 2,
+      modified: 1,
       untracked: 1,
       conflicts: 1,
+    });
+  });
+
+  test('counts DD as a conflict instead of staged and modified changes', () => {
+    const status = parseGitStatus([
+      '## main...origin/main',
+      'DD deleted-on-both-sides.txt',
+      'AA added-on-both-sides.txt',
+      'UU modified-on-both-sides.txt',
+    ].join('\n'));
+
+    expect(status).toMatchObject({
+      clean: false,
+      staged: 0,
+      changed: 0,
+      modified: 0,
+      untracked: 0,
+      conflicts: 3,
     });
   });
 });
