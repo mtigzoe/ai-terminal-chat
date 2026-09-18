@@ -115,6 +115,33 @@ describe("git tool security", () => {
     })).toBe("missing-target.txt");
   });
 
+  it("restores the requested symlink instead of its target", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, "target.txt"), "target\\n");
+    fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+    execFileSync("git", ["add", "target.txt", "link.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    fs.rmSync(path.join(root, "link.txt"));
+    fs.writeFileSync(path.join(root, "link.txt"), "changed\\n");
+
+    const result = await runWithAllowedReadPaths(["link.txt"], () =>
+      gitRestore("link.txt", false, true),
+    );
+
+    expect(result).toEqual({ path: "link.txt", restored: true, unstaged: false });
+    expect(fs.lstatSync(path.join(root, "link.txt")).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(path.join(root, "link.txt"), "utf8")).toBe("target.txt");
+  });
+
   it("refuses a commit containing staged paths outside the agent selection", async () => {
     execFileSync("git", ["init", "-q"], { cwd: root });
     execFileSync("git", ["add", "allowed.txt", "secret.txt"], { cwd: root });
