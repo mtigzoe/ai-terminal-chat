@@ -459,6 +459,31 @@ describe("gitRestore", () => {
     }
   });
 
+  it("restores the worktree from the index rather than HEAD", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-restore-index-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "HEAD\n");
+    spawnSync("git", ["add", "file.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+    try {
+      fs.writeFileSync(path.join(repoDir, "file.txt"), "INDEX\n");
+      const stageResult = await gitAdd("file.txt", true);
+      expect((stageResult as { error?: string }).error).toBeUndefined();
+
+      fs.writeFileSync(path.join(repoDir, "file.txt"), "WORKTREE\n");
+      const result = await gitRestore("file.txt", false, true);
+      expect((result as { error?: string }).error).toBeUndefined();
+      expect(fs.readFileSync(path.join(repoDir, "file.txt"), "utf8")).toBe("INDEX\n");
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects sensitive files", async () => {
     const repoDir = path.join(os.tmpdir(), `git-restore-sensitive-${Date.now()}`);
     fs.mkdirSync(repoDir, { recursive: true });
