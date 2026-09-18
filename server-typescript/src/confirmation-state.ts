@@ -54,7 +54,15 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
     }
     const resolved = safePath(normalized);
     if (!fs.existsSync(resolved)) {
-      return { path: normalized, status: "missing", sha256: null };
+      // A missing target can still be created later. Bind its resolved parent
+      // location so retargeting an in-project symlink in the parent directory
+      // cannot move the confirmed write to a different location.
+      const payload = Buffer.from("missing\\0" + resolved, "utf8");
+      return {
+        path: normalized,
+        status: "missing",
+        sha256: crypto.createHash("sha256").update(payload).digest("hex"),
+      };
     }
     const stat = fs.statSync(resolved);
     if (!stat.isFile() || stat.size > MAX_FINGERPRINT_BYTES) {
