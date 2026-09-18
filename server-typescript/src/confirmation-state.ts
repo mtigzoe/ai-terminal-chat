@@ -31,7 +31,20 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
       // link target and the target contents so approval cannot overwrite
       // changes made after the preview was generated.
       const target = fs.readlinkSync(lexicalPath, "utf8");
-      const resolvedTarget = safePath(normalized);
+      let resolvedTarget: string;
+      try {
+        resolvedTarget = safePath(normalized);
+      } catch {
+        // Dangling in-project symlinks are valid delete targets. Bind the
+        // link itself so a pending deletion remains confirmable without
+        // pretending its missing target is writable.
+        const payload = Buffer.from("symlink\\0" + target, "utf8");
+        return {
+          path: normalized,
+          status: "present",
+          sha256: crypto.createHash("sha256").update(payload).digest("hex"),
+        };
+      }
       const targetStat = fs.statSync(resolvedTarget);
       if (!targetStat.isFile() || targetStat.size > MAX_FINGERPRINT_BYTES) {
         const payload = Buffer.from("symlink\\0" + target, "utf8");
