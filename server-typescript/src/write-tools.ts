@@ -497,8 +497,11 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
   let srcIndex = 0; // 0-based
 
   for (const hunk of hunks) {
-    const targetStart = hunk.oldStart - 1;
-    if (hunk.oldStart < 1 || targetStart < srcIndex) {
+    const targetStart = hunk.oldCount === 0 ? 0 : hunk.oldStart - 1;
+    if (
+      (hunk.oldCount === 0 ? hunk.oldStart !== 0 : hunk.oldStart < 1) ||
+      targetStart < srcIndex
+    ) {
       throw new Error("patch hunks are out of order or overlap");
     }
     while (srcIndex < targetStart) {
