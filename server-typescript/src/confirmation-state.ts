@@ -80,7 +80,8 @@ export function confirmationPathsForPending(
   if (
     toolName === "write_file" ||
     toolName === "delete_file" ||
-    toolName === "git_add"
+    toolName === "git_add" ||
+    toolName === "git_restore"
   ) {
     const target = typeof args.path === "string" ? args.path.trim() : "";
     return target ? [target] : [];
