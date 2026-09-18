@@ -82,6 +82,24 @@ describe('GitStatusPanel', () => {
     expect(document.querySelector('#git-status-mount')).toBeNull();
   });
 
+  test('does not update state or restart polling after unmount during an in-flight request', async () => {
+    let resolveRequest;
+    axios.post.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRequest = resolve;
+    }));
+
+    const { unmount } = render(<GitStatusPanel />);
+    unmount();
+
+    resolveRequest({
+      data: { stdout: '## main...origin/main\\n M late.txt\\n' },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
   test('queries the terminal endpoint with git status', async () => {
     render(<GitStatusPanel />);
 
