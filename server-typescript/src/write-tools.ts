@@ -321,6 +321,9 @@ function applyUnifiedDiffSecure(
   if (filePatches.length === 0) {
     return { files: [], error: "Could not parse any file hunks from the patch." };
   }
+  if (filePatches.some((fp) => fp.hunks.length === 0)) {
+    return { files: [], error: "Patch contains a file header without any hunks." };
+  }
 
   // Dry-run or apply each file through secure read/write.
   for (const fp of filePatches) {
