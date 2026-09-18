@@ -64,6 +64,12 @@ describe("Git index confirmation state", () => {
     expect(confirmationPathsForPending("git_pull", {})).toEqual([
       "__git_head__",
       "__git_index__",
+      "__git_remote__:<default>",
+    ]);
+    expect(confirmationPathsForPending("git_pull", { remote: "origin" })).toEqual([
+      "__git_head__",
+      "__git_index__",
+      "__git_remote__:origin",
     ]);
   });
 
