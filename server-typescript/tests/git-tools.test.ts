@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { gitAdd, gitCommit, gitPull, gitRestore } from "../src/git.ts";
+import { gitAdd, gitCommit, gitPull, gitRestore, runIsolatedGit } from "../src/git.ts";
 import { runWithAllowedReadPaths, setProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -42,6 +42,41 @@ describe("git tool security", () => {
     expect(result).toEqual({
       error: "Access denied: 'secret.txt' is not selected for the agent.",
     });
+  });
+
+  it("applies dynamic Git config overrides from a linked worktree common config", async () => {
+    execFileSync("git", ["init", "-q", "--initial-branch=main"], { cwd: root });
+    fs.writeFileSync(path.join(root, "seed.txt"), "seed\\n");
+    execFileSync("git", ["add", "seed.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-"));
+    fs.rmSync(worktree, { recursive: true, force: true });
+    execFileSync("git", ["worktree", "add", "-q", worktree, "-b", "linked"], { cwd: root });
+
+    try {
+      execFileSync("git", ["config", "url.file:///outside/.insteadOf", "https://example.com/"], { cwd: root });
+      execFileSync("git", ["remote", "add", "origin", "https://example.com/repo.git"], { cwd: root });
+
+      setProjectRoot(worktree);
+      const result = await runIsolatedGit(["remote", "get-url", "origin"]);
+
+      expect(result.code).toBe(0);
+      expect(result.stdout.trim()).toBe("https://example.com/repo.git");
+    } finally {
+      setProjectRoot(root);
+      try { execFileSync("git", ["worktree", "remove", "-f", worktree], { cwd: root }); } catch {}
+      fs.rmSync(worktree, { recursive: true, force: true });
+    }
   });
 
   it("restores a deleted tracked file from HEAD", async () => {
