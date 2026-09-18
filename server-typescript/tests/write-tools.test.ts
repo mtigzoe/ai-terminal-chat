@@ -120,6 +120,22 @@ describe("write_file", () => {
     expect(fs.existsSync(path.join(root, "brand-new.txt"))).toBe(false);
   });
 
+  it("refuses to modify a hard-linked file", () => {
+    const target = path.join(root, "outside-target.txt");
+    const linked = path.join(root, "linked.txt");
+    fs.writeFileSync(target, "original");
+    try {
+      fs.linkSync(target, linked);
+    } catch {
+      return;
+    }
+
+    const result = write_file("linked.txt", "modified", true);
+    expect((result as { error?: string }).error).toContain("hard-linked");
+    expect(fs.readFileSync(target, "utf-8")).toBe("original");
+    expect(fs.readFileSync(linked, "utf-8")).toBe("original");
+  });
+
   it("confirm=true overwrites existing file", () => {
     fs.writeFileSync(path.join(root, "doc.txt"), "old");
     const result = write_file("doc.txt", "new", true);
