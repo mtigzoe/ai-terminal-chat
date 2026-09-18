@@ -300,7 +300,6 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
     for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
     try { return await fn(); }
     finally { for (const entry of changed) { try { writeFileSync(entry.path, entry.content, "utf8"); } catch { } } }
-  });
 }
 
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
