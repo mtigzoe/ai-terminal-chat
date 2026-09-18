@@ -1262,6 +1262,32 @@ export function writeFileWithinProject(
  */
 export function unlinkWithinProject(inputPath: string): { resolvedPath: string } {
   const root = getProjectRoot();
+
+  // Deletion must remove the requested directory entry, not a symlink's
+  // target. openWithinProject() intentionally follows an in-project final
+  // symlink for file I/O, which is correct for reads/writes but would make
+  // delete_file("link") delete the target file instead of the link itself.
+  const lexicalPath = resolve(root, inputPath.trim());
+  try {
+    const lexicalStat = lstatSync(lexicalPath);
+    if (lexicalStat.isSymbolicLink()) {
+      const target = safePath(inputPath);
+      if (!isPathWithinRoot(root, target)) {
+        throw new SecurityValidationError(
+          "Access outside the project directory is not allowed.",
+        );
+      }
+      rmSync(lexicalPath);
+      return { resolvedPath: lexicalPath };
+    }
+  } catch (err) {
+    if (err instanceof SecurityValidationError) throw err;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new SecurityValidationError("File disappeared before deletion.");
+    }
+    throw err;
+  }
+
   const { fd, resolvedPath } = openWithinProject(
     inputPath,
     fsConstants.O_RDONLY,
