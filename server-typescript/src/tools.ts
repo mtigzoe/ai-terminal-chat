@@ -181,7 +181,7 @@ export const TOOL_SCHEMAS: ToolSchemas = {
   },
   git_restore: {
     description:
-      "Restore a file to its state in HEAD (or unstage it if staged=true). Requires confirmation: calling without confirm=true will NOT restore anything, it only reports what would be restored. Only call it again with confirm=true after the user has explicitly agreed.",
+      "Restore a file's working-tree contents to the version currently recorded in the Git index (or unstage it if staged=true). Requires confirmation: calling without confirm=true will NOT restore anything, it only reports what would be restored. Only call it again with confirm=true after the user has explicitly agreed.",
     parameters: {
       type: "object",
       properties: {
@@ -325,7 +325,7 @@ export const TOOL_SCHEMAS: ToolSchemas = {
   },
   git_add: {
     description:
-      "Stages a single file's current changes for the next commit (git add). This only updates the git index — it does not commit, push, or change any file's contents. There is no git_commit or git_push tool, and no other tool can commit or push either — those actions are not available. Requires confirmation: calling without confirm=true will NOT stage anything, it only reports what would be staged. Only call it again with confirm=true after the user has explicitly agreed.",
+      "Stages a single file's current changes for the next commit (git add). This only updates the git index — it does not commit, push, or change any file's contents. Requires confirmation: calling without confirm=true will NOT stage anything, it only reports what would be staged. Only call it again with confirm=true after the user has explicitly agreed.",
     parameters: {
       type: "object",
       properties: {
