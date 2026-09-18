@@ -443,8 +443,7 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
       const next = lines[i + 1] ?? "";
       const newHdr = /^\+\+\+ (?:b\/)?(.+)$/.exec(next);
       if (!newHdr) {
-        i += 1;
-        continue;
+        throw new Error("Malformed unified diff header: missing +++ line.");
       }
       const newPath = stripPatchPath(newHdr[1] ?? "");
       current = { oldPath, newPath, hunks: [] };
@@ -892,6 +891,12 @@ function generateUnifiedDiff(
     suffix += 1;
   }
 
+  // If EOF newline state changes, the hunk must reach the final line so the
+  // standard newline marker can be attached to a line in the hunk.
+  if (oldData.trailingNewline !== newData.trailingNewline) {
+    suffix = 0;
+  }
+
   const oldChangedEnd = oldLines.length - suffix;
   const newChangedEnd = newLines.length - suffix;
   const oldChanged = oldLines.slice(prefix, oldChangedEnd);
@@ -903,15 +908,6 @@ function generateUnifiedDiff(
   ];
 
   if (oldChanged.length === 0 && newChanged.length === 0) {
-    if (oldData.trailingNewline !== newData.trailingNewline) {
-      const markerLine = oldData.trailingNewline
-        ? "-\\ No newline at end of file"
-        : "+\\ No newline at end of file";
-      diff.push(
-        `@@ -${Math.max(1, prefix)},0 +${Math.max(1, prefix)},0 @@`,
-        markerLine,
-      );
-    }
     return diff.join("\n");
   }
 
