@@ -274,4 +274,29 @@ describe("apply_patch", () => {
     expect((result as { error: string }).error).toBeDefined();
     expect((result as { error: string }).error.toLowerCase()).toContain("too large");
   });
+
+  it("preserves a missing trailing newline", () => {
+    fs.writeFileSync(path.join(root, "greeting.txt"), "hello");
+    const patch = `--- a/greeting.txt
++++ b/greeting.txt
+@@ -1 +1 @@
+-hello
++hello world
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello world");
+  });
+
+  it("rejects mismatched unified hunk counts", () => {
+    fs.writeFileSync(path.join(root, "greeting.txt"), "hello\\n");
+    const patch = `--- a/greeting.txt
++++ b/greeting.txt
+@@ -1,2 +1,1 @@
+-hello
++hello world
+`;
+    const result = apply_patch(patch, false);
+    expect((result as { error: string }).error).toContain("line counts do not match");
+  });
 });
