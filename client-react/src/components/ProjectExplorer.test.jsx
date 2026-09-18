@@ -292,6 +292,10 @@ test('mounting the explorer does not wipe Chat-granted allowed paths', async () 
   });
 
 test('shift-click selects the visible file range and ignores files hidden by the filter', async () => {
+  // Keep this stateful-selection test isolated from selections persisted by
+  // earlier ProjectExplorer tests.
+  localStorage.removeItem('ai-terminal-chat:allowed-paths');
+  localStorage.removeItem(`project-explorer:${host}:selected`);
   const user = userEvent.setup();
   mockProjectList({
     '.': [
