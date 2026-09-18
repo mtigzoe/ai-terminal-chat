@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { gitCommit, gitRestore } from "../src/git.ts";
+import { gitCommit, gitPull, gitRestore } from "../src/git.ts";
 import { runWithAllowedReadPaths, setProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -67,7 +67,7 @@ describe("git tool security", () => {
     expect(fs.readFileSync(path.join(root, "allowed.txt"), "utf8")).toBe("allowed\n");
   });
 
-  it("refuses a commit containing staged paths outside the agent selection", async () => {
+  it("rejects a pull branch when no remote is supplied", async () => {\n    const result = await gitPull("", "main", true);\n\n    expect(result).toEqual({\n      error: "A remote is required when specifying a branch.",\n    });\n  });\n\n  it("refuses a commit containing staged paths outside the agent selection", async () => {
     execFileSync("git", ["init", "-q"], { cwd: root });
     execFileSync("git", ["add", "allowed.txt", "secret.txt"], { cwd: root });
 
