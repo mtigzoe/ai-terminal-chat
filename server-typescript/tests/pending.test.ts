@@ -37,6 +37,47 @@ describe("pending", () => {
     expect(getPending("tool-b")).toBeUndefined();
   });
 
+  it("invalidates git push confirmation when common worktree remote config changes", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const { execFileSync } = await import("node:child_process");
+    const { getProjectRoot, setProjectRoot } = await import("../src/security.ts");
+
+    const originalRoot = getProjectRoot();
+    const repoRoot = path.join(os.tmpdir(), `pending-worktree-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const worktreeRoot = `${repoRoot}-linked`;
+    try {
+      fs.mkdirSync(repoRoot, { recursive: true });
+      execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+      fs.writeFileSync(path.join(repoRoot, "file.txt"), "initial\n");
+      execFileSync("git", ["add", "file.txt"], { cwd: repoRoot });
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "initial"], { cwd: repoRoot });
+      execFileSync("git", ["remote", "add", "origin", "https://example.com/one.git"], { cwd: repoRoot });
+      execFileSync("git", ["worktree", "add", "-q", worktreeRoot], { cwd: repoRoot });
+
+      setProjectRoot(worktreeRoot);
+      const action = createPending(
+        "git_push",
+        { remote: "origin", branch: "main" },
+        { requires_confirmation: true },
+      );
+
+      execFileSync("git", ["remote", "set-url", "origin", "https://example.com/two.git"], { cwd: repoRoot });
+
+      expect(popPending(action.action_id)).toBeUndefined();
+    } finally {
+      setProjectRoot(originalRoot);
+      try {
+        execFileSync("git", ["worktree", "remove", "--force", worktreeRoot], { cwd: repoRoot });
+      } catch {
+        // best effort
+      }
+      fs.rmSync(worktreeRoot, { recursive: true, force: true });
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("invalidates git_add confirmation when a symlink is retargeted", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
