@@ -30,6 +30,7 @@ describe("Git index confirmation state", () => {
 
   it("binds git_push confirmations to the current local HEAD", () => {
     expect(confirmationPathsForPending("git_push", {})).toEqual(["__git_head__"]);
+    expect(confirmationPathsForPending("git_push", { branch: "other" })).toEqual(["__git_push_head__:other"]);
     const states = captureConfirmationFileStates(["__git_head__"]);
     expect(states[0]?.kind).toBe("git_head");
     expect(states[0]?.status).toBe("present");
@@ -37,6 +38,12 @@ describe("Git index confirmation state", () => {
 
     execFileSync("git", ["checkout", "-b", "other"], { cwd: root });
     expect(confirmationFileStatesMatch(states)).toBe(false);
+
+    const branchStates = captureConfirmationFileStates(["__git_push_head__:other"]);
+    expect(branchStates[0]?.kind).toBe("git_head");
+    expect(confirmationFileStatesMatch(branchStates)).toBe(true);
+    execFileSync("git", ["commit", "--allow-empty", "-m", "advance"], { cwd: root, env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.com" } });
+    expect(confirmationFileStatesMatch(branchStates)).toBe(false);
   });
 
   it("binds git_pull confirmations to HEAD and the index", () => {
