@@ -125,6 +125,14 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
 }function fingerprintGitRemote(remote: string): ConfirmationFileState {
   const marker = GIT_REMOTE_PREFIX + remote;
   try {
+    if (remote === "<default>") {
+      const gitEntry = path.join(getProjectRoot(), ".git");
+      const gitDir = fs.lstatSync(gitEntry).isFile()
+        ? path.resolve(getProjectRoot(), fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\\s*(.+)\\s*$/im)?.[1]?.trim() ?? "")
+        : gitEntry;
+      const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
+      return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(config).digest("hex") };
+    }
     if (!/^[\w.-]+$/.test(remote) || !remote) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
     const gitEntry = path.join(getProjectRoot(), ".git");
     let gitDir = gitEntry;
