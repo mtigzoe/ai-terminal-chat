@@ -339,7 +339,7 @@ function patchTargetPaths(patch: string): string[] {
       if (newPath) paths.push(newPath);
       continue;
     }
-    for (const prefix of ["--- a/", "+++ b/"]) {
+    for (const prefix of ["--- a/", "+++ b/", "--- ", "+++ "]) {
       if (!line.startsWith(prefix)) continue;
       const candidate = line.slice(prefix.length).split("\t")[0]?.trim();
       if (candidate && candidate !== "/dev/null") paths.push(candidate);
