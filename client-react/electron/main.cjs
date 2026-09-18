@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { handleEditorOpen, getAvailableEditors } = require('./editor-handler.cjs');
 const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl } = require('./security-utils.cjs');
+const { createHealthChallenge, verifyHealthProof } = require('./health-check.cjs');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -56,6 +57,7 @@ function bundledBackendPath() {
 
 function checkBackend() {
   return new Promise((resolve) => {
+    const challenge = createHealthChallenge();
     const request = http.get(
       {
         hostname: BACKEND_HOST,
@@ -64,6 +66,7 @@ function checkBackend() {
         timeout: 1000,
         headers: {
           'Authorization': `Bearer ${HEALTH_TOKEN}`,
+          'X-AI-Terminal-Chat-Health-Challenge': challenge,
         },
       },
       (response) => {
@@ -72,14 +75,11 @@ function checkBackend() {
         response.on('end', () => {
           try {
             const parsed = JSON.parse(data);
-            if (
+            resolve(
               parsed.status === 'ok' &&
-              parsed.app === 'ai-terminal-chat'
-            ) {
-              resolve(true);
-            } else {
-              resolve(false);
-            }
+              parsed.app === 'ai-terminal-chat' &&
+              verifyHealthProof(HEALTH_TOKEN, challenge, parsed.proof)
+            );
           } catch {
             resolve(false);
           }
