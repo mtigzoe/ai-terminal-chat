@@ -73,7 +73,7 @@ describe("Git repository-config code execution audit", () => {
     it("fetch: remote.uploadpack can execute arbitrary command", async () => {
       writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
     uploadpack = echo "EXECUTED_UPLOADPACK" > /tmp/uploadpack_executed.txt
 `);
       const result = await gitFetch("origin");
@@ -83,7 +83,7 @@ describe("Git repository-config code execution audit", () => {
     it("pull: remote.uploadpack can execute arbitrary command", async () => {
       writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
     uploadpack = echo "EXECUTED_UPLOADPACK_PULL" > /tmp/uploadpack_pull.txt
 `);
       const result = await gitPull("origin", "main", true);
@@ -95,7 +95,7 @@ describe("Git repository-config code execution audit", () => {
     it("push: remote.receivepack can execute arbitrary command", async () => {
       writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
     receivepack = echo "EXECUTED_RECEIVEPACK" > /tmp/receivepack_executed.txt
 `);
       const result = await gitPush("origin", "main", true);
@@ -107,7 +107,7 @@ describe("Git repository-config code execution audit", () => {
     it("fetch: remote.proxy can execute arbitrary command", async () => {
       writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
     proxy = echo "EXECUTED_PROXY" > /tmp/proxy_executed.txt
 `);
       const result = await gitFetch("origin");
@@ -275,7 +275,7 @@ describe("Git repository-config code execution audit", () => {
       await gitCommit("initial", true);
       writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
 `);
       const result = await gitPush("origin", "main", true);
       expect(result.error).toBeDefined();
@@ -313,7 +313,7 @@ describe("Argument validation - verify -- positioning", () => {
   it("gitFetch uses -- before remote name", async () => {
     writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
 `);
     const result = await gitFetch("origin");
     expect(result.error).toBeDefined();
@@ -322,7 +322,7 @@ describe("Argument validation - verify -- positioning", () => {
   it("gitPull uses -- before remote name", async () => {
     writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
 `);
     const result = await gitPull("origin", "main", true);
     expect(result.error).toBeDefined();
@@ -331,7 +331,7 @@ describe("Argument validation - verify -- positioning", () => {
   it("gitPush uses -- before remote name", async () => {
     writeGitConfig(repoDir, `
 [remote "origin"]
-    url = https://github.com/test/test.git
+    url = file:///definitely/nonexistent/git-audit-remote.git
 `);
     const result = await gitPush("origin", "main", true);
     expect(result.error).toBeDefined();

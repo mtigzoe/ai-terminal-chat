@@ -292,6 +292,12 @@ test('mounting the explorer does not wipe Chat-granted allowed paths', async () 
   });
 
 test('shift-click selects the visible file range and ignores files hidden by the filter', async () => {
+  // Use a unique storage key so this stateful-selection test cannot inherit
+  // persisted selection from another ProjectExplorer instance.
+  const shiftHost = 'http://localhost:9000/shift-range-test';
+  localStorage.removeItem('ai-terminal-chat:allowed-paths');
+  localStorage.removeItem(`project-explorer:${shiftHost}:selected`);
+  sessionStorage.removeItem(`project-explorer:${shiftHost}:selected`);
   const user = userEvent.setup();
   mockProjectList({
     '.': [
@@ -301,7 +307,7 @@ test('shift-click selects the visible file range and ignores files hidden by the
     ],
   });
 
-  render(<ProjectExplorer host={host} />);
+  render(<ProjectExplorer host={shiftHost} />);
   const checkboxA = await screen.findByRole('checkbox', { name: /select a\.txt for the agent/i });
   const checkboxC = screen.getByRole('checkbox', { name: /select c\.txt for the agent/i });
 
@@ -315,6 +321,7 @@ test('shift-click selects the visible file range and ignores files hidden by the
   expect(checkboxC).toBeChecked();
 
   await user.click(screen.getByRole('button', { name: /clear selection/i }));
+  await waitFor(() => expect(checkboxA).not.toBeChecked());
   await user.click(checkboxA);
   await user.type(screen.getByLabelText(/filter files and folders/i), 'c');
 

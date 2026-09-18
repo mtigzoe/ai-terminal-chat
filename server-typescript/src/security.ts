@@ -1118,6 +1118,14 @@ function writeFileWithinProjectWindows(
         "Refusing to write to a non-file object.",
       );
     }
+    // Windows hardlinks can expose the same inode through another directory
+    // entry outside the project. Refuse in-place mutation when the file has
+    // multiple links, matching the POSIX write path above.
+    if (st.nlink > 1) {
+      throw new SecurityValidationError(
+        "Refusing to modify a hard-linked file with multiple directory entries.",
+      );
+    }
     // Reconstruct a path for assertOpenedWithinProject best-effort reporting
     // by using parentOpenPath/base only for the error message path — the
     // security decision is that parentFd was verified and the child was
@@ -1235,6 +1243,19 @@ export function writeFileWithinProject(
     }
 
     try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile()) {
+        throw new SecurityValidationError("Refusing to write to a non-file object.");
+      }
+      // A hard-linked file can have another directory entry outside the
+      // project. Mutating the inode in place would therefore modify that
+      // outside file too. Refuse multi-link files rather than crossing the
+      // project boundary through an otherwise ordinary-looking path.
+      if (opened.nlink > 1) {
+        throw new SecurityValidationError(
+          "Refusing to modify a hard-linked file with multiple directory entries.",
+        );
+      }
       const resolvedPath = assertOpenedWithinProject(fd, fileOpenPath);
       const bytesWritten = writeBufferToFd(fd, contents);
       return { resolvedPath, bytesWritten };
@@ -1262,6 +1283,59 @@ export function writeFileWithinProject(
  */
 export function unlinkWithinProject(inputPath: string): { resolvedPath: string } {
   const root = getProjectRoot();
+
+  // Deletion must remove the requested directory entry, not a symlink's
+  // target. openWithinProject() intentionally follows an in-project final
+  // symlink for file I/O, which is correct for reads/writes but would make
+  // delete_file("link") delete the target file instead of the link itself.
+  const lexicalPath = resolve(root, inputPath.trim());
+  try {
+    const lexicalStat = lstatSync(lexicalPath);
+    if (lexicalStat.isSymbolicLink()) {
+      // Pin the parent directory before deleting the link entry. Deleting
+      // through the original lexical path would let a concurrent parent
+      // directory -> symlink/junction swap redirect rmSync outside the
+      // project between lstat() and unlink().
+      const parentPath = dirname(lexicalPath);
+      let parentReal: string;
+      try {
+        parentReal = realpathSync(parentPath);
+      } catch {
+        throw new SecurityValidationError(
+          "Parent directory disappeared before deletion.",
+        );
+      }
+      if (!isPathWithinRoot(root, parentReal)) {
+        throw new SecurityValidationError(
+          "Access outside the project directory is not allowed.",
+        );
+      }
+      const pinnedPath = join(parentReal, basename(lexicalPath));
+      let pinnedStat;
+      try {
+        pinnedStat = lstatSync(pinnedPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new SecurityValidationError("File disappeared before deletion.");
+        }
+        throw err;
+      }
+      if (!pinnedStat.isSymbolicLink()) {
+        throw new SecurityValidationError(
+          "File was replaced before deletion; refusing to delete.",
+        );
+      }
+      rmSync(pinnedPath);
+      return { resolvedPath: pinnedPath };
+    }
+  } catch (err) {
+    if (err instanceof SecurityValidationError) throw err;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new SecurityValidationError("File disappeared before deletion.");
+    }
+    throw err;
+  }
+
   const { fd, resolvedPath } = openWithinProject(
     inputPath,
     fsConstants.O_RDONLY,

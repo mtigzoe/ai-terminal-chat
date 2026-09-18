@@ -74,6 +74,7 @@ export default function GitStatusPanel() {
   const lastLine = useRef('');
   const inFlight = useRef(false);
   const timerRef = useRef(null);
+  const mountedRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     if (inFlight.current) return;
@@ -85,6 +86,7 @@ export default function GitStatusPanel() {
         { timeout: 8000 },
       );
       const nextStatus = parseGitStatus(response.data?.stdout || '');
+      if (!mountedRef.current) return;
       setStatus(nextStatus);
       setError('');
       const line = formatGitStatusLine(nextStatus);
@@ -94,6 +96,7 @@ export default function GitStatusPanel() {
       }
     } catch (e) {
       const msg = e.response?.data?.error || (e.code === 'ECONNABORTED' ? 'Git status timed out' : 'Git status unavailable');
+      if (!mountedRef.current) return;
       setError(msg);
       setStatus(null);
       const line = `Git status — ${msg}`;
@@ -107,7 +110,9 @@ export default function GitStatusPanel() {
   }, [host]);
 
   useEffect(() => {
+    mountedRef.current = true;
     const schedule = () => {
+      if (!mountedRef.current) return;
       const delay = document.visibilityState === 'hidden' ? POLL_MS_HIDDEN : POLL_MS_ACTIVE;
       timerRef.current = window.setTimeout(async () => {
         await fetchStatus();
@@ -118,7 +123,9 @@ export default function GitStatusPanel() {
     fetchStatus();
     schedule();
     return () => {
+      mountedRef.current = false;
       if (timerRef.current) window.clearTimeout(timerRef.current);
+      timerRef.current = null;
     };
   }, [fetchStatus]);
 

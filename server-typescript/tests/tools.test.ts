@@ -459,6 +459,55 @@ describe("gitRestore", () => {
     }
   });
 
+  it("restores the worktree from the index rather than HEAD", async () => {
+    const repoDir = path.join(os.tmpdir(), `git-restore-index-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "HEAD\n");
+    spawnSync("git", ["add", "file.txt"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+    try {
+      fs.writeFileSync(path.join(repoDir, "file.txt"), "INDEX\n");
+      const stageResult = await gitAdd("file.txt", true);
+      expect((stageResult as { error?: string }).error).toBeUndefined();
+
+      fs.writeFileSync(path.join(repoDir, "file.txt"), "WORKTREE\n");
+      const result = await gitRestore("file.txt", false, true);
+      expect((result as { error?: string }).error).toBeUndefined();
+      expect(fs.readFileSync(path.join(repoDir, "file.txt"), "utf8")).toBe("INDEX\n");
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores executable mode from the index without replacing it with a regular file", async () => {
+    if (process.platform === "win32") return;
+    const repoDir = path.join(os.tmpdir(), `git-restore-mode-${Date.now()}`);
+    fs.mkdirSync(repoDir, { recursive: true });
+    gitInit(repoDir);
+    const file = path.join(repoDir, "script.sh");
+    fs.writeFileSync(file, "#!/bin/sh\necho ok\n");
+    fs.chmodSync(file, 0o755);
+    spawnSync("git", ["add", "script.sh"], { cwd: repoDir, stdio: "ignore" });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+    const originalRoot = getProjectRoot();
+    setProjectRoot(repoDir);
+    try {
+      fs.chmodSync(file, 0o644);
+      const result = await gitRestore("script.sh", false, true);
+      expect((result as { error?: string }).error).toBeUndefined();
+      expect(fs.statSync(file).mode & 0o111).not.toBe(0);
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects sensitive files", async () => {
     const repoDir = path.join(os.tmpdir(), `git-restore-sensitive-${Date.now()}`);
     fs.mkdirSync(repoDir, { recursive: true });
@@ -539,6 +588,18 @@ describe("gitPush", () => {
     const result = await gitPush("origin", "branch with spaces", true);
     expect(result.error).toBeDefined();
     expect(String(result.error)).toContain("Invalid branch name");
+  });
+});
+
+describe("git tool descriptions", () => {
+  it("describes restore as restoring from the index and keeps commit/push tools discoverable", async () => {
+    const { TOOL_SCHEMAS } = await import("../src/tools.ts");
+
+    expect(TOOL_SCHEMAS.git_restore.description).toContain("Git index");
+    expect(TOOL_SCHEMAS.git_restore.description).not.toContain("state in HEAD");
+    expect(TOOL_SCHEMAS.git_add.description).not.toContain("There is no git_commit or git_push tool");
+    expect(TOOL_SCHEMAS.git_commit).toBeDefined();
+    expect(TOOL_SCHEMAS.git_push).toBeDefined();
   });
 });
 

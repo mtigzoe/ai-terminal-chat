@@ -23,7 +23,7 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
   const readStored = (key, fallback) => { try { const raw = localStorage.getItem(`${storageKey}:${key}`) ?? sessionStorage.getItem(`${storageKey}:${key}`); if (!raw) return fallback; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : fallback; } catch { return fallback; } };
   const readGrantedPaths = () => { try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : []; } catch { return []; } };
-  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set([...readStored('selected', []), ...readGrantedPaths()])); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const skipNextPersist = useRef(false); const treeHasFocusRef = useRef(false); const childrenRef = useRef({}); const loadGens = useRef(new Map()); const explorerEpoch = useRef(0); const pendingExpand = useRef(new Set());
+  const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set([...readStored('selected', []), ...readGrantedPaths()])); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const treeHasFocusRef = useRef(false); const childrenRef = useRef({}); const loadGens = useRef(new Map()); const explorerEpoch = useRef(0); const pendingExpand = useRef(new Set()); const skipNextPersist = useRef(false);
 
   const entryName = (entry) => entry?.name || entry?.path || ''; const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir; const entryPath = (entry, parentPath = '.') => { const name = entryName(entry); if (!name) return ''; if (entry?.path) return entry.path; if (!parentPath || parentPath === '.') return name; return `${parentPath.replace(/[\\/]$/, '')}/${name}`; };
   const typeLabel = (entry) => { if (isDirectory(entry)) return 'Folder'; const name = entryName(entry); const lastDot = name.lastIndexOf('.'); let ext = ''; if (lastDot > 0 && lastDot < name.length - 1) ext = name.slice(lastDot + 1).toLowerCase(); else if (lastDot === 0 && name.length > 1) ext = name.slice(1).toLowerCase(); if (!ext) return 'File'; return FILE_TYPE_LABELS[ext] || `${ext.toUpperCase()} File`; };
@@ -137,6 +137,9 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
   // individual unchecks can revoke a path. clearSelection also empties the global list.
   useEffect(() => {
     const syncGrantedPaths = () => {
+      // Read the shared grant list inside the state updater as well as before
+      // scheduling it. A grant sync can otherwise be queued during mount and
+      // run after Clear selection, re-adding paths that the user just revoked.
       try {
         const raw = localStorage.getItem('ai-terminal-chat:allowed-paths');
         if (!raw) return;
@@ -145,16 +148,25 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         const paths = parsed.filter((p) => typeof p === 'string' && p.trim());
         if (!paths.length) return;
         setSelectedFiles((current) => {
+          let currentPaths = paths;
+          try {
+            const latestRaw = localStorage.getItem('ai-terminal-chat:allowed-paths');
+            const latest = latestRaw ? JSON.parse(latestRaw) : [];
+            currentPaths = Array.isArray(latest)
+              ? latest.filter((p) => typeof p === 'string' && p.trim())
+              : [];
+          } catch {}
+          if (!currentPaths.length) return current;
           const next = new Set(current);
           let added = 0;
-          for (const path of paths) {
+          for (const path of currentPaths) {
             if (!next.has(path)) {
               next.add(path);
               added += 1;
             }
           }
           if (added > 0) setStatus(`${added} file${added === 1 ? '' : 's'} granted to the agent and selected automatically.`);
-          return next;
+          return added > 0 ? next : current;
         });
       } catch { /* ignore malformed browser storage */ }
     };
@@ -250,9 +262,19 @@ useLayoutEffect(() => {
   const collectAllFilePaths = useCallback(async () => { const cache = { ...children }; const newlyLoaded = {}; const paths = []; const failedPaths = []; const visit = async (dirPath) => { let entries = cache[dirPath]; if (!entries) { try { const response = await axios.get(`${host}/project/list`, { params: { path: dirPath } }); entries = Array.isArray(response.data?.entries) ? response.data.entries : []; } catch { failedPaths.push(dirPath); return; } cache[dirPath] = entries; newlyLoaded[dirPath] = entries; } for (const entry of entries) { const path = entryPath(entry, dirPath); if (!path) continue; if (isDirectory(entry)) await visit(path); else paths.push(path); } }; await visit('.'); if (Object.keys(newlyLoaded).length) setChildren((current) => ({ ...current, ...newlyLoaded })); return { paths, failedPaths }; }, [children, host]);
   const selectAllFiles = async () => { if (selectingAllFiles) return; setSelectingAllFiles(true); setError(''); setStatus('Scanning the entire project for files.'); try { const { paths, failedPaths } = await collectAllFilePaths(); let finalCount = 0; setSelectedFiles((current) => { const next = new Set(current); paths.forEach((p) => next.add(p)); finalCount = next.size; return next; }); const failureNote = failedPaths.length ? ` ${failedPaths.length} ${failedPaths.length === 1 ? 'folder' : 'folders'} could not be read and ${failedPaths.length === 1 ? 'was' : 'were'} skipped.` : ''; setStatus(`Selected ${finalCount} ${finalCount === 1 ? 'file' : 'files'} across the entire project.${failureNote}`); if (failedPaths.length) setError('Some folders could not be listed while selecting all files. The selection may be incomplete.'); } catch (err) { const message = err?.response?.data?.error || err?.message || 'Unable to select all project files.'; setError(message); setStatus('Unable to select all project files.'); } finally { setSelectingAllFiles(false); } };
   const clearSelection = () => {
+    // Prevent the already-queued persistence effect for the previous selection
+    // from restoring it after this synchronous clear. The explicit storage
+    // writes below are the authoritative cleared state.
+    skipNextPersist.current = true;
     setSelectedFiles(new Set());
     setLastSelectedPath(null);
-    try { localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify([])); } catch {}
+    // Clear both explorer-local persistence and the shared Chat permission
+    // list so a just-cleared selection cannot be restored by a remount.
+    try {
+      localStorage.setItem(`${storageKey}:selected`, JSON.stringify([]));
+      sessionStorage.setItem(`${storageKey}:selected`, JSON.stringify([]));
+      localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify([]));
+    } catch {}
     setStatus('Cleared agent file selection.');
   };
   const useSelectedFiles = async () => { const paths = Array.from(selectedFiles); if (!paths.length) { setStatus('No files are selected for the agent.'); onUseSelectedFiles?.([]); return; } setStatus(`Reading ${paths.length} selected ${paths.length === 1 ? 'file' : 'files'} for the agent.`); setError(''); try { const files = []; for (const path of paths) { const response = await axios.get(`${host}/project/read`, { params: { path } }); files.push({ path: response.data?.path || path, content: response.data?.contents ?? response.data?.content ?? '' }); } onUseSelectedFiles?.(files); setStatus(`${files.length} ${files.length === 1 ? 'file' : 'files'} supplied to the agent.`); } catch (err) { const message = err?.response?.data?.error || err?.message || 'Unable to read selected files.'; setError(message); setStatus('Unable to supply selected files to the agent.'); } };

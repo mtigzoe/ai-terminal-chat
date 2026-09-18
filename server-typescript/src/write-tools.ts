@@ -317,80 +317,68 @@ function applyUnifiedDiffSecure(
   }
 
   // Parse per-file hunks from the unified diff.
-  const filePatches = parseUnifiedDiff(patchText);
+  let filePatches: FilePatch[];
+  try {
+    filePatches = parseUnifiedDiff(patchText);
+  } catch (exc) {
+    return { files: [], error: exc instanceof Error ? exc.message : String(exc) };
+  }
   if (filePatches.length === 0) {
     return { files: [], error: "Could not parse any file hunks from the patch." };
   }
+  if (filePatches.some((fp) => fp.hunks.length === 0)) {
+    return { files: [], error: "Patch contains a file header without any hunks." };
+  }
 
-  // Dry-run or apply each file through secure read/write.
+  // A path must occur only once in a unified patch. Applying duplicate file
+  // entries sequentially would otherwise let a later entry overwrite an earlier
+  // preflighted result.
+  const patchPaths = new Set<string>();
   for (const fp of filePatches) {
     const rel = fp.newPath === "/dev/null" ? fp.oldPath : fp.newPath;
-    if (!rel || rel === "/dev/null") {
-      return { files: [], error: "Patch entry missing a usable path." };
+    if (patchPaths.has(rel)) {
+      return { files: [], error: `Patch contains duplicate file entry: ${rel}` };
     }
-    // Validate path again immediately before use.
-    try {
-      safePath(rel);
-    } catch (exc) {
-      return { files: [], error: `Invalid path in patch: ${rel}: ${exc}` };
-    }
+    patchPaths.add(rel);
+  }
 
+  // Preflight every file before mutating any of them.
+  const operations: Array<
+    | { kind: "delete"; rel: string }
+    | { kind: "write"; rel: string; next: string; create: boolean }
+  > = [];
+  for (const fp of filePatches) {
+    const rel = fp.newPath === "/dev/null" ? fp.oldPath : fp.newPath;
+    if (!rel || rel === "/dev/null") return { files: [], error: "Patch entry missing a usable path." };
+    if (fp.oldPath !== fp.newPath && fp.oldPath !== "/dev/null" && fp.newPath !== "/dev/null") {
+      return { files: [], error: `Patch path changes/renames are not supported: '${fp.oldPath}' -> '${fp.newPath}'.` };
+    }
+    try { safePath(rel); } catch (exc) { return { files: [], error: `Invalid path in patch: ${rel}: ${exc}` }; }
     if (fp.newPath === "/dev/null") {
-      // Deletion
-      if (dryRun) {
-        try {
-          readFileWithinProject(rel, MAX_PATCH_SIZE * 2);
-        } catch {
-          return { files: [], error: `Patch deletes missing file: ${rel}` };
-        }
-        continue;
-      }
-      try {
-        assertPatchTargetsNotOutsideSymlinks([rel]);
-        unlinkWithinProject(rel);
-      } catch (exc) {
-        return {
-          files: [],
-          error: `Failed to delete '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
-        };
-      }
+      try { readFileWithinProject(rel, MAX_PATCH_SIZE * 2); }
+      catch { return { files: [], error: `Patch deletes missing file: ${rel}` }; }
+      operations.push({ kind: "delete", rel });
       continue;
     }
-
+    const create = fp.oldPath === "/dev/null";
     let current = "";
-    if (fp.oldPath !== "/dev/null") {
-      try {
-        const read = readFileWithinProject(rel, MAX_PATCH_SIZE * 2);
-        current = read.contents;
-      } catch (exc) {
-        return {
-          files: [],
-          error: `Cannot read '${rel}' to apply patch: ${exc instanceof Error ? exc.message : String(exc)}`,
-        };
-      }
+    if (!create) {
+      try { current = readFileWithinProject(rel, MAX_PATCH_SIZE * 2).contents; }
+      catch (exc) { return { files: [], error: `Cannot read '${rel}' to apply patch: ${exc instanceof Error ? exc.message : String(exc)}` }; }
     }
-
     let next: string;
+    try { next = applyHunksToText(current, fp.hunks); }
+    catch (exc) { return { files: [], error: `Patch does not apply cleanly to '${rel}': ${exc instanceof Error ? exc.message : String(exc)}` }; }
+    operations.push({ kind: "write", rel, next, create });
+  }
+  if (dryRun) return { files: resolvedRel };
+  for (const operation of operations) {
     try {
-      next = applyHunksToText(current, fp.hunks);
+      assertPatchTargetsNotOutsideSymlinks([operation.rel]);
+      if (operation.kind === "delete") unlinkWithinProject(operation.rel);
+      else writeFileWithinProject(operation.rel, operation.next, { exclusive: operation.create });
     } catch (exc) {
-      return {
-        files: [],
-        error: `Patch does not apply cleanly to '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
-      };
-    }
-
-    if (dryRun) continue;
-
-    try {
-      // Re-check symlink status immediately before the write.
-      assertPatchTargetsNotOutsideSymlinks([rel]);
-      writeFileWithinProject(rel, next, {});
-    } catch (exc) {
-      return {
-        files: [],
-        error: `Failed to write '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
-      };
+      return { files: [], error: `Failed to ${operation.kind === "delete" ? "delete" : "write"} '${operation.rel}': ${exc instanceof Error ? exc.message : String(exc)}` };
     }
   }
 
@@ -402,6 +390,7 @@ type DiffHunk = {
   oldCount: number;
   newStart: number;
   newCount: number;
+  newTrailingNewline?: boolean;
   lines: string[]; // including leading ' ', '+', '-'
 };
 
@@ -424,8 +413,7 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
       const next = lines[i + 1] ?? "";
       const newHdr = /^\+\+\+ (?:b\/)?(.+)$/.exec(next);
       if (!newHdr) {
-        i += 1;
-        continue;
+        throw new Error("Malformed unified diff header: missing +++ line.");
       }
       const newPath = stripPatchPath(newHdr[1] ?? "");
       current = { oldPath, newPath, hunks: [] };
@@ -449,7 +437,21 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
           break;
         }
         if (hl.startsWith("\\")) {
-          // "\ No newline at end of file"
+          if (hl !== "\\ No newline at end of file") {
+            throw new Error("Malformed unified diff newline marker.");
+          }
+          // "\ No newline at end of file" applies to the immediately
+          // preceding hunk line. A new-side/context line determines the
+          // resulting file's trailing-newline state.
+          const previous = hunk.lines[hunk.lines.length - 1];
+          if (previous?.startsWith("+") || previous?.startsWith(" ")) {
+            hunk.newTrailingNewline = false;
+          } else if (previous?.startsWith("-")) {
+            const next = lines[i + 1] ?? "";
+            if (next.startsWith("+") || next.startsWith(" ")) {
+              hunk.newTrailingNewline = true;
+            }
+          }
           i += 1;
           continue;
         }
@@ -458,7 +460,11 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
           i += 1;
           continue;
         }
-        // Blank line ends the hunk (not context)
+        // Blank line ends the hunk (not context). Any other non-diff
+        // line inside a hunk is malformed and must not be silently ignored.
+        if (hl.length > 0) {
+          throw new Error(`Malformed unified diff line: ${hl}`);
+        }
         break;
       }
       current.hunks.push(hunk);
@@ -470,13 +476,9 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
 }
 
 function stripPatchPath(raw: string): string {
-  let candidate = raw.split("\t")[0]!.trim();
-  if (
-    candidate.length >= 2 &&
-    ((candidate.startsWith('"') && candidate.endsWith('"')) ||
-      (candidate.startsWith("'") && candidate.endsWith("'")))
-  ) {
-    candidate = candidate.slice(1, -1);
+  let candidate = unquoteGitPath(raw);
+  if (/^(?:a|b)\//.test(candidate)) {
+    candidate = candidate.slice(2);
   }
   return candidate;
 }
@@ -495,17 +497,32 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
   }
   const out: string[] = [];
   let srcIndex = 0; // 0-based
+  let trailingNewline = hadTrailingNewline;
 
   for (const hunk of hunks) {
-    const targetStart = Math.max(0, hunk.oldStart - 1);
+    const targetStart = hunk.oldStart === 0 ? 0 : hunk.oldStart - 1;
+    if (
+      (hunk.oldStart < 0 || (hunk.oldCount === 0 ? hunk.oldStart < 0 : hunk.oldStart < 1)) ||
+      targetStart < srcIndex
+    ) {
+      throw new Error("patch hunks are out of order or overlap");
+    }
     while (srcIndex < targetStart) {
       out.push(src[srcIndex]!);
       srcIndex += 1;
     }
+    const expectedNewStart = hunk.newCount === 0 ? out.length : out.length + 1;
+    if (hunk.newStart !== expectedNewStart) {
+      throw new Error("patch hunk new-side range is out of order or inconsistent");
+    }
+    let oldLinesConsumed = 0;
+    let newLinesProduced = 0;
     for (const hl of hunk.lines) {
       const tag = hl.charAt(0);
       const body = hl.slice(1);
       if (tag === " ") {
+        oldLinesConsumed += 1;
+        newLinesProduced += 1;
         if (srcIndex >= src.length || src[srcIndex] !== body) {
           throw new Error(
             `context mismatch at line ${srcIndex + 1}: expected '${body}', got '${src[srcIndex] ?? "<eof>"}'`,
@@ -514,6 +531,7 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
         out.push(body);
         srcIndex += 1;
       } else if (tag === "-") {
+        oldLinesConsumed += 1;
         if (srcIndex >= src.length || src[srcIndex] !== body) {
           throw new Error(
             `removal mismatch at line ${srcIndex + 1}: expected '${body}', got '${src[srcIndex] ?? "<eof>"}'`,
@@ -521,8 +539,19 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
         }
         srcIndex += 1;
       } else if (tag === "+") {
+        newLinesProduced += 1;
         out.push(body);
+      } else {
+        throw new Error(`invalid patch line prefix: ${tag || "<empty>"}`);
       }
+    }
+    if (oldLinesConsumed !== hunk.oldCount || newLinesProduced !== hunk.newCount) {
+      throw new Error(
+        `patch hunk line counts do not match header: expected ${hunk.oldCount}/${hunk.newCount}, got ${oldLinesConsumed}/${newLinesProduced}`,
+      );
+    }
+    if (hunk.newTrailingNewline !== undefined) {
+      trailingNewline = hunk.newTrailingNewline;
     }
   }
   while (srcIndex < src.length) {
@@ -530,7 +559,7 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
     srcIndex += 1;
   }
   if (out.length === 0) return "";
-  return out.join("\n") + (hadTrailingNewline || out.length > 0 ? "\n" : "");
+  return out.join("\n") + (trailingNewline ? "\n" : "");
 }
 
 export function apply_patch(
@@ -569,51 +598,53 @@ export function apply_patch(
 }
 
 export function delete_file(relPath: string, confirm = false): Record<string, unknown> {
+  const root = getProjectRoot();
+  const lexicalPath = path.resolve(root, relPath.trim());
+  let lexicalStat: fs.Stats;
+  try { lexicalStat = fs.lstatSync(lexicalPath); }
+  catch { return { error: `File does not exist: ${relPath}` }; }
+
   let filePath: string;
   try {
     filePath = safePath(relPath);
   } catch (exc) {
-    return { error: String(exc) };
+    if (!lexicalStat.isSymbolicLink()) return { error: String(exc) };
+    try {
+      const target = fs.readlinkSync(lexicalPath, "utf8");
+      const targetPath = path.resolve(path.dirname(lexicalPath), target);
+      const resolvedTarget = fs.realpathSync(path.dirname(targetPath));
+      if (!isPathWithinRoot(root, resolvedTarget)) return { error: `Refusing to delete a symlink targeting outside the project: ${relPath}` };
+      filePath = lexicalPath;
+    } catch (targetError) {
+      return { error: `Could not validate symlink: ${targetError instanceof Error ? targetError.message : String(targetError)}` };
+    }
   }
-
-  if (isSensitivePath(filePath)) {
-    return { error: `Refusing to delete sensitive file: ${relPath}` };
-  }
-
-  if (filePath === getProjectRoot()) {
-    return { error: "Refusing to delete the project root." };
-  }
-
-  if (!fs.existsSync(filePath)) {
-    return { error: `File does not exist: ${relPath}` };
-  }
-
-  if (fs.statSync(filePath).isDirectory()) {
-    return {
-      error: "delete_file can only delete a single file, not a directory.",
-    };
-  }
-
-  if (!confirm) {
-    return {
-      requires_confirmation: true,
-      path: relativePath(filePath),
-      message: `'${relPath}' was NOT deleted. Ask the user to explicitly confirm this deletion in the chat, then call delete_file again with confirm=true.`,
-    };
-  }
-
+  if (isSensitivePath(filePath)) return { error: `Refusing to delete sensitive file: ${relPath}` };
+  if (filePath === root) return { error: "Refusing to delete the project root." };
+  if (!lexicalStat.isSymbolicLink() && lexicalStat.isDirectory()) return { error: "delete_file can only delete a single file, not a directory." };
+  if (!confirm) return { requires_confirmation: true, path: path.relative(root, lexicalPath), message: `'${relPath}' was NOT deleted. Ask the user to explicitly confirm this deletion in the chat, then call delete_file again with confirm=true.` };
   try {
     const { resolvedPath } = unlinkWithinProject(relPath);
-    return { path: relativePath(resolvedPath), deleted: true };
+    return { path: path.relative(root, resolvedPath), deleted: true };
   } catch (exc) {
-    if (exc instanceof SecurityValidationError) {
-      return { error: exc.message };
-    }
+    if (exc instanceof SecurityValidationError) return { error: exc.message };
     return { error: `Could not delete file: ${exc}` };
   }
 }
 
-function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string): void {
+function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string, lexicalPath = absolutePath): void {
+  const lexicalStat = fs.lstatSync(lexicalPath);
+  if (lexicalStat.isSymbolicLink()) {
+    const target = fs.readlinkSync(lexicalPath, "utf8");
+    const hashed = runGit(["hash-object", "-w", "--no-filters", "--stdin"], target);
+    if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
+    const oid = hashed.stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
+    const updated = runGit(["update-index", "--add", "--cacheinfo", `120000,${oid},${relativePath}`]);
+    if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+    return;
+  }
+
   const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   let payload: Buffer;
   let mode = "100644";
@@ -644,36 +675,37 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
   } finally {
     try { fs.unlinkSync(hashInput); } catch { /* best effort */ }
   }
-  return;
 }
 
 export function git_add(relPath: string, confirm = false): Record<string, unknown> {
+  const root = getProjectRoot();
+  const lexicalPath = path.resolve(root, relPath.trim());
+  let lexicalStat: fs.Stats;
+  try { lexicalStat = fs.lstatSync(lexicalPath); }
+  catch { return { error: `File does not exist: ${relPath}` }; }
+
   let filePath: string;
   try {
     filePath = safePath(relPath);
   } catch (exc) {
-    return { error: String(exc) };
+    if (!lexicalStat.isSymbolicLink()) return { error: String(exc) };
+    try {
+      const target = fs.readlinkSync(lexicalPath, "utf8");
+      const targetPath = path.resolve(path.dirname(lexicalPath), target);
+      const resolvedTarget = fs.realpathSync(path.dirname(targetPath));
+      if (!isPathWithinRoot(root, resolvedTarget)) return { error: `Refusing to stage a symlink targeting outside the project: ${relPath}` };
+      filePath = lexicalPath;
+    } catch (targetError) {
+      return { error: `Could not validate symlink: ${targetError instanceof Error ? targetError.message : String(targetError)}` };
+    }
   }
 
-  if (isSensitivePath(filePath)) {
-    return { error: `Refusing to stage sensitive file: ${relPath}` };
-  }
-
+  if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${relPath}` };
   const gitError = gitRepoError();
-  if (gitError) {
-    return gitError;
-  }
+  if (gitError) return gitError;
+  if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) return { error: "git_add can only stage a single file, not a directory." };
 
-  if (!fs.existsSync(filePath)) {
-    return { error: `File does not exist: ${relPath}` };
-  }
-
-  if (fs.statSync(filePath).isDirectory()) {
-    return { error: "git_add can only stage a single file, not a directory." };
-  }
-
-  const rel = relativePath(filePath);
-
+  const rel = path.relative(root, lexicalPath);
   if (!confirm) {
     return {
       requires_confirmation: true,
@@ -681,29 +713,59 @@ export function git_add(relPath: string, confirm = false): Record<string, unknow
       message: `'${rel}' was NOT staged. Show the user what would be staged and ask them to explicitly confirm it, then call git_add again with confirm=true.`,
     };
   }
-
   try {
-    stageFileWithoutFiltersForWriteTool(rel, filePath);
+    stageFileWithoutFiltersForWriteTool(rel, filePath, lexicalPath);
   } catch (exc) {
     return { error: `git add failed: ${exc instanceof Error ? exc.message : String(exc)}` };
   }
-
   return { path: rel, staged: true };
+}
+
+function unquoteGitPath(raw: string): string {
+  let candidate = raw.split("\t")[0]?.trim() ?? "";
+  if (
+    candidate.length >= 2 &&
+    candidate.startsWith('"') &&
+    candidate.endsWith('"')
+  ) {
+    candidate = candidate.slice(1, -1);
+    const bytes: number[] = [];
+    for (let i = 0; i < candidate.length; i += 1) {
+      if (candidate[i] !== "\\") {
+        bytes.push(...Buffer.from(candidate[i]!, "utf8"));
+        continue;
+      }
+      const next = candidate[i + 1] ?? "";
+      const escapes: Record<string, number> = {
+        a: 0x07, b: 0x08, t: 0x09, n: 0x0a,
+        v: 0x0b, f: 0x0c, r: 0x0d, "\\": 0x5c, '"': 0x22,
+      };
+      if (escapes[next] !== undefined) {
+        bytes.push(escapes[next]!);
+        i += 1;
+        continue;
+      }
+      const octal = candidate.slice(i + 1).match(/^[0-7]{1,3}/)?.[0];
+      if (octal) {
+        bytes.push(parseInt(octal, 8));
+        i += octal.length;
+        continue;
+      }
+      bytes.push(0x5c);
+    }
+    candidate = Buffer.from(bytes).toString("utf8");
+  }
+  return candidate;
 }
 
 function extractPatchTargetPaths(patchText: string): string[] {
   const paths: string[] = [];
   const seen = new Set<string>();
 
-  const add = (raw: string) => {
-    let candidate = raw.split("\t")[0].trim();
-    // Strip optional git path quotes: "foo bar.txt"
-    if (
-      candidate.length >= 2 &&
-      ((candidate.startsWith('"') && candidate.endsWith('"')) ||
-        (candidate.startsWith("'") && candidate.endsWith("'")))
-    ) {
-      candidate = candidate.slice(1, -1);
+  const add = (raw: string, stripGitPrefix = false) => {
+    let candidate = unquoteGitPath(raw);
+    if (stripGitPrefix && /^(?:a|b)\//.test(candidate)) {
+      candidate = candidate.slice(2);
     }
     if (!candidate || candidate === "/dev/null") return;
     if (seen.has(candidate)) return;
@@ -722,7 +784,7 @@ function extractPatchTargetPaths(patchText: string): string[] {
 
     for (const prefix of ["+++ b/", "--- a/", "+++ ", "--- "]) {
       if (line.startsWith(prefix)) {
-        add(line.slice(prefix.length));
+        add(line.slice(prefix.length), prefix === "+++ " || prefix === "--- ");
         break;
       }
     }
@@ -797,88 +859,70 @@ function generateUnifiedDiff(
   fromfile: string,
   tofile: string
 ): string {
-  const oldLines = oldText.split("\n");
-  const newLines = newText.split("\n");
+  const splitLines = (text: string): { lines: string[]; trailingNewline: boolean } => {
+    const trailingNewline = text.endsWith("\n");
+    const lines = text.split("\n");
+    if (trailingNewline) lines.pop();
+    return { lines, trailingNewline };
+  };
 
-  const diff: string[] = [];
-  diff.push(`--- ${fromfile}`);
-  diff.push(`+++ ${tofile}`);
+  const oldData = splitLines(oldText);
+  const newData = splitLines(newText);
+  const oldLines = oldData.lines;
+  const newLines = newData.lines;
 
-  const oldCount = oldLines.length;
-  const newCount = newLines.length;
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix += 1;
+  }
 
-  let oldIndex = 1;
-  let newIndex = 1;
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] ===
+      newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
 
-  let i = 0;
-  let j = 0;
+  // If EOF newline state changes, the hunk must reach the final line so the
+  // standard newline marker can be attached to a line in the hunk.
+  if (oldData.trailingNewline !== newData.trailingNewline) {
+    prefix = 0;
+    suffix = 0;
+  }
 
-  while (i < oldCount || j < newCount) {
-    while (
-      i < oldCount &&
-      j < newCount &&
-      oldLines[i] === newLines[j]
-    ) {
-      i++;
-      j++;
-    }
+  const oldChangedEnd = oldLines.length - suffix;
+  const newChangedEnd = newLines.length - suffix;
+  const oldChanged = oldLines.slice(prefix, oldChangedEnd);
+  const newChanged = newLines.slice(prefix, newChangedEnd);
 
-    const oldRemaining = oldCount - i;
-    const newRemaining = newCount - j;
+  const diff: string[] = [
+    `--- ${fromfile}`,
+    `+++ ${tofile}`,
+  ];
 
-    if (oldRemaining === 0 && newRemaining === 0) {
-      break;
-    }
+  if (oldChanged.length === 0 && newChanged.length === 0) {
+    return diff.join("\n");
+  }
 
-    let oldMatch = oldCount;
-    let newMatch = newCount;
+  const oldStart = prefix + 1;
+  const newStart = prefix + 1;
+  diff.push(`@@ -${oldStart},${oldChanged.length} +${newStart},${newChanged.length} @@`);
 
-    if (oldRemaining > 0 && newRemaining > 0) {
-      for (let k = 1; k <= Math.min(oldRemaining, newRemaining); k++) {
-        if (oldLines[i + k - 1] === newLines[j + k - 1]) {
-          oldMatch = i + k - 1;
-          newMatch = j + k - 1;
-          break;
-        }
-      }
-    } else if (oldRemaining > 0) {
-      for (let k = 1; k <= oldRemaining; k++) {
-        if (oldLines[i + k - 1] === newLines[j + newRemaining - 1]) {
-          oldMatch = i + k - 1;
-          newMatch = j + newRemaining - 1;
-          break;
-        }
-      }
-    } else if (newRemaining > 0) {
-      for (let k = 1; k <= newRemaining; k++) {
-        if (oldLines[i + oldRemaining - 1] === newLines[j + k - 1]) {
-          oldMatch = i + oldRemaining - 1;
-          newMatch = j + k - 1;
-          break;
-        }
-      }
-    }
+  for (const line of oldChanged) diff.push(`-${line}`);
+  if (oldChanged.length > 0 && !oldData.trailingNewline && suffix === 0) {
+    diff.push("\\ No newline at end of file");
+  }
 
-    const hunkOldStart = oldIndex + (oldMatch - i);
-    const hunkOldCount = Math.max(0, oldMatch - i);
-    const hunkNewStart = newIndex + (newMatch - j);
-    const hunkNewCount = Math.max(0, newMatch - j);
-
-    diff.push(
-      `@@ -${hunkOldStart},${hunkOldCount} +${hunkNewStart},${hunkNewCount} @@`
-    );
-
-    for (let k = i; k < oldMatch; k++) {
-      diff.push(`-${oldLines[k]}`);
-    }
-    for (let k = j; k < newMatch; k++) {
-      diff.push(`+${newLines[k]}`);
-    }
-
-    oldIndex = hunkOldStart + hunkOldCount;
-    newIndex = hunkNewStart + hunkNewCount;
-    i = oldMatch;
-    j = newMatch;
+  for (const line of newChanged) diff.push(`+${line}`);
+  if (newChanged.length > 0 && !newData.trailingNewline && suffix === 0) {
+    diff.push("\\ No newline at end of file");
   }
 
   return diff.join("\n");

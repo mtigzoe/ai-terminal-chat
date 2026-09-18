@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { create_file, write_file, delete_file, apply_patch } from "../src/write-tools.ts";
+import { create_file, write_file, delete_file, apply_patch, git_add } from "../src/write-tools.ts";
 import { setProjectRoot, getProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -86,11 +86,54 @@ describe("write_file", () => {
     expect(fs.readFileSync(path.join(root, "doc.txt"), "utf-8")).toBe("line one\n");
   });
 
+  it("preview shows a replacement when the final line changes", () => {
+    fs.writeFileSync(path.join(root, "doc.txt"), "first\nold");
+    const result = write_file("doc.txt", "first\nnew", false);
+    const diff = (result as { diff: string }).diff;
+    expect(diff).toContain("@@ -2,1 +2,1 @@");
+    expect(diff).toContain("-old");
+    expect(diff).toContain("+new");
+  });
+
+  it("preview shows insertion at the end without a phantom blank line", () => {
+    fs.writeFileSync(path.join(root, "doc.txt"), "first\n");
+    const result = write_file("doc.txt", "first\nsecond\n", false);
+    const diff = (result as { diff: string }).diff;
+    expect(diff).toBe("--- a/doc.txt\n+++ b/doc.txt\n@@ -2,0 +2,1 @@\n+second");
+  });
+
+
+  it("generates a standard preview for an EOF newline-only change", () => {
+    fs.writeFileSync(path.join(root, "newline-preview.txt"), "hello");
+    const result = write_file("newline-preview.txt", "hello\n", false);
+    const diff = (result as { diff: string }).diff;
+    expect(diff).toContain("@@ -1,1 +1,1 @@");
+    expect(diff).toContain("-hello");
+    expect(diff).toContain("+hello");
+    expect(diff).toContain("\\ No newline at end of file");
+  });
+
   it("preview reports create for new file", () => {
     const result = write_file("brand-new.txt", "content", false);
     expect((result as { requires_confirmation: boolean }).requires_confirmation).toBe(true);
     expect((result as { action: string }).action).toBe("create");
     expect(fs.existsSync(path.join(root, "brand-new.txt"))).toBe(false);
+  });
+
+  it("refuses to modify a hard-linked file", () => {
+    const target = path.join(root, "outside-target.txt");
+    const linked = path.join(root, "linked.txt");
+    fs.writeFileSync(target, "original");
+    try {
+      fs.linkSync(target, linked);
+    } catch {
+      return;
+    }
+
+    const result = write_file("linked.txt", "modified", true);
+    expect((result as { error?: string }).error).toContain("hard-linked");
+    expect(fs.readFileSync(target, "utf-8")).toBe("original");
+    expect(fs.readFileSync(linked, "utf-8")).toBe("original");
   });
 
   it("confirm=true overwrites existing file", () => {
@@ -157,10 +200,85 @@ describe("delete_file", () => {
     expect((result as { error: string }).error.toLowerCase()).toContain("directory");
   });
 
+  it("can delete a dangling in-project symlink", () => {
+    fs.symlinkSync("missing-target.txt", path.join(root, "dangling.txt"));
+
+    const preview = delete_file("dangling.txt");
+    expect((preview as { requires_confirmation: boolean }).requires_confirmation).toBe(true);
+
+    const result = delete_file("dangling.txt", true);
+    expect(result).toEqual({ path: "dangling.txt", deleted: true });
+    expect(fs.existsSync(path.join(root, "dangling.txt"))).toBe(false);
+  });
+
+  it("deletes a symlink itself instead of its target", () => {
+    fs.writeFileSync(path.join(root, "target.txt"), "keep me");
+    fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+
+    const result = delete_file("link.txt", true);
+
+    expect((result as { deleted: boolean }).deleted).toBe(true);
+    expect(fs.existsSync(path.join(root, "link.txt"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, "target.txt"), "utf8")).toBe("keep me");
+  });
+
   it("refuses the project root itself", () => {
     const result = delete_file(".", true);
     expect((result as { error: string }).error).toBeDefined();
     expect(fs.existsSync(root)).toBe(true);
+  });
+});
+
+
+describe("git_add", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = makeRepoDir();
+    setProjectRoot(root);
+  });
+
+  afterEach(() => {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it("stages a symlink as a symlink instead of its target contents", () => {
+    fs.writeFileSync(path.join(root, "target.txt"), "target\n");
+    fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+
+    const result = git_add("link.txt", true);
+
+    expect(result).toEqual({ path: "link.txt", staged: true });
+    const staged = execSync("git ls-files --stage -- link.txt", {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    expect(staged.startsWith("120000 ")).toBe(true);
+    expect(execSync("git show :link.txt", {
+      cwd: root,
+      encoding: "utf8",
+    })).toBe("target.txt");
+  });
+
+  it("stages a dangling symlink", () => {
+    fs.symlinkSync("missing-target.txt", path.join(root, "dangling.txt"));
+
+    const result = git_add("dangling.txt", true);
+
+    expect(result).toEqual({ path: "dangling.txt", staged: true });
+    const staged = execSync("git ls-files --stage -- dangling.txt", {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    expect(staged.startsWith("120000 ")).toBe(true);
+    expect(execSync("git show :dangling.txt", {
+      cwd: root,
+      encoding: "utf8",
+    })).toBe("missing-target.txt");
   });
 });
 
@@ -223,6 +341,16 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello\n");
   });
 
+  it("applies quoted git paths with octal escapes", () => {
+    const fileName = "line\tname.txt";
+    fs.writeFileSync(path.join(root, fileName), "hello\n");
+    const patch = "--- \"a/line\\011name.txt\"\n+++ \"b/line\\011name.txt\"\n@@ -1 +1 @@\n-hello\n+hello world\n";
+
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, fileName), "utf-8")).toBe("hello world\n");
+  });
+
   it("confirm=true applies the change", () => {
     fs.writeFileSync(path.join(root, "greeting.txt"), "hello\n");
 
@@ -268,10 +396,173 @@ describe("apply_patch", () => {
     expect((result as { error: string }).error.toLowerCase()).toContain("invalid path");
   });
 
+  it("rejects a file header without hunks", () => {
+    const patch = `--- a/header-only.txt
++++ b/header-only.txt
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("without any hunks");
+    expect(fs.existsSync(path.join(root, "header-only.txt"))).toBe(false);
+  });
+
+  it("rejects unsupported patch path changes", () => {
+    fs.writeFileSync(path.join(root, "old.txt"), "old\n");
+    const patch = `--- a/old.txt
++++ b/new.txt
+@@ -1 +1 @@
+-old
++new
+`;
+
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("path changes/renames are not supported");
+    expect(fs.readFileSync(path.join(root, "old.txt"), "utf-8")).toBe("old\n");
+    expect(fs.existsSync(path.join(root, "new.txt"))).toBe(false);
+  });
+
   it("rejects oversized patches", () => {
     const oversized = SAMPLE_PATCH + "x".repeat(200_100);
     const result = apply_patch(oversized, false);
     expect((result as { error: string }).error).toBeDefined();
     expect((result as { error: string }).error.toLowerCase()).toContain("too large");
+  });
+
+  it("preserves a missing trailing newline", () => {
+    fs.writeFileSync(path.join(root, "greeting.txt"), "hello");
+    const patch = `--- a/greeting.txt
++++ b/greeting.txt
+@@ -1 +1 @@
+-hello
++hello world
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello world");
+  });
+
+  it("applies a patch that adds a trailing newline", () => {
+    fs.writeFileSync(path.join(root, "newline.txt"), "hello");
+    const patch = `--- a/newline.txt
++++ b/newline.txt
+@@ -1 +1 @@
+-hello
+\\ No newline at end of file
++hello
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "newline.txt"), "utf-8")).toBe("hello\n");
+  });
+
+  it("applies a patch that removes a trailing newline", () => {
+    fs.writeFileSync(path.join(root, "newline.txt"), "hello\n");
+    const patch = `--- a/newline.txt
++++ b/newline.txt
+@@ -1 +1 @@
+-hello
++hello
+\\ No newline at end of file
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "newline.txt"), "utf-8")).toBe("hello");
+  });
+
+  it("rejects an inconsistent new-side hunk range", () => {
+    const patch = `--- a/patch-range-test.txt
++++ b/patch-range-test.txt
+@@ -1,1 +99,1 @@
+-old
++new
+`;
+    fs.writeFileSync(path.join(root, "patch-range-test.txt"), "old");
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("new-side range");
+    fs.unlinkSync(path.join(root, "patch-range-test.txt"));
+  });
+
+  it("accepts a zero-line old-side hunk for a new file", () => {
+    const patch = `--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,1 @@
++created
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "new.txt"), "utf-8")).toBe("created\n");
+  });
+
+  it("preflights all files before mutating a multi-file patch", () => {
+    fs.writeFileSync(path.join(root, "first.txt"), "first\n");
+    const patch = `--- a/first.txt
++++ b/first.txt
+@@ -1 +1 @@
+-first
++changed
+--- a/missing.txt
++++ b/missing.txt
+@@ -1 +1 @@
+-missing
++still missing
+`;
+
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("Cannot read 'missing.txt'");
+    expect(fs.readFileSync(path.join(root, "first.txt"), "utf-8")).toBe("first\n");
+  });
+
+  it("rejects duplicate file entries instead of overwriting an earlier result", () => {
+    fs.writeFileSync(path.join(root, "duplicate.txt"), "one\n");
+    const patch = `--- a/duplicate.txt
++++ b/duplicate.txt
+@@ -1 +1 @@
+-one
++two
+--- a/duplicate.txt
++++ b/duplicate.txt
+@@ -1 +1 @@
+-one
++three
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("duplicate file entry");
+    expect(fs.readFileSync(path.join(root, "duplicate.txt"), "utf-8")).toBe("one\n");
+  });
+
+  it("accepts an insertion hunk at end of file", () => {
+    fs.writeFileSync(path.join(root, "append.txt"), "one\ntwo\n");
+    const patch = `--- a/append.txt
++++ b/append.txt
+@@ -3,0 +3,1 @@
++three
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "append.txt"), "utf-8")).toBe("one\ntwo\nthree\n");
+  });
+
+  it("rejects non-diff lines inside a unified hunk", () => {
+    fs.writeFileSync(path.join(root, "malformed.txt"), "hello\n");
+    const patch = `--- a/malformed.txt\n+++ b/malformed.txt\n@@ -1,1 +1,1 @@\n-hello\ngarbage\n+world\n`;
+    const result = apply_patch(patch, false);
+    expect((result as { error?: string }).error).toContain("Malformed unified diff line");
+  });
+
+  it("rejects a malformed unified file header without a +++ line", () => {
+    const patch = `--- a/malformed-header.txt\n@@ -1 +1 @@\n-old\n+new\n`;
+    const result = apply_patch(patch, false);
+    expect((result as { error?: string }).error).toContain("missing +++ line");
+  });
+
+  it("rejects mismatched unified hunk counts", () => {
+    fs.writeFileSync(path.join(root, "greeting.txt"), "hello\n");
+    const patch = `--- a/greeting.txt
++++ b/greeting.txt
+@@ -1,2 +1,1 @@
+-hello
++hello world
+`;
+    const result = apply_patch(patch, false);
+    expect((result as { error: string }).error).toContain("line counts do not match");
   });
 });
