@@ -288,6 +288,19 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello world");
   });
 
+  it("rejects an inconsistent new-side hunk range", () => {
+    const patch = `--- a/patch-range-test.txt
++++ b/patch-range-test.txt
+@@ -1,1 +99,1 @@
+-old
++new
+`;
+    fs.writeFileSync(path.join(root, "patch-range-test.txt"), "old");
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toContain("new-side range");
+    fs.unlinkSync(path.join(root, "patch-range-test.txt"));
+  });
+
   it("accepts a zero-line old-side hunk for a new file", () => {
     const patch = `--- /dev/null
 +++ b/new.txt
