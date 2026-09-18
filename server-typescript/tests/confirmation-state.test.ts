@@ -141,6 +141,11 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
+  it("decodes quoted git patch paths for confirmation binding", () => {
+    const patch = "--- \"a/line\\011name.txt\"\n+++ \"b/line\\011name.txt\"\n@@ -1 +1 @@\n-one\n+two\n";
+    expect(confirmationPathsForPending("apply_patch", { patch })).toEqual(["line\\tname.txt"]);
+  });
+
   it("binds apply_patch confirmations for unprefixed unified-diff paths", () => {
     const patch = "--- file.txt\n+++ file.txt\n@@ -1 +1 @@\n-one\n+two\n";
     expect(confirmationPathsForPending("apply_patch", { patch })).toEqual(["file.txt"]);
