@@ -392,6 +392,13 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "append.txt"), "utf-8")).toBe("one\ntwo\nthree\n");
   });
 
+  it("rejects non-diff lines inside a unified hunk", () => {
+    fs.writeFileSync(path.join(root, "malformed.txt"), "hello\n");
+    const patch = `--- a/malformed.txt\n+++ b/malformed.txt\n@@ -1,1 +1,1 @@\n-hello\ngarbage\n+world\n`;
+    const result = apply_patch(patch, false);
+    expect((result as { error?: string }).error).toContain("Malformed unified diff line");
+  });
+
   it("rejects mismatched unified hunk counts", () => {
     fs.writeFileSync(path.join(root, "greeting.txt"), "hello\n");
     const patch = `--- a/greeting.txt
