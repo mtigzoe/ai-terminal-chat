@@ -1,10 +1,31 @@
-import crypto from "node:crypto";
+i\n\nfunction fingerprintGitHead(): ConfirmationFileState {
+  try {
+    const gitEntry = path.join(getProjectRoot(), ".git");
+    let gitDir = gitEntry;
+    if (fs.lstatSync(gitEntry).isFile()) {
+      const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
+      if (!match) return { kind: "git_head", path: GIT_HEAD_MARKER, status: "unavailable", sha256: null };
+      gitDir = path.resolve(getProjectRoot(), match[1]!.trim());
+    }
+    const headPath = path.join(gitDir, "HEAD");
+    const head = fs.readFileSync(headPath, "utf8");
+    let state = head;
+    const ref = /^ref:\s*(.+)\s*$/m.exec(head)?.[1]?.trim();
+    if (ref && /^[A-Za-z0-9._/-]+$/.test(ref)) {
+      const refPath = path.join(gitDir, ...ref.split("/"));
+      try { state += "\n" + fs.readFileSync(refPath, "utf8"); } catch { state += "\n<missing-ref>"; }
+    }
+    return { kind: "git_head", path: GIT_HEAD_MARKER, status: "present", sha256: crypto.createHash("sha256").update(state).digest("hex") };
+  } catch {
+    return { kind: "git_head", path: GIT_HEAD_MARKER, status: "unavailable", sha256: null };
+  }
+}mport crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getProjectRoot, safePath } from "./security.ts";
 
 export interface ConfirmationFileState {
-  kind?: "file" | "git_index";
+  kind?: "file" | "git_index" | "git_head";
   path: string;
   status: "present" | "missing" | "unavailable";
   sha256: string | null;
@@ -14,6 +35,7 @@ export type ConfirmationFileStates = ConfirmationFileState[];
 
 const MAX_FINGERPRINT_BYTES = 50 * 1024 * 1024;
 const GIT_INDEX_MARKER = "__git_index__";
+const GIT_HEAD_MARKER = "__git_head__";
 
 function fingerprintFile(relPath: string): ConfirmationFileState {
   const normalized = String(relPath);
@@ -68,7 +90,7 @@ function fingerprintGitIndex(): ConfirmationFileState {
 export function captureConfirmationFileStates(paths: string[]): ConfirmationFileStates {
   const unique = [...new Set(paths.map((value) => String(value)).filter(Boolean))];
   return unique.map((value) =>
-    value === GIT_INDEX_MARKER ? fingerprintGitIndex() : fingerprintFile(value),
+    value === GIT_INDEX_MARKER ? fingerprintGitIndex() : value === GIT_HEAD_MARKER ? fingerprintGitHead() : fingerprintFile(value),
   );
 }
 
@@ -125,6 +147,7 @@ export function confirmationPathsForPending(
     return [target];
   }
   if (toolName === "git_commit") return [GIT_INDEX_MARKER];
+  if (toolName === "git_push") return [GIT_HEAD_MARKER];
   if (toolName === "apply_patch") {
     return patchTargetPaths(typeof args.patch === "string" ? args.patch : "");
   }
