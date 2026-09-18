@@ -4,7 +4,7 @@ import path from "node:path";
 import { getProjectRoot, safePath } from "./security.ts";
 
 export interface ConfirmationFileState {
-  kind?: "file" | "git_index" | "git_head";
+  kind?: "file" | "git_index" | "git_head" | "git_remote";
   path: string;
   status: "present" | "missing" | "unavailable";
   sha256: string | null;
@@ -16,6 +16,7 @@ const MAX_FINGERPRINT_BYTES = 50 * 1024 * 1024;
 const GIT_INDEX_MARKER = "__git_index__";
 const GIT_HEAD_MARKER = "__git_head__";
 const GIT_PUSH_HEAD_PREFIX = "__git_push_head__:";
+const GIT_REMOTE_PREFIX = "__git_remote__:";
 
 function fingerprintFile(relPath: string): ConfirmationFileState {
   const normalized = String(relPath);
@@ -121,7 +122,30 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
   } catch {
     return { kind: "git_head", path: marker, status: "unavailable", sha256: null };
   }
+}function fingerprintGitRemote(remote: string): ConfirmationFileState {
+  const marker = GIT_REMOTE_PREFIX + remote;
+  try {
+    if (!/^[\w.-]+$/.test(remote) || !remote) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+    const gitEntry = path.join(getProjectRoot(), ".git");
+    let gitDir = gitEntry;
+    if (fs.lstatSync(gitEntry).isFile()) {
+      const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
+      if (!match) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+      gitDir = path.resolve(getProjectRoot(), match[1]!.trim());
+    }
+    const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
+    const escaped = remote.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
+    const section = new RegExp("^\\[remote \"" + escaped + "\"\\]\\s*\\n([\\s\\S]*?)(?=^\\[|$)", "m").exec(config)?.[1] ?? "";
+    const urls = [...section.matchAll(/^\\s*url\\s*=\\s*(.+)\\s*$/gm)].map((m) => m[1]!.trim());
+    const pushUrls = [...section.matchAll(/^\\s*pushurl\\s*=\\s*(.+)\\s*$/gm)].map((m) => m[1]!.trim());
+    const fetch = section.match(/^\\s*fetch\\s*=\\s*(.+)\\s*$/m)?.[1]?.trim() ?? "";
+    const state = JSON.stringify({ urls, pushUrls, fetch });
+    return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(state).digest("hex") };
+  } catch {
+    return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+  }
 }
+
 export function captureConfirmationFileStates(paths: string[]): ConfirmationFileStates {
   const unique = [...new Set(paths.map((value) => String(value)).filter(Boolean))];
   return unique.map((value) =>
@@ -131,7 +155,9 @@ export function captureConfirmationFileStates(paths: string[]): ConfirmationFile
         ? fingerprintGitHead()
         : value.startsWith(GIT_PUSH_HEAD_PREFIX)
           ? fingerprintGitHead(value.slice(GIT_PUSH_HEAD_PREFIX.length))
-          : fingerprintFile(value),
+          : value.startsWith(GIT_REMOTE_PREFIX)
+            ? fingerprintGitRemote(value.slice(GIT_REMOTE_PREFIX.length))
+            : fingerprintFile(value),
   );
 }
 
@@ -145,7 +171,9 @@ export function confirmationFileStatesMatch(
         ? fingerprintGitIndex()
         : state.kind === "git_head"
           ? fingerprintGitHead(state.path.startsWith(GIT_PUSH_HEAD_PREFIX) ? state.path.slice(GIT_PUSH_HEAD_PREFIX.length) : undefined)
-          : fingerprintFile(state.path);
+          : state.kind === "git_remote"
+            ? fingerprintGitRemote(state.path.slice(GIT_REMOTE_PREFIX.length))
+            : fingerprintFile(state.path);
     return current.status === state.status && current.sha256 === state.sha256;
   });
 }
@@ -192,7 +220,11 @@ export function confirmationPathsForPending(
   if (toolName === "git_commit") return [GIT_INDEX_MARKER];
   if (toolName === "git_push") {
     const branch = typeof args.branch === "string" ? args.branch.trim() : "";
-    return [branch && /^[A-Za-z0-9._/-]+$/.test(branch) ? `${GIT_PUSH_HEAD_PREFIX}${branch}` : GIT_HEAD_MARKER];
+    const remote = typeof args.remote === "string" ? args.remote.trim() : "";
+    return [
+      branch && /^[A-Za-z0-9._/-]+$/.test(branch) ? `${GIT_PUSH_HEAD_PREFIX}${branch}` : GIT_HEAD_MARKER,
+      remote && /^[\w.-]+$/.test(remote) ? `${GIT_REMOTE_PREFIX}${remote}` : `${GIT_REMOTE_PREFIX}<default>`,
+    ];
   }
   if (toolName === "git_pull") return [GIT_HEAD_MARKER, GIT_INDEX_MARKER];
   if (toolName === "apply_patch") {
