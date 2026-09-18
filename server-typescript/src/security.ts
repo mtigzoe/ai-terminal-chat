@@ -1118,6 +1118,14 @@ function writeFileWithinProjectWindows(
         "Refusing to write to a non-file object.",
       );
     }
+    // Windows hardlinks can expose the same inode through another directory
+    // entry outside the project. Refuse in-place mutation when the file has
+    // multiple links, matching the POSIX write path above.
+    if (st.nlink > 1) {
+      throw new SecurityValidationError(
+        "Refusing to modify a hard-linked file with multiple directory entries.",
+      );
+    }
     // Reconstruct a path for assertOpenedWithinProject best-effort reporting
     // by using parentOpenPath/base only for the error message path — the
     // security decision is that parentFd was verified and the child was
