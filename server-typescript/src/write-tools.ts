@@ -849,88 +849,72 @@ function generateUnifiedDiff(
   fromfile: string,
   tofile: string
 ): string {
-  const oldLines = oldText.split("\n");
-  const newLines = newText.split("\n");
+  const splitLines = (text: string): { lines: string[]; trailingNewline: boolean } => {
+    const trailingNewline = text.endsWith("\n");
+    const lines = text.split("\n");
+    if (trailingNewline) lines.pop();
+    return { lines, trailingNewline };
+  };
 
-  const diff: string[] = [];
-  diff.push(`--- ${fromfile}`);
-  diff.push(`+++ ${tofile}`);
+  const oldData = splitLines(oldText);
+  const newData = splitLines(newText);
+  const oldLines = oldData.lines;
+  const newLines = newData.lines;
 
-  const oldCount = oldLines.length;
-  const newCount = newLines.length;
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix += 1;
+  }
 
-  let oldIndex = 1;
-  let newIndex = 1;
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] ===
+      newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
 
-  let i = 0;
-  let j = 0;
+  const oldChangedEnd = oldLines.length - suffix;
+  const newChangedEnd = newLines.length - suffix;
+  const oldChanged = oldLines.slice(prefix, oldChangedEnd);
+  const newChanged = newLines.slice(prefix, newChangedEnd);
 
-  while (i < oldCount || j < newCount) {
-    while (
-      i < oldCount &&
-      j < newCount &&
-      oldLines[i] === newLines[j]
-    ) {
-      i++;
-      j++;
+  const diff: string[] = [
+    `--- ${fromfile}`,
+    `+++ ${tofile}`,
+  ];
+
+  if (oldChanged.length === 0 && newChanged.length === 0) {
+    if (oldData.trailingNewline !== newData.trailingNewline) {
+      const markerLine = oldData.trailingNewline
+        ? "-\\ No newline at end of file"
+        : "+\\ No newline at end of file";
+      diff.push(
+        `@@ -${Math.max(1, prefix)},0 +${Math.max(1, prefix)},0 @@`,
+        markerLine,
+      );
     }
+    return diff.join("\n");
+  }
 
-    const oldRemaining = oldCount - i;
-    const newRemaining = newCount - j;
+  const oldStart = prefix + 1;
+  const newStart = prefix + 1;
+  diff.push(`@@ -${oldStart},${oldChanged.length} +${newStart},${newChanged.length} @@`);
 
-    if (oldRemaining === 0 && newRemaining === 0) {
-      break;
-    }
+  for (const line of oldChanged) diff.push(`-${line}`);
+  if (oldChanged.length > 0 && !oldData.trailingNewline && suffix === 0) {
+    diff.push("\\ No newline at end of file");
+  }
 
-    let oldMatch = oldCount;
-    let newMatch = newCount;
-
-    if (oldRemaining > 0 && newRemaining > 0) {
-      for (let k = 1; k <= Math.min(oldRemaining, newRemaining); k++) {
-        if (oldLines[i + k - 1] === newLines[j + k - 1]) {
-          oldMatch = i + k - 1;
-          newMatch = j + k - 1;
-          break;
-        }
-      }
-    } else if (oldRemaining > 0) {
-      for (let k = 1; k <= oldRemaining; k++) {
-        if (oldLines[i + k - 1] === newLines[j + newRemaining - 1]) {
-          oldMatch = i + k - 1;
-          newMatch = j + newRemaining - 1;
-          break;
-        }
-      }
-    } else if (newRemaining > 0) {
-      for (let k = 1; k <= newRemaining; k++) {
-        if (oldLines[i + oldRemaining - 1] === newLines[j + k - 1]) {
-          oldMatch = i + oldRemaining - 1;
-          newMatch = j + k - 1;
-          break;
-        }
-      }
-    }
-
-    const hunkOldStart = oldIndex + (oldMatch - i);
-    const hunkOldCount = Math.max(0, oldMatch - i);
-    const hunkNewStart = newIndex + (newMatch - j);
-    const hunkNewCount = Math.max(0, newMatch - j);
-
-    diff.push(
-      `@@ -${hunkOldStart},${hunkOldCount} +${hunkNewStart},${hunkNewCount} @@`
-    );
-
-    for (let k = i; k < oldMatch; k++) {
-      diff.push(`-${oldLines[k]}`);
-    }
-    for (let k = j; k < newMatch; k++) {
-      diff.push(`+${newLines[k]}`);
-    }
-
-    oldIndex = hunkOldStart + hunkOldCount;
-    newIndex = hunkNewStart + hunkNewCount;
-    i = oldMatch;
-    j = newMatch;
+  for (const line of newChanged) diff.push(`+${line}`);
+  if (newChanged.length > 0 && !newData.trailingNewline && suffix === 0) {
+    diff.push("\\ No newline at end of file");
   }
 
   return diff.join("\n");
