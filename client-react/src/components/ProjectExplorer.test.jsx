@@ -307,7 +307,7 @@ test('shift-click selects the visible file range and ignores files hidden by the
     ],
   });
 
-  render(<ProjectExplorer host={host} />);
+  render(<ProjectExplorer host={shiftHost} />);
   const checkboxA = await screen.findByRole('checkbox', { name: /select a\.txt for the agent/i });
   const checkboxC = screen.getByRole('checkbox', { name: /select c\.txt for the agent/i });
 
