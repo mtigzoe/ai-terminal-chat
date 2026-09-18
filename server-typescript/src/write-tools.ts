@@ -464,13 +464,9 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
 }
 
 function stripPatchPath(raw: string): string {
-  let candidate = raw.split("\t")[0]!.trim();
-  if (
-    candidate.length >= 2 &&
-    ((candidate.startsWith('"') && candidate.endsWith('"')) ||
-      (candidate.startsWith("'") && candidate.endsWith("'")))
-  ) {
-    candidate = candidate.slice(1, -1);
+  let candidate = unquoteGitPath(raw);
+  if (/^(?:a|b)\//.test(candidate)) {
+    candidate = candidate.slice(2);
   }
   return candidate;
 }
