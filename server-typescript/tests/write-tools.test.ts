@@ -184,6 +184,17 @@ describe("delete_file", () => {
     expect((result as { error: string }).error.toLowerCase()).toContain("directory");
   });
 
+  it("can delete a dangling in-project symlink", () => {
+    fs.symlinkSync("missing-target.txt", path.join(root, "dangling.txt"));
+
+    const preview = delete_file("dangling.txt");
+    expect((preview as { requires_confirmation: boolean }).requires_confirmation).toBe(true);
+
+    const result = delete_file("dangling.txt", true);
+    expect(result).toEqual({ path: "dangling.txt", deleted: true });
+    expect(fs.existsSync(path.join(root, "dangling.txt"))).toBe(false);
+  });
+
   it("deletes a symlink itself instead of its target", () => {
     fs.writeFileSync(path.join(root, "target.txt"), "keep me");
     fs.symlinkSync("target.txt", path.join(root, "link.txt"));
