@@ -162,7 +162,24 @@ function App() {
   const loadChats = () => { if (!isMemoryEnabled()) return []; try { const raw = localStorage.getItem(CHAT_STORAGE_KEY); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; } catch { return []; } };
   const saveChats = (chats) => { if (!isMemoryEnabled()) return; try { localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats)); } catch {} };
   const saveCurrentChat = (currentData) => { if (!isMemoryEnabled() || !Array.isArray(currentData) || currentData.length === 0) return; const chats = loadChats(); const existingIndex = chats.findIndex((c) => c.id === chatId); const firstUserMessage = currentData.find((m) => m.role === 'user'); const title = firstUserMessage?.parts?.[0]?.text || firstUserMessage?.text || 'Untitled chat'; const trimmedTitle = String(title).trim().slice(0, 80); const chatEntry = { id: chatId, title: trimmedTitle || 'Untitled chat', date: new Date().toISOString(), messages: currentData }; if (existingIndex >= 0) chats[existingIndex] = chatEntry; else chats.unshift(chatEntry); saveChats(chats); setNewChatAvailable(true); };
-  const handleNewChat = () => { const newId = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`; setChatId(newId); try { localStorage.setItem('ai-terminal-chat:current-chat-id', newId); } catch {} setData([]); setAnswer(''); showStreamdiv(false); setStreamToolActivity([]); setAgentStatus(null); setPendingConfirmation(null); setConfirmationResolving(false); setPathForTerminal(null); setWaiting(false); setNewChatAvailable(false); window.setTimeout(() => inputRef.current?.focus(), 0); };
+  const handleNewChat = () => {
+    // A new chat must invalidate any in-flight request before clearing the UI.
+    // Otherwise the old request's finally block can repopulate the new chat.
+    const activeRequestId = requestIdRef.current;
+    if (activeRequestId) {
+      fetch(`${host}/cancel/${activeRequestId}`, { method: 'POST' }).catch(() => {});
+    }
+    abortControllerRef.current?.abort();
+    requestIdRef.current = null;
+    abortControllerRef.current = null;
+    awaitingConfirmationRef.current = false;
+    confirmingRef.current = false;
+    const newId = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setChatId(newId);
+    try { localStorage.setItem('ai-terminal-chat:current-chat-id', newId); } catch {}
+    setData([]); setAnswer(''); showStreamdiv(false); setStreamToolActivity([]); setAgentStatus(null); setPendingConfirmation(null); setConfirmationResolving(false); setPathForTerminal(null); setWaiting(false); setNewChatAvailable(false);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
   useEffect(() => { if (data.length === 0) { setNewChatAvailable(false); return; } const timer = window.setTimeout(() => saveCurrentChat(data), 300); return () => window.clearTimeout(timer); }, [data, chatId]);
   useEffect(() => { const sync = () => { try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths') ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) { setAllowedPaths([]); return; } const parsed = JSON.parse(raw); setAllowedPaths(Array.isArray(parsed) ? parsed : []); } catch { setAllowedPaths([]); } }; const onVisible = () => { if (document.visibilityState === 'visible') sync(); }; window.addEventListener('focus', sync); document.addEventListener('visibilitychange', onVisible); const onStorage = (event) => { if (event.key === 'ai-terminal-chat:allowed-paths') sync(); }; window.addEventListener('storage', onStorage); return () => { window.removeEventListener('focus', sync); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('storage', onStorage); }; }, []);
   useEffect(() => { const regions = ['chat', 'terminal']; const focusRegion = (id) => { if (id === 'chat') { inputRef.current?.focus(); return; } if (id === 'terminal') window.setTimeout(() => document.querySelector('[data-focus-target="terminal-input"]')?.focus?.(), 0); }; const onKeyDown = (event) => { if (event.key !== 'F6') return; event.preventDefault(); const active = document.activeElement; let current = 'chat'; if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') current = 'terminal'; else if (active === inputRef.current || active?.closest?.('.chat-app')) current = 'chat'; const index = regions.indexOf(current); const nextIndex = event.shiftKey ? (index - 1 + regions.length) % regions.length : (index + 1) % regions.length; focusRegion(regions[nextIndex]); }; window.addEventListener('keydown', onKeyDown); return () => window.removeEventListener('keydown', onKeyDown); }, []);
@@ -465,8 +482,14 @@ const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: n
           setAgentStatus({ phase: 'error', message: errorMessage, assertive: true });
         }
       } finally {
-        if (abortControllerRef.current === controller) abortControllerRef.current = null;
-        if (requestIdRef.current === requestId) requestIdRef.current = null;
+        const requestIsStillActive = requestIdRef.current === requestId;
+        if (!requestIsStillActive) {
+          // A newer chat/request replaced this one. Do not let this stale
+          // request mutate the new conversation state in its finally block.
+          return;
+        }
+        abortControllerRef.current = null;
+        requestIdRef.current = null;
         // If we're awaiting confirmation, the stream ended at pending_confirmation.
         // We already committed a pending model message to data. Don't create another one.
         // Just clear the streaming buffer since the pending message is now in data.
