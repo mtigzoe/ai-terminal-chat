@@ -36,4 +36,20 @@ describe("pending", () => {
     expect(getPending("tool-a")).toBeUndefined();
     expect(getPending("tool-b")).toBeUndefined();
   });
+  it("invalidates create_file confirmation when the target appears", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { getProjectRoot } = await import("../src/security.ts");
+    const rel = "__pending_create_file_test__.txt";
+    const abs = path.join(getProjectRoot(), rel);
+    try {
+      fs.rmSync(abs, { force: true });
+      const action = createPending("create_file", { path: rel }, { requires_confirmation: true });
+      fs.writeFileSync(abs, "created elsewhere", "utf8");
+      expect(popPending(action.action_id)).toBeUndefined();
+    } finally {
+      fs.rmSync(abs, { force: true });
+    }
+  });
+
 });
