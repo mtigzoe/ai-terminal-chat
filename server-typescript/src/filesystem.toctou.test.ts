@@ -142,7 +142,7 @@ test("write_file confirm path refuses final-component symlink", () => {
   rmSync(outside, { recursive: true, force: true });
 });
 
-test("unlinkWithinProject refuses final-component symlink", () => {
+test("unlinkWithinProject safely deletes a final-component symlink without following its target", () => {
   const { project, outside } = makeProject();
   const secret = join(outside, "secret.txt");
   const link = join(project, "d.txt");
@@ -155,14 +155,14 @@ test("unlinkWithinProject refuses final-component symlink", () => {
     throw err;
   }
 
-  assert.throws(
-    () => unlinkWithinProject("d.txt"),
-    (e: unknown) =>
-      e instanceof SecurityValidationError ||
-      (e as NodeJS.ErrnoException).code === "ELOOP",
-  );
+  // Deletion is intentionally different from read/write: the safe operation
+  // is to remove the in-project symlink entry itself, not follow it. The
+  // parent is pinned by unlinkWithinProject() before the final unlink.
+  const result = unlinkWithinProject("d.txt");
+  assert.equal(existsSync(link), false);
+  assert.equal(result.resolvedPath.endsWith("d.txt"), true);
   assert.equal(existsSync(secret), true);
-  assert.equal(readFileSync(secret, "utf8"), "OUTSIDE_SECRET\n");
+  assert.equal(readFileSync(secret, "utf8"), "OUTSIDE_SECRET\\n");
 
   rmSync(project, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
