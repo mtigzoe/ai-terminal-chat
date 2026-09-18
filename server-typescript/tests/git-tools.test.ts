@@ -79,6 +79,21 @@ describe("git tool security", () => {
     }
   });
 
+  it("preserves scalar Git config overrides when sanitizing multivalue overrides", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "url.file:///outside/.insteadOf", "https://example.com/"], { cwd: root });
+    execFileSync("git", ["config", "merge.test.driver", "unsafe-command"], { cwd: root });
+    execFileSync("git", ["remote", "add", "origin", "https://example.com/repo.git"], { cwd: root });
+
+    const remote = await runIsolatedGit(["remote", "get-url", "origin"]);
+    expect(remote.code).toBe(0);
+    expect(remote.stdout.trim()).toBe("https://example.com/repo.git");
+
+    const driver = await runIsolatedGit(["config", "--get", "merge.test.driver"]);
+    expect(driver.code).not.toBe(0);
+    expect(driver.stdout.trim()).toBe("");
+  });
+
   it("restores a deleted tracked file from HEAD", async () => {
     execFileSync("git", ["init", "-q"], { cwd: root });
     execFileSync("git", ["add", "allowed.txt"], { cwd: root });
