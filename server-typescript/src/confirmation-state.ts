@@ -15,6 +15,7 @@ export type ConfirmationFileStates = ConfirmationFileState[];
 const MAX_FINGERPRINT_BYTES = 50 * 1024 * 1024;
 const GIT_INDEX_MARKER = "__git_index__";
 const GIT_HEAD_MARKER = "__git_head__";
+const GIT_PUSH_HEAD_PREFIX = "__git_push_head__:";
 
 function fingerprintFile(relPath: string): ConfirmationFileState {
   const normalized = String(relPath);
@@ -66,7 +67,7 @@ function fingerprintGitIndex(): ConfirmationFileState {
   }
 }
 
-function fingerprintGitHead(): ConfirmationFileState {
+function fingerprintGitHead(branch?: string): ConfirmationFileState {
   try {
     const gitEntry = path.join(getProjectRoot(), ".git");
     let gitDir = gitEntry;
@@ -111,7 +112,13 @@ function fingerprintGitHead(): ConfirmationFileState {
 export function captureConfirmationFileStates(paths: string[]): ConfirmationFileStates {
   const unique = [...new Set(paths.map((value) => String(value)).filter(Boolean))];
   return unique.map((value) =>
-    value === GIT_INDEX_MARKER ? fingerprintGitIndex() : value === GIT_HEAD_MARKER ? fingerprintGitHead() : fingerprintFile(value),
+    value === GIT_INDEX_MARKER
+      ? fingerprintGitIndex()
+      : value === GIT_HEAD_MARKER
+        ? fingerprintGitHead()
+        : value.startsWith(GIT_PUSH_HEAD_PREFIX)
+          ? fingerprintGitHead(value.slice(GIT_PUSH_HEAD_PREFIX.length))
+          : fingerprintFile(value),
   );
 }
 
@@ -124,7 +131,7 @@ export function confirmationFileStatesMatch(
       state.kind === "git_index"
         ? fingerprintGitIndex()
         : state.kind === "git_head"
-          ? fingerprintGitHead()
+          ? fingerprintGitHead(state.path.startsWith(GIT_PUSH_HEAD_PREFIX) ? state.path.slice(GIT_PUSH_HEAD_PREFIX.length) : undefined)
           : fingerprintFile(state.path);
     return current.status === state.status && current.sha256 === state.sha256;
   });
@@ -170,7 +177,10 @@ export function confirmationPathsForPending(
     return [target];
   }
   if (toolName === "git_commit") return [GIT_INDEX_MARKER];
-  if (toolName === "git_push") return [GIT_HEAD_MARKER];
+  if (toolName === "git_push") {
+    const branch = typeof args.branch === "string" ? args.branch.trim() : "";
+    return [branch && /^[A-Za-z0-9._/-]+$/.test(branch) ? `${GIT_PUSH_HEAD_PREFIX}${branch}` : GIT_HEAD_MARKER];
+  }
   if (toolName === "git_pull") return [GIT_HEAD_MARKER, GIT_INDEX_MARKER];
   if (toolName === "apply_patch") {
     return patchTargetPaths(typeof args.patch === "string" ? args.patch : "");
