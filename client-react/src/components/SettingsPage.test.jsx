@@ -190,6 +190,7 @@ describe('provider selection persistence', () => {
 
     const model = screen.getByLabelText(/^model$/i);
     fireEvent.change(model, { target: { value: 'qwen3.5' } });
+    fireEvent.blur(model);
 
     await waitFor(() =>
       expect(axios.post).toHaveBeenCalledWith(`${HOST}/providers/select`, {
