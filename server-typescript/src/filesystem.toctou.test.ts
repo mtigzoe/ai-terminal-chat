@@ -162,7 +162,7 @@ test("unlinkWithinProject safely deletes a final-component symlink without follo
   assert.equal(existsSync(link), false);
   assert.equal(result.resolvedPath.endsWith("d.txt"), true);
   assert.equal(existsSync(secret), true);
-  assert.equal(readFileSync(secret, "utf8"), "OUTSIDE_SECRET\\n");
+  assert.equal(readFileSync(secret, "utf8"), "OUTSIDE_SECRET\n");
 
   rmSync(project, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
