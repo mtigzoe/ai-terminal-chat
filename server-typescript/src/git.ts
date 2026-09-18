@@ -383,7 +383,10 @@ export async function gitRestore(path: string, staged = false, confirm = false):
   try { filePath = safePath(path); } catch (exc) { return { error: String(exc) }; }
   if (isSensitivePath(filePath)) return { error: `Refusing to restore sensitive file: ${path}` };
   const root = getProjectRoot();
-  const relativePath = filePath.slice(root.length).replace(/^[/\\]+/, "");
+  // Keep the Git path lexical: safePath() resolves existing symlinks for security,
+  // but git restore must operate on the requested symlink itself.
+  const lexicalPath = resolve(root, path.trim());
+  const relativePath = lexicalPath.slice(root.length).replace(/^[/\\]+/, "");
   if (!confirm) {
     const action = staged ? "unstage" : "restore";
     return { requires_confirmation: true, path: relativePath, action, message: `'${relativePath}' will be ${action}d. This discards uncommitted changes. Confirm to proceed.` };
