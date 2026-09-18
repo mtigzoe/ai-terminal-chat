@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { gitCommit, gitPull, gitRestore } from "../src/git.ts";
+import { gitAdd, gitCommit, gitPull, gitRestore } from "../src/git.ts";
 import { runWithAllowedReadPaths, setProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -73,6 +73,27 @@ describe("git tool security", () => {
     expect(result).toEqual({
       error: "A remote is required when specifying a branch.",
     });
+  });
+
+  it("stages a symlink as a symlink instead of its target contents", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, "target.txt"), "target\\n");
+    fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+
+    const result = await runWithAllowedReadPaths(["link.txt"], () =>
+      gitAdd("link.txt", true),
+    );
+
+    expect(result).toEqual({ path: "link.txt", staged: true });
+    const mode = execFileSync("git", ["ls-files", "--stage", "--", "link.txt"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(mode).toMatch(/^120000 /);
+    expect(execFileSync("git", ["show", ":link.txt"], {
+      cwd: root,
+      encoding: "utf8",
+    })).toBe("target.txt");
   });
 
   it("refuses a commit containing staged paths outside the agent selection", async () => {
