@@ -331,6 +331,16 @@ function applyUnifiedDiffSecure(
     if (!rel || rel === "/dev/null") {
       return { files: [], error: "Patch entry missing a usable path." };
     }
+    if (
+      fp.oldPath !== fp.newPath &&
+      fp.oldPath !== "/dev/null" &&
+      fp.newPath !== "/dev/null"
+    ) {
+      return {
+        files: [],
+        error: `Patch path changes/renames are not supported: '${fp.oldPath}' -> '${fp.newPath}'.`,
+      };
+    }
     // Validate path again immediately before use.
     try {
       safePath(rel);
