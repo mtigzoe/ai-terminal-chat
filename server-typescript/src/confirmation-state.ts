@@ -21,6 +21,20 @@ const GIT_REMOTE_PREFIX = "__git_remote__:";
 function fingerprintFile(relPath: string): ConfirmationFileState {
   const normalized = String(relPath);
   try {
+    // Confirmation must bind the requested directory entry, not a symlink's
+    // target. Otherwise a symlink can be retargeted to a different file with
+    // identical contents and the original confirmation would still validate.
+    const lexicalPath = path.resolve(getProjectRoot(), normalized);
+    const lexicalStat = fs.lstatSync(lexicalPath);
+    if (lexicalStat.isSymbolicLink()) {
+      const target = fs.readlinkSync(lexicalPath, "utf8");
+      const payload = Buffer.from("symlink\\0" + target, "utf8");
+      return {
+        path: normalized,
+        status: "present",
+        sha256: crypto.createHash("sha256").update(payload).digest("hex"),
+      };
+    }
     const resolved = safePath(normalized);
     if (!fs.existsSync(resolved)) {
       return { path: normalized, status: "missing", sha256: null };
