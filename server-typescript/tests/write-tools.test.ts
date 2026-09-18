@@ -86,6 +86,24 @@ describe("write_file", () => {
     expect(fs.readFileSync(path.join(root, "doc.txt"), "utf-8")).toBe("line one\n");
   });
 
+  it("preview shows a replacement when the final line changes", () => {
+    fs.writeFileSync(path.join(root, "doc.txt"), "first\nold");
+    const result = write_file("doc.txt", "first\nnew", false);
+    const diff = (result as { diff: string }).diff;
+    expect(diff).toContain("@@ -2,1 +2,1 @@");
+    expect(diff).toContain("-old");
+    expect(diff).toContain("+new");
+  });
+
+  it("preview shows insertion at the end without a phantom blank line", () => {
+    fs.writeFileSync(path.join(root, "doc.txt"), "first\n");
+    const result = write_file("doc.txt", "first\nsecond\n", false);
+    const diff = (result as { diff: string }).diff;
+    expect(diff).toContain("+second");
+    expect(diff).not.toContain("+-");
+    expect(diff).not.toContain("+");
+  });
+
   it("preview reports create for new file", () => {
     const result = write_file("brand-new.txt", "content", false);
     expect((result as { requires_confirmation: boolean }).requires_confirmation).toBe(true);
