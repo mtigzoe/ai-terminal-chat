@@ -25,8 +25,16 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
     // target. Otherwise a symlink can be retargeted to a different file with
     // identical contents and the original confirmation would still validate.
     const lexicalPath = path.resolve(getProjectRoot(), normalized);
-    const lexicalStat = fs.lstatSync(lexicalPath);
-    if (lexicalStat.isSymbolicLink()) {
+    let lexicalStat: fs.Stats | undefined;
+    try {
+      lexicalStat = fs.lstatSync(lexicalPath);
+    } catch (error) {
+      // A missing final component is expected for write confirmations; keep
+      // resolving its existing parent instead of treating lstat ENOENT as an
+      // unavailable fingerprint.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (lexicalStat?.isSymbolicLink()) {
       // A write through a symlink changes its resolved target. Bind both the
       // link target and the target contents so approval cannot overwrite
       // changes made after the preview was generated.
