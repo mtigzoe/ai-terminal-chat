@@ -497,15 +497,22 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
   let srcIndex = 0; // 0-based
 
   for (const hunk of hunks) {
-    const targetStart = Math.max(0, hunk.oldStart - 1);
+    const targetStart = hunk.oldStart - 1;
+    if (hunk.oldStart < 1 || targetStart < srcIndex) {
+      throw new Error("patch hunks are out of order or overlap");
+    }
     while (srcIndex < targetStart) {
       out.push(src[srcIndex]!);
       srcIndex += 1;
     }
+    let oldLinesConsumed = 0;
+    let newLinesProduced = 0;
     for (const hl of hunk.lines) {
       const tag = hl.charAt(0);
       const body = hl.slice(1);
       if (tag === " ") {
+        oldLinesConsumed += 1;
+        newLinesProduced += 1;
         if (srcIndex >= src.length || src[srcIndex] !== body) {
           throw new Error(
             `context mismatch at line ${srcIndex + 1}: expected '${body}', got '${src[srcIndex] ?? "<eof>"}'`,
@@ -514,6 +521,7 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
         out.push(body);
         srcIndex += 1;
       } else if (tag === "-") {
+        oldLinesConsumed += 1;
         if (srcIndex >= src.length || src[srcIndex] !== body) {
           throw new Error(
             `removal mismatch at line ${srcIndex + 1}: expected '${body}', got '${src[srcIndex] ?? "<eof>"}'`,
@@ -521,7 +529,16 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
         }
         srcIndex += 1;
       } else if (tag === "+") {
+        newLinesProduced += 1;
         out.push(body);
+      } else {
+        throw new Error(`invalid patch line prefix: ${tag || "<empty>"}`);
+      }
+    }
+    if (oldLinesConsumed !== hunk.oldCount || newLinesProduced !== hunk.newCount) {
+      throw new Error(
+        `patch hunk line counts do not match header: expected ${hunk.oldCount}/${hunk.newCount}, got ${oldLinesConsumed}/${newLinesProduced}`,
+      );
       }
     }
   }
@@ -530,7 +547,7 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
     srcIndex += 1;
   }
   if (out.length === 0) return "";
-  return out.join("\n") + (hadTrailingNewline || out.length > 0 ? "\n" : "");
+  return out.join("\n") + (hadTrailingNewline ? "\n" : "");
 }
 
 export function apply_patch(
