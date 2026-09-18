@@ -157,3 +157,20 @@ test("git_add pending action is invalidated when the target changes", () => {
   assert.equal(popPending(action.action_id), undefined);
   assert.equal(getPending(action.action_id), undefined);
 });
+
+
+test("git_restore pending action is invalidated when the target changes", () => {
+  const project = makeProject();
+  const target = join(project, "restore-me.txt");
+  writeFileSync(target, "original\\n", "utf8");
+
+  const action = createPending(
+    "git_restore",
+    { path: "restore-me.txt", staged: false },
+    { requires_confirmation: true },
+  );
+  writeFileSync(target, "changed after preview\\n", "utf8");
+
+  assert.equal(popPending(action.action_id), undefined);
+  assert.equal(getPending(action.action_id), undefined);
+});
