@@ -44,6 +44,29 @@ describe("git tool security", () => {
     });
   });
 
+  it("restores a deleted tracked file from HEAD", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", "allowed.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    fs.rmSync(path.join(root, "allowed.txt"));
+
+    const result = await runWithAllowedReadPaths(["allowed.txt"], () =>
+      gitRestore("allowed.txt", false, true),
+    );
+
+    expect(result).toEqual({ path: "allowed.txt", restored: true, unstaged: false });
+    expect(fs.readFileSync(path.join(root, "allowed.txt"), "utf8")).toBe("allowed\n");
+  });
+
   it("refuses a commit containing staged paths outside the agent selection", async () => {
     execFileSync("git", ["init", "-q"], { cwd: root });
     execFileSync("git", ["add", "allowed.txt", "secret.txt"], { cwd: root });
