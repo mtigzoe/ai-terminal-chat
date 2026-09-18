@@ -288,6 +288,17 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello world");
   });
 
+  it("accepts a zero-line old-side hunk for a new file", () => {
+    const patch = `--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,1 @@
++created
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "new.txt"), "utf-8")).toBe("created");
+  });
+
   it("rejects mismatched unified hunk counts", () => {
     fs.writeFileSync(path.join(root, "greeting.txt"), "hello\\n");
     const patch = `--- a/greeting.txt
