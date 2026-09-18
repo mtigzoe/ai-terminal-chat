@@ -23,8 +23,12 @@ describe("Git index confirmation state", () => {
       "__git_index__",
     ]);
     expect(confirmationPathsForPending("git_restore", { path: "file.txt", staged: true })).toEqual([
-      "file.txt",
+      "__git_head__",
       "__git_index__",
+    ]);
+    expect(confirmationPathsForPending("git_restore", { path: "file.txt", staged: false })).toEqual([
+      "file.txt",
+      "__git_head__",
     ]);
   });
 
