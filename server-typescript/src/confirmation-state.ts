@@ -75,7 +75,25 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
         sha256: crypto.createHash("sha256").update(payload).digest("hex"),
       };
     }
-    const resolved = safePath(normalized);
+    let resolved: string;
+    try {
+      resolved = safePath(normalized);
+    } catch {
+      // safePath() requires the final target to exist. For a missing file
+      // below an existing in-project symlinked directory, resolve the parent
+      // separately so the confirmation still binds to the actual location.
+      try {
+        const parent = fs.realpathSync(path.dirname(lexicalPath));
+        if (!fs.existsSync(parent)) throw new Error("missing parent");
+        const root = getProjectRoot();
+        if (!path.resolve(parent).startsWith(path.resolve(root) + path.sep)) {
+          return { path: normalized, status: "unavailable", sha256: null };
+        }
+        resolved = path.join(parent, path.basename(lexicalPath));
+      } catch {
+        return { path: normalized, status: "unavailable", sha256: null };
+      }
+    }
     if (!fs.existsSync(resolved)) {
       // A missing target can still be created later. Bind its resolved parent
       // location so retargeting an in-project symlink in the parent directory
