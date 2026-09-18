@@ -323,11 +323,11 @@ describe("apply_patch", () => {
 `;
     const result = apply_patch(patch, true);
     expect((result as { applied: boolean }).applied).toBe(true);
-    expect(fs.readFileSync(path.join(root, "newline.txt"), "utf-8")).toBe("hello\\n");
+    expect(fs.readFileSync(path.join(root, "newline.txt"), "utf-8")).toBe("hello\n");
   });
 
   it("applies a patch that removes a trailing newline", () => {
-    fs.writeFileSync(path.join(root, "newline.txt"), "hello\\n");
+    fs.writeFileSync(path.join(root, "newline.txt"), "hello\n");
     const patch = `--- a/newline.txt
 +++ b/newline.txt
 @@ -1 +1 @@
