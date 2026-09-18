@@ -110,6 +110,20 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
+  it("invalidates write confirmations when an in-project symlink target changes", () => {
+    const target = path.join(root, "target.txt");
+    const link = path.join(root, "link.txt");
+    fs.writeFileSync(target, "before\\n");
+    fs.symlinkSync("target.txt", link);
+
+    const states = captureConfirmationFileStates(["link.txt"]);
+    expect(states[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    fs.writeFileSync(target, "changed after preview\\n");
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
   it("binds normal git_restore confirmations to the worktree target and index source", () => {
     expect(confirmationPathsForPending("git_restore", { path: "file.txt", staged: false })).toEqual([
       "file.txt",
