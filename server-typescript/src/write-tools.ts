@@ -330,7 +330,13 @@ function applyUnifiedDiffSecure(
     return { files: [], error: "Patch contains a file header without any hunks." };
   }
 
-  // Dry-run or apply each file through secure read/write.
+  // Preflight every file before mutating any of them. A later bad hunk,
+  // missing target, or invalid deletion must not leave earlier files changed.
+  const operations: Array<
+    | { kind: "delete"; rel: string }
+    | { kind: "write"; rel: string; next: string; create: boolean }
+  > = [];
+
   for (const fp of filePatches) {
     const rel = fp.newPath === "/dev/null" ? fp.oldPath : fp.newPath;
     if (!rel || rel === "/dev/null") {
@@ -346,7 +352,7 @@ function applyUnifiedDiffSecure(
         error: `Patch path changes/renames are not supported: '${fp.oldPath}' -> '${fp.newPath}'.`,
       };
     }
-    // Validate path again immediately before use.
+
     try {
       safePath(rel);
     } catch (exc) {
@@ -354,32 +360,20 @@ function applyUnifiedDiffSecure(
     }
 
     if (fp.newPath === "/dev/null") {
-      // Deletion
-      if (dryRun) {
-        try {
-          readFileWithinProject(rel, MAX_PATCH_SIZE * 2);
-        } catch {
-          return { files: [], error: `Patch deletes missing file: ${rel}` };
-        }
-        continue;
-      }
       try {
-        assertPatchTargetsNotOutsideSymlinks([rel]);
-        unlinkWithinProject(rel);
-      } catch (exc) {
-        return {
-          files: [],
-          error: `Failed to delete '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
-        };
+        readFileWithinProject(rel, MAX_PATCH_SIZE * 2);
+      } catch {
+        return { files: [], error: `Patch deletes missing file: ${rel}` };
       }
+      operations.push({ kind: "delete", rel });
       continue;
     }
 
     let current = "";
-    if (fp.oldPath !== "/dev/null") {
+    const create = fp.oldPath === "/dev/null";
+    if (!create) {
       try {
-        const read = readFileWithinProject(rel, MAX_PATCH_SIZE * 2);
-        current = read.contents;
+        current = readFileWithinProject(rel, MAX_PATCH_SIZE * 2).contents;
       } catch (exc) {
         return {
           files: [],
@@ -397,17 +391,26 @@ function applyUnifiedDiffSecure(
         error: `Patch does not apply cleanly to '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
       };
     }
+    operations.push({ kind: "write", rel, next, create });
+  }
 
-    if (dryRun) continue;
+  if (dryRun) return { files: resolvedRel };
 
+  // All reads and hunk validation succeeded. Only now mutate.
+  for (const operation of operations) {
     try {
-      // Re-check symlink status immediately before the write.
-      assertPatchTargetsNotOutsideSymlinks([rel]);
-      writeFileWithinProject(rel, next, {});
+      assertPatchTargetsNotOutsideSymlinks([operation.rel]);
+      if (operation.kind === "delete") {
+        unlinkWithinProject(operation.rel);
+      } else {
+        writeFileWithinProject(operation.rel, operation.next, {
+          exclusive: operation.create,
+        });
+      }
     } catch (exc) {
       return {
         files: [],
-        error: `Failed to write '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
+        error: `Failed to ${operation.kind === "delete" ? "delete" : "write"} '${operation.rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
       };
     }
   }
@@ -758,193 +761,3 @@ export function git_add(relPath: string, confirm = false): Record<string, unknow
   const rel = path.relative(root, lexicalPath);
 
   if (!confirm) {
-    return {
-      requires_confirmation: true,
-      path: rel,
-      message: `'${rel}' was NOT staged. Show the user what would be staged and ask them to explicitly confirm it, then call git_add again with confirm=true.`,
-    };
-  }
-
-  try {
-    stageFileWithoutFiltersForWriteTool(rel, filePath, lexicalPath);
-  } catch (exc) {
-    return { error: `git add failed: ${exc instanceof Error ? exc.message : String(exc)}` };
-  }
-
-  return { path: rel, staged: true };
-}
-
-function extractPatchTargetPaths(patchText: string): string[] {
-  const paths: string[] = [];
-  const seen = new Set<string>();
-
-  const add = (raw: string) => {
-    let candidate = raw.split("\t")[0].trim();
-    // Strip optional git path quotes: "foo bar.txt"
-    if (
-      candidate.length >= 2 &&
-      ((candidate.startsWith('"') && candidate.endsWith('"')) ||
-        (candidate.startsWith("'") && candidate.endsWith("'")))
-    ) {
-      candidate = candidate.slice(1, -1);
-    }
-    if (!candidate || candidate === "/dev/null") return;
-    if (seen.has(candidate)) return;
-    seen.add(candidate);
-    paths.push(candidate);
-  };
-
-  for (const line of patchText.split("\n")) {
-    // diff --git a/<path> b/<path> (unquoted paths without spaces)
-    const diffGit = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (diffGit) {
-      add(diffGit[1] ?? "");
-      add(diffGit[2] ?? "");
-      continue;
-    }
-
-    for (const prefix of ["+++ b/", "--- a/", "+++ ", "--- "]) {
-      if (line.startsWith(prefix)) {
-        add(line.slice(prefix.length));
-        break;
-      }
-    }
-  }
-
-  return paths;
-}
-
-/**
- * Refuse patch targets that are final-component symlinks/junctions pointing
- * outside the project. Closes a TOCTOU class where safePath passed, then
- * `git apply` followed a replaced symlink to an outside file.
- */
-function assertPatchTargetsNotOutsideSymlinks(relPaths: string[]): void {
-  const root = getProjectRoot();
-  for (const rel of relPaths) {
-    let abs: string;
-    try {
-      abs = safePath(rel);
-    } catch (exc) {
-      throw new SecurityValidationError(
-        `Patch touches an invalid path '${rel}': ${exc instanceof Error ? exc.message : String(exc)}`,
-      );
-    }
-    if (!fs.existsSync(abs)) {
-      // New file: ensure parent stays inside the project.
-      const parent = path.dirname(abs);
-      if (fs.existsSync(parent)) {
-        let parentReal: string;
-        try {
-          parentReal = fs.realpathSync(parent);
-        } catch {
-          throw new SecurityValidationError(
-            `Patch parent path is not accessible: ${rel}`,
-          );
-        }
-        if (!isPathWithinRoot(root, parentReal)) {
-          throw new SecurityValidationError(
-            `Patch would write outside the project via parent path: ${rel}`,
-          );
-        }
-      }
-      continue;
-    }
-    try {
-      const st = fs.lstatSync(abs);
-      if (st.isSymbolicLink()) {
-        // Refuse all final-component symlinks: git apply / path opens would
-        // follow them, and a replace-after-validate race is a classic TOCTOU.
-        throw new SecurityValidationError(
-          `Refusing to patch a symbolic link or reparse point: ${rel}`,
-        );
-      }
-      const target = fs.realpathSync(abs);
-      if (!isPathWithinRoot(root, target)) {
-        throw new SecurityValidationError(
-          `Refusing to patch path outside the project: ${rel}`,
-        );
-      }
-    } catch (err) {
-      if (err instanceof SecurityValidationError) throw err;
-      throw new SecurityValidationError(
-        `Could not verify patch target '${rel}': ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-}
-
-function generateUnifiedDiff(
-  oldText: string,
-  newText: string,
-  fromfile: string,
-  tofile: string
-): string {
-  const splitLines = (text: string): { lines: string[]; trailingNewline: boolean } => {
-    const trailingNewline = text.endsWith("\n");
-    const lines = text.split("\n");
-    if (trailingNewline) lines.pop();
-    return { lines, trailingNewline };
-  };
-
-  const oldData = splitLines(oldText);
-  const newData = splitLines(newText);
-  const oldLines = oldData.lines;
-  const newLines = newData.lines;
-
-  let prefix = 0;
-  while (
-    prefix < oldLines.length &&
-    prefix < newLines.length &&
-    oldLines[prefix] === newLines[prefix]
-  ) {
-    prefix += 1;
-  }
-
-  let suffix = 0;
-  while (
-    suffix < oldLines.length - prefix &&
-    suffix < newLines.length - prefix &&
-    oldLines[oldLines.length - 1 - suffix] ===
-      newLines[newLines.length - 1 - suffix]
-  ) {
-    suffix += 1;
-  }
-
-  // If EOF newline state changes, the hunk must reach the final line so the
-  // standard newline marker can be attached to a line in the hunk.
-  if (oldData.trailingNewline !== newData.trailingNewline) {
-    prefix = 0;
-    suffix = 0;
-  }
-
-  const oldChangedEnd = oldLines.length - suffix;
-  const newChangedEnd = newLines.length - suffix;
-  const oldChanged = oldLines.slice(prefix, oldChangedEnd);
-  const newChanged = newLines.slice(prefix, newChangedEnd);
-
-  const diff: string[] = [
-    `--- ${fromfile}`,
-    `+++ ${tofile}`,
-  ];
-
-  if (oldChanged.length === 0 && newChanged.length === 0) {
-    return diff.join("\n");
-  }
-
-  const oldStart = prefix + 1;
-  const newStart = prefix + 1;
-  diff.push(`@@ -${oldStart},${oldChanged.length} +${newStart},${newChanged.length} @@`);
-
-  for (const line of oldChanged) diff.push(`-${line}`);
-  if (oldChanged.length > 0 && !oldData.trailingNewline && suffix === 0) {
-    diff.push("\\ No newline at end of file");
-  }
-
-  for (const line of newChanged) diff.push(`+${line}`);
-  if (newChanged.length > 0 && !newData.trailingNewline && suffix === 0) {
-    diff.push("\\ No newline at end of file");
-  }
-
-  return diff.join("\n");
-}
