@@ -6,7 +6,7 @@ describe("limitRequestBody", () => {
     const request = new Request("http://localhost/test", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ padding: "x".repeat(2 * 1024 * 1024) }),
+      body: JSON.stringify({ padding: "x".repeat(2 * 1024 * 1024 + 1) }),
     });
 
     const result = await limitRequestBody(request);
