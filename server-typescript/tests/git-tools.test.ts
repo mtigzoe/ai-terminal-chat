@@ -18,10 +18,8 @@ describe("git tool security", () => {
   beforeEach(() => {
     root = makeRepoDir();
     setProjectRoot(root);
-    fs.writeFileSync(path.join(root, "allowed.txt"), "allowed
-");
-    fs.writeFileSync(path.join(root, "secret.txt"), "secret
-");
+    fs.writeFileSync(path.join(root, "allowed.txt"), "allowed\\n");
+    fs.writeFileSync(path.join(root, "secret.txt"), "secret\\n");
   });
 
   afterEach(() => {
