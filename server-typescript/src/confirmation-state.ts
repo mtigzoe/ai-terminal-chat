@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { getProjectRoot, isPathWithinRoot, safePath } from "./security.ts";
+import { getProjectRoot, safePath } from "./security.ts";
 
 export interface ConfirmationFileState {
   kind?: "file" | "git_index" | "git_head" | "git_remote";
@@ -83,12 +83,9 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
       // below an existing in-project symlinked directory, resolve the parent
       // separately so the confirmation still binds to the actual location.
       try {
-        const parent = fs.realpathSync(path.dirname(lexicalPath));
-        if (!fs.existsSync(parent)) throw new Error("missing parent");
-        const root = getProjectRoot();
-        if (!isPathWithinRoot(root, parent)) {
-          return { path: normalized, status: "unavailable", sha256: null };
-        }
+        // Resolve the existing parent through the normal security boundary;
+        // only the final missing component remains lexical.
+        const parent = safePath(path.dirname(normalized));
         resolved = path.join(parent, path.basename(lexicalPath));
       } catch {
         return { path: normalized, status: "unavailable", sha256: null };
