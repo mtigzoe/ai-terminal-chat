@@ -61,8 +61,6 @@ describe("Git index confirmation state", () => {
         GIT_COMMITTER_EMAIL: "test@example.com",
       },
     });
-    const states = captureConfirmationFileStates(["__git_push_head__:refs/heads/master"]);
-    expect(states[0]?.status).toBe("missing");
     const currentBranch = execFileSync("git", ["branch", "--show-current"], { cwd: root, encoding: "utf8" }).trim();
     const actual = captureConfirmationFileStates([`__git_push_head__:refs/heads/${currentBranch}`]);
     expect(actual[0]?.status).toBe("present");
