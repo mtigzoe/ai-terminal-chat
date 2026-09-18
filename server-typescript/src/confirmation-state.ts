@@ -96,7 +96,12 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
 
     const headPath = path.join(gitDir, "HEAD");
     const head = fs.readFileSync(headPath, "utf8");
-    const ref = branch
+    // Git push accepts the symbolic ref name HEAD as a source. It must
+    // bind to the current HEAD contents, not to a hypothetical
+    // refs/heads/HEAD file. Otherwise a confirmed `git push ... HEAD`
+    // could silently push a different commit after the preview.
+    const isSymbolicHead = branch === "HEAD";
+    const ref = branch && !isSymbolicHead
       ? `refs/heads/${branch}`
       : /^ref:\s*(.+)\s*$/.exec(head)?.[1]?.trim();
 
@@ -126,7 +131,7 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
       }
     }
 
-    const state = branch ? refState : head + "\n" + refState;
+    const state = branch && !isSymbolicHead ? refState : head + "\n" + refState;
     return {
       kind: "git_head",
       path: marker,
