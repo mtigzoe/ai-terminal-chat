@@ -50,6 +50,37 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(branchStates)).toBe(false);
   });
 
+  it("binds fully qualified push refs to the actual ref state", () => {
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const states = captureConfirmationFileStates(["__git_push_head__:refs/heads/master"]);
+    expect(states[0]?.status).toBe("missing");
+    const currentBranch = execFileSync("git", ["branch", "--show-current"], { cwd: root, encoding: "utf8" }).trim();
+    const actual = captureConfirmationFileStates([`__git_push_head__:refs/heads/${currentBranch}`]);
+    expect(actual[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(actual)).toBe(true);
+
+    execFileSync("git", ["commit", "--allow-empty", "-m", "advance"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    expect(confirmationFileStatesMatch(actual)).toBe(false);
+  });
+
   it("tracks multiple remote URLs and push URLs", () => {
     execFileSync("git", ["remote", "add", "origin", "https://example.com/fetch.git"], { cwd: root });
     execFileSync("git", ["config", "--add", "remote.origin.pushurl", "https://example.com/push.git"], { cwd: root });
