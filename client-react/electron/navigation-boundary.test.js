@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowedNavigationUrl } from './security-utils.cjs';
+import { isAllowedNavigationUrl, isAuthorizedProjectRoot } from './security-utils.cjs';
 
 describe('Electron navigation boundary', () => {
   it('allows the configured development renderer origin', () => {
@@ -36,5 +36,20 @@ describe('Electron navigation boundary', () => {
     expect(isAllowedNavigationUrl(indexUrl, entry)).toBe(true);
     expect(isAllowedNavigationUrl(otherUrl, entry)).toBe(false);
     expect(isAllowedNavigationUrl('https://example.com/', entry)).toBe(false);
+  });
+});
+
+
+describe('Electron project root authorization', () => {
+  it('accepts only roots previously approved by the native picker', () => {
+    const root = process.cwd();
+    const approved = new Set([root]);
+    expect(isAuthorizedProjectRoot(root, approved)).toBe(true);
+    expect(isAuthorizedProjectRoot(require('node:path').dirname(root), approved)).toBe(false);
+  });
+
+  it('rejects missing or malformed roots', () => {
+    expect(isAuthorizedProjectRoot('', new Set())).toBe(false);
+    expect(isAuthorizedProjectRoot('/path/that/does/not/exist', new Set())).toBe(false);
   });
 });
