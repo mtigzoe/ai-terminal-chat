@@ -151,8 +151,21 @@ function fingerprintGitRemote(remote: string): ConfirmationFileState {
     if (!remote || (remote !== "<default>" && !/^[\w.-]+$/.test(remote))) {
       return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
     }
+    // In linked worktrees, remote definitions normally live in the
+    // common repository config rather than the per-worktree gitdir. Bind the
+    // confirmation to both so changing a remote URL cannot invalidate neither
+    // the preview nor the confirmed push/pull target.
+    let commonDir = gitDir;
+    const commondirPath = path.join(gitDir, "commondir");
+    if (fs.existsSync(commondirPath)) {
+      const commonRef = fs.readFileSync(commondirPath, "utf8").trim();
+      if (!commonRef) {
+        return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
+      }
+      commonDir = path.resolve(gitDir, commonRef);
+    }
     const configPaths = [
-      path.join(gitDir, "config"),
+      path.join(commonDir, "config"),
       path.join(gitDir, "config.worktree"),
     ];
     const configParts: string[] = [];
