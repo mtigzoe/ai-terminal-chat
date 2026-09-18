@@ -141,6 +141,19 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
+  it("binds apply_patch confirmations for unprefixed unified-diff paths", () => {
+    const patch = "--- file.txt\n+++ file.txt\n@@ -1 +1 @@\n-one\n+two\n";
+    expect(confirmationPathsForPending("apply_patch", { patch })).toEqual(["file.txt"]);
+
+    const states = captureConfirmationFileStates(
+      confirmationPathsForPending("apply_patch", { patch }),
+    );
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    fs.writeFileSync(path.join(root, "file.txt"), "changed after preview\n");
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
   it("invalidates write confirmations when an in-project symlink target changes", () => {
     const target = path.join(root, "target.txt");
     const link = path.join(root, "link.txt");
