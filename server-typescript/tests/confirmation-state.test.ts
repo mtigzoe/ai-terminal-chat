@@ -29,8 +29,8 @@ describe("Git index confirmation state", () => {
   });
 
   it("binds git_push confirmations to the current local HEAD", () => {
-    expect(confirmationPathsForPending("git_push", {})).toEqual(["__git_head__"]);
-    expect(confirmationPathsForPending("git_push", { branch: "other" })).toEqual(["__git_push_head__:other"]);
+    expect(confirmationPathsForPending("git_push", {})).toEqual(["__git_head__", "__git_remote__:<default>"]);
+    expect(confirmationPathsForPending("git_push", { branch: "other", remote: "origin" })).toEqual(["__git_push_head__:other", "__git_remote__:origin"]);
     const states = captureConfirmationFileStates(["__git_head__"]);
     expect(states[0]?.kind).toBe("git_head");
     expect(states[0]?.status).toBe("present");
