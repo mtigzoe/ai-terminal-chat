@@ -858,6 +858,17 @@ app.post("/confirm", async (c) => {
     action.resume !== undefined &&
     action.resume.provider_fingerprint === providerFingerprint(provider);
 
+  if (action.resume !== undefined && !canResume) {
+    return c.json(
+      {
+        error: "Pending confirmation is stale because the provider or model changed. Run a fresh preview before confirming.",
+        action_id: actionId,
+        stale: true,
+      },
+      409 as any,
+    );
+  }
+
   if (!canResume) {
     const { status, body } = await confirmLegacy(action, actionId, confirmed);
     return c.json(body, status as any);
