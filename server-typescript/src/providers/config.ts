@@ -39,7 +39,7 @@ export function loadProviderEnvConfig(name: string): ProviderEnvConfig {
         provider: "gemini",
         model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
         api_key: process.env.GOOGLE_API_KEY,
-        timeout: DEFAULT_TIMEOUT,
+        timeout: parseTimeout(process.env.GEMINI_TIMEOUT),
       };
     case "ollama": {
       const baseUrl =
