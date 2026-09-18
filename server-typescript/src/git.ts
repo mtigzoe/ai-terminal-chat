@@ -404,7 +404,7 @@ async function validateCommitScope(): Promise<Record<string, unknown> | null> {
   if (allowed === undefined) return null;
   const result = await runGit(["diff", "--cached", "--name-only", "-z"], GIT_COMMIT_TIMEOUT_MS);
   if (result.code !== 0) return { error: result.stderr.trim() || "Could not inspect staged files." };
-  const staged = result.stdout.split("\\0").filter(Boolean);
+  const staged = result.stdout.split("\0").filter(Boolean);
   for (const stagedPath of staged) {
     if (!isReadAllowed(stagedPath)) return { error: "Refusing to commit staged file outside the agent selected paths: " + stagedPath };
     try { if (isSensitivePath(safePath(stagedPath))) return { error: "Refusing to commit sensitive file: " + stagedPath }; } catch { return { error: "Refusing to commit invalid staged path: " + stagedPath }; }
