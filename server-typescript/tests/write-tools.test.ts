@@ -312,6 +312,34 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello world");
   });
 
+  it("applies a patch that adds a trailing newline", () => {
+    fs.writeFileSync(path.join(root, "newline.txt"), "hello");
+    const patch = `--- a/newline.txt
++++ b/newline.txt
+@@ -1 +1 @@
+-hello
+\\ No newline at end of file
++hello
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "newline.txt"), "utf-8")).toBe("hello\\n");
+  });
+
+  it("applies a patch that removes a trailing newline", () => {
+    fs.writeFileSync(path.join(root, "newline.txt"), "hello\\n");
+    const patch = `--- a/newline.txt
++++ b/newline.txt
+@@ -1 +1 @@
+-hello
++hello
+\\ No newline at end of file
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, "newline.txt"), "utf-8")).toBe("hello");
+  });
+
   it("rejects an inconsistent new-side hunk range", () => {
     const patch = `--- a/patch-range-test.txt
 +++ b/patch-range-test.txt
