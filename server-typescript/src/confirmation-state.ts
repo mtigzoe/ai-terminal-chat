@@ -144,9 +144,9 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
     const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
     const escaped = remote.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
     const section = new RegExp("^\\[remote \"" + escaped + "\"\\]\\s*\\n([\\s\\S]*?)(?=^\\[|$)", "m").exec(config)?.[1] ?? "";
-    const urls = [...section.matchAll(/^\\s*url\\s*=\\s*(.+)\\s*$/gm)].map((m) => m[1]!.trim());
-    const pushUrls = [...section.matchAll(/^\\s*pushurl\\s*=\\s*(.+)\\s*$/gm)].map((m) => m[1]!.trim());
-    const fetch = section.match(/^\\s*fetch\\s*=\\s*(.+)\\s*$/m)?.[1]?.trim() ?? "";
+    const urls = [...section.matchAll(/^\s*url\s*=\s*(.+)\s*$/gm)].map((m) => m[1]!.trim());
+    const pushUrls = [...section.matchAll(/^\s*pushurl\s*=\s*(.+)\s*$/gm)].map((m) => m[1]!.trim());
+    const fetch = section.match(/^\s*fetch\s*=\s*(.+)\s*$/m)?.[1]?.trim() ?? "";
     const state = JSON.stringify({ urls, pushUrls, fetch });
     return { kind: "git_remote", path: marker, status: "present", sha256: crypto.createHash("sha256").update(state).digest("hex") };
   } catch {
