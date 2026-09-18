@@ -317,6 +317,7 @@ function App() {
       }
     } catch (error) {
       const message = getErrorMessage(error, 'Could not resolve confirmation.');
+      if (confirmationRequestIdRef.current !== confirmationRequestId) return;
       setAgentStatus({ phase: 'error', message, assertive: true });
       // The server consumes a pending action before it can fail, so once it has
       // answered at all this action_id is dead. Close the dialog instead of
@@ -378,6 +379,7 @@ const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: n
       abortControllerRef.current = controller;
       const handleEvent = (event) => {
         if (!event || typeof event !== "object") return;
+        if (requestIdRef.current !== requestId) return;
         if (event.type === "progress") {
           const status = statusFromProgressEvent(event);
           if (status) setAgentStatus(status);
@@ -432,6 +434,7 @@ const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: n
         }
       };
       const handlePlainLine = (line) => {
+        if (requestIdRef.current !== requestId) return;
         if (isAgentStatusStreamLine(line)) {
           const status = statusFromStreamLine(line);
           if (status) {
