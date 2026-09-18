@@ -325,6 +325,16 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello\n");
   });
 
+  it("applies quoted git paths with octal escapes", () => {
+    const fileName = "line\tname.txt";
+    fs.writeFileSync(path.join(root, fileName), "hello\n");
+    const patch = "--- \"a/line\\011name.txt\"\n+++ \"b/line\\011name.txt\"\n@@ -1 +1 @@\n-hello\n+hello world\n";
+
+    const result = apply_patch(patch, true);
+    expect((result as { applied: boolean }).applied).toBe(true);
+    expect(fs.readFileSync(path.join(root, fileName), "utf-8")).toBe("hello world\n");
+  });
+
   it("confirm=true applies the change", () => {
     fs.writeFileSync(path.join(root, "greeting.txt"), "hello\n");
 
