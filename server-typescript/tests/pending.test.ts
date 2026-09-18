@@ -11,7 +11,7 @@ describe("pending", () => {
 
     const stored = getPending(action.action_id);
     expect(stored).not.toBeNull();
-    expect(stored!.tool_name).toBe("write_file");
+    expect(stored!.tool_name).toBe("tool-roundtrip");
     expect(stored!.args).toEqual({ path: "__pending_roundtrip__.txt" });
     expect(stored!.preview.requires_confirmation).toBe(true);
 
