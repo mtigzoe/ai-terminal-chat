@@ -38,6 +38,7 @@ function mockSuccessfulLoad({ provider = 'gemini', model = 'gemini-3.6-flash', o
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 afterEach(() => {
@@ -148,6 +149,55 @@ describe('loading settings', () => {
       screen.getByText(/could not reach ollama at http:\/\/localhost:11434/i)
     ).toBeInTheDocument();
     expect(screen.getByText(/for ollama, choose a model/i)).toBeInTheDocument();
+  });
+});
+
+describe('provider selection persistence', () => {
+  test('persists a provider change immediately so closing without Save still restores it', async () => {
+    await renderLoaded({ provider: 'gemini', model: 'gemini-3.6-flash' });
+    axios.post.mockImplementation((url, payload) => {
+      if (url === `${HOST}/providers/select`) {
+        return Promise.resolve({ data: { name: payload.provider, model: payload.model || 'llama3.1' } });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+
+    fireEvent.change(screen.getByLabelText(/ai provider/i), { target: { value: 'ollama' } });
+
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenCalledWith(`${HOST}/providers/select`, {
+        provider: 'ollama',
+        model: undefined,
+        ollama_base_url: 'localhost:11434',
+      })
+    );
+
+    expect(JSON.parse(localStorage.getItem('ai-terminal-chat:provider-selection'))).toMatchObject({
+      provider: 'ollama',
+    });
+  });
+
+  test('persists a model change for the active provider', async () => {
+    await renderLoaded({ provider: 'ollama', model: 'llama3.1' });
+    axios.post.mockImplementation((url, payload) => {
+      if (url === `${HOST}/providers/select`) {
+        return Promise.resolve({
+          data: { name: payload.provider, model: payload.model, base_url: 'http://localhost:11434/v1' },
+        });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+
+    const model = screen.getByLabelText(/^model$/i);
+    fireEvent.change(model, { target: { value: 'qwen3.5' } });
+
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenCalledWith(`${HOST}/providers/select`, {
+        provider: 'ollama',
+        model: 'qwen3.5',
+        ollama_base_url: 'localhost:11434',
+      })
+    );
   });
 });
 
@@ -316,6 +366,12 @@ describe('Install/Run Ollama action', () => {
         return Promise.resolve({ data: { models: [], supports_listing: false } });
       }
       return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    axios.post.mockImplementation((url, payload) => {
+      if (url === `${HOST}/providers/select`) {
+        return Promise.resolve({ data: { name: payload.provider, model: payload.model } });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
     });
 
     fireEvent.change(screen.getByLabelText(/ai provider/i), { target: { value: 'ollama' } });
