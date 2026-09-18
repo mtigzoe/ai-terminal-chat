@@ -254,7 +254,10 @@ export function stripDangerousGitConfig(content: string): string {
 }
 
 async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
-  return gitOperationMutex.runExclusive(async () => {
+  return gitOperationMutex.runExclusive(() => withSanitizedGitConfigUnlocked(fn));
+}
+
+async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<T> {
     const { readFileSync, writeFileSync, existsSync, lstatSync, realpathSync } = await import("node:fs");
     const root = getProjectRoot();
     const gitEntry = join(root, ".git");
@@ -310,7 +313,15 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
   const isRemoteCommand = args[0]?.toLowerCase() === "remote";
   try {
     const dynamic = options.skipDynamicOverrides ? [] : await dynamicConfigOverrides();
-    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...dynamic, ...args];
+    // Command-line -c cannot reliably neutralize multivars such as url.*.insteadOf
+    // or filter.*.{clean,smudge,process}. Sanitize repository config when such keys
+    // are present instead of appending an empty command-line value.
+    if (!options.skipDynamicOverrides && dynamic.length > 0) {
+      return await withSanitizedGitConfigUnlocked(() =>
+        runIsolatedGit(args, { ...options, skipDynamicOverrides: true, holdLock: true }),
+      );
+    }
+    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.GIT_EXTERNAL_DIFF; delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
