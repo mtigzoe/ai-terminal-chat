@@ -296,6 +296,7 @@ test('shift-click selects the visible file range and ignores files hidden by the
   // earlier ProjectExplorer tests.
   localStorage.removeItem('ai-terminal-chat:allowed-paths');
   localStorage.removeItem(`project-explorer:${host}:selected`);
+  sessionStorage.removeItem(`project-explorer:${host}:selected`);
   const user = userEvent.setup();
   mockProjectList({
     '.': [
