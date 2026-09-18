@@ -7,7 +7,7 @@ describe("pending", () => {
   });
 
   it("round-trips a pending action", () => {
-    const action = createPending("write_file", { path: "__pending_roundtrip__.txt" }, { requires_confirmation: true, diff: "+change" });
+    const action = createPending("tool-roundtrip", { path: "__pending_roundtrip__.txt" }, { requires_confirmation: true, diff: "+change" });
 
     const stored = getPending(action.action_id);
     expect(stored).not.toBeNull();
