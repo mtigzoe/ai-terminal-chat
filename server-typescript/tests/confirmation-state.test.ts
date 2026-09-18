@@ -50,6 +50,16 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(branchStates)).toBe(false);
   });
 
+  it("invalidates push confirmations when remote configuration changes", () => {
+    execFileSync("git", ["remote", "add", "origin", "https://example.com/one.git"], { cwd: root });
+    const states = captureConfirmationFileStates(["__git_remote__:origin"]);
+    expect(states[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    execFileSync("git", ["remote", "set-url", "origin", "https://example.com/two.git"], { cwd: root });
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
   it("binds git_pull confirmations to HEAD and the index", () => {
     expect(confirmationPathsForPending("git_pull", {})).toEqual([
       "__git_head__",
