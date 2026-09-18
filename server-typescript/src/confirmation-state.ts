@@ -137,13 +137,21 @@ function fingerprintGitRemote(remote: string): ConfirmationFileState {
     if (!remote || (remote !== "<default>" && !/^[\w.-]+$/.test(remote))) {
       return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
     }
-    const configPath = path.join(gitDir, "config");
-    const config = fs.readFileSync(configPath, "utf8");
+    const configPaths = [
+      path.join(gitDir, "config"),
+      path.join(gitDir, "config.worktree"),
+    ];
+    const configParts: string[] = [];
+    for (const configPath of configPaths) {
+      if (!fs.existsSync(configPath)) continue;
+      configParts.push(configPath.endsWith("config.worktree") ? "\0worktree\0" : "\0config\0");
+      configParts.push(fs.readFileSync(configPath, "utf8"));
+    }
     return {
       kind: "git_remote",
       path: marker,
       status: "present",
-      sha256: crypto.createHash("sha256").update(config).digest("hex"),
+      sha256: crypto.createHash("sha256").update(configParts.join("")).digest("hex"),
     };
   } catch {
     return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
