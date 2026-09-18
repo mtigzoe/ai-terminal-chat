@@ -7,12 +7,12 @@ describe("pending", () => {
   });
 
   it("round-trips a pending action", () => {
-    const action = createPending("write_file", { path: "app.py" }, { requires_confirmation: true, diff: "+change" });
+    const action = createPending("write_file", { path: "__pending_roundtrip__.txt" }, { requires_confirmation: true, diff: "+change" });
 
     const stored = getPending(action.action_id);
     expect(stored).not.toBeNull();
     expect(stored!.tool_name).toBe("write_file");
-    expect(stored!.args).toEqual({ path: "app.py" });
+    expect(stored!.args).toEqual({ path: "__pending_roundtrip__.txt" });
     expect(stored!.preview.requires_confirmation).toBe(true);
 
     const consumed = popPending(action.action_id);
