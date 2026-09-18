@@ -388,7 +388,7 @@ describe("apply_patch", () => {
 `;
     const result = apply_patch(patch, true);
     expect((result as { applied: boolean }).applied).toBe(true);
-    expect(fs.readFileSync(path.join(root, "new.txt"), "utf-8")).toBe("created");
+    expect(fs.readFileSync(path.join(root, "new.txt"), "utf-8")).toBe("created\n");
   });
 
   it("accepts an insertion hunk at end of file", () => {
