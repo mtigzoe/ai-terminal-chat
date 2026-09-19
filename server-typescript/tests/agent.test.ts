@@ -68,6 +68,56 @@ describe("runAgentLoop", () => {
     expect(events[events.length - 1]).toEqual({ type: "final", text: "hello" });
   });
 
+  it("reports a tool timeout even when the tool resolves from abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new FakeProvider([
+        {
+          text: null,
+          tool_calls: [{ name: "fake_wait", args: {}, id: undefined }],
+          raw: null,
+        },
+        { text: "after timeout", tool_calls: [], raw: null },
+      ]);
+
+      const toolFunctions = {
+        fake_wait: (
+          _args: Record<string, unknown>,
+          signal?: AbortSignal,
+        ) =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            signal?.addEventListener(
+              "abort",
+              () => resolve({ error: "aborted" }),
+              { once: true },
+            );
+          }),
+      };
+
+      const eventsPromise = collectEvents(
+        runAgentLoop({
+          provider,
+          contents: [],
+          toolFunctions,
+          createPending: () => ({ action_id: "" }),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const events = await eventsPromise;
+      const toolResult = events.find((event) => event.type === "tool_result") as
+        | { type: "tool_result"; result: { error?: string } }
+        | undefined;
+
+      expect(toolResult?.result.error).toContain(
+        "exceeded its 15s execution limit",
+      );
+      expect(events.some((event) => event.type === "final")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates cancellation into an in-flight tool", async () => {
     const controller = new AbortController();
     let resolveStarted!: () => void;
