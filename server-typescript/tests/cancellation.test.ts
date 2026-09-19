@@ -64,6 +64,28 @@ describe("cancellation", () => {
     expect(newer.aborted).toBe(true);
   });
 
+  it("does not let a stale HTTP abort cancel a reused request ID", () => {
+    const oldRequest = new AbortController();
+    const oldSignal = register("req-reused");
+    const oldCleanup = bindRequestCancellation(
+      oldRequest.signal,
+      "req-reused",
+      oldSignal,
+    );
+
+    // Simulate registry eviction/reuse while the old HTTP request is still
+    // alive.
+    clear();
+    const newSignal = register("req-reused");
+
+    oldRequest.abort();
+
+    expect(newSignal.aborted).toBe(false);
+    expect(cancel("req-reused")).toBe(true);
+    expect(newSignal.aborted).toBe(true);
+    oldCleanup();
+  });
+
   it("cancels a registered request when its HTTP request aborts", () => {
     const requestController = new AbortController();
     const signal = register("req-http-abort");
