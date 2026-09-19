@@ -775,8 +775,8 @@ describe("POST /confirm", () => {
 
   it("keeps a pending confirmation when the confirm request is already cancelled", async () => {
     const action = createPending(
-      "git_push",
-      { branch: "HEAD" },
+      "run_command",
+      { command: "pwd" },
       { requires_confirmation: true },
       undefined,
     );
