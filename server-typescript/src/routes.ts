@@ -45,7 +45,6 @@ import {
   write_file,
   apply_patch,
   delete_file,
-  git_add,
 } from "./write-tools.ts";
 
 type Env = Record<string, never>;
