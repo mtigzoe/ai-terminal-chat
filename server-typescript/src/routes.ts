@@ -830,7 +830,7 @@ async function confirmLegacy(
       }, timeoutSeconds * 1000);
     });
     const result = await Promise.race([
-      Promise.resolve(fn.length >= 2 ? fn(confirmedArgs, controller.signal) : fn(confirmedArgs)),
+      Promise.resolve(fn(confirmedArgs, controller.signal)),
       timeoutPromise,
     ]);
 
