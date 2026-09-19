@@ -199,7 +199,11 @@ function App() {
     confirmingRef.current = true;
     setConfirmationResolving(true);
     try {
-      const response = await axios.post(`${host}/confirm`, { action_id: action.action_id, confirmed });
+      const response = await axios.post(`${host}/confirm`, {
+        action_id: action.action_id,
+        confirmed,
+        allowed_paths: resolveAllowedPaths(),
+      });
       if (confirmationRequestIdRef.current !== confirmationRequestId) return;
       const permissionGranted = action.name === 'read_file_permission' && confirmed === true && response.data?.permission_granted === true;
       if (permissionGranted) {
