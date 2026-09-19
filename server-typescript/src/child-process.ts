@@ -108,6 +108,12 @@ export function runChildProcess(
     };
 
     options.signal?.addEventListener("abort", onAbort, { once: true });
+    // The signal can abort between the initial check and listener
+    // registration. Re-check it after the listener is installed so that
+    // this race cannot leave a newly spawned process running.
+    if (options.signal?.aborted) {
+      onAbort();
+    }
 
     const appendOutput = (stream: "stdout" | "stderr", chunk: Buffer | string) => {
       if (settled || outputLimitExceeded) return;
