@@ -1194,22 +1194,32 @@ async function executeTool(
   if (cancelSignal?.aborted) controller.abort();
   else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const timeoutMessage =
+    `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(() => {
+      timedOut = true;
       controller.abort();
-      reject(
-        new Error(
-          `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
-        )
-      );
+      reject(new Error(timeoutMessage));
     }, timeoutSeconds * 1000);
   });
   try {
-    return await Promise.race([
+    const result = await Promise.race([
       Promise.resolve(fn(args, controller.signal)),
       timeoutPromise,
     ]);
+    // Abort handlers can resolve a tool promise synchronously when the
+    // timeout fires. The timeout must still win even if that resolution
+    // reaches Promise.race before the timeout rejection.
+    if (timedOut) {
+      return { error: timeoutMessage };
+    }
+    return result;
   } catch (exc) {
+    if (timedOut) {
+      return { error: timeoutMessage };
+    }
     if (cancelSignal?.aborted) {
       return { error: `Tool ${name} cancelled.` };
     }
