@@ -20,7 +20,7 @@ import {
 import { join } from "node:path";
 import { tmpdir, platform } from "node:os";
 
-import { runIsolatedGit, GIT_CONFIG_OVERRIDES, stripDangerousGitConfig } from "./git.ts";
+import { runIsolatedGit, GIT_CONFIG_OVERRIDES, stripDangerousGitConfig, withSanitizedGitConfigForTests } from "./git.ts";
 import { runCommand } from "./terminal.ts";
 import {
   __setProjectRootForTests,
@@ -503,6 +503,39 @@ test("stage uses openWithinProject bytes not path-based hash-object", async () =
     const result = await gitAdd("a.txt", true);
     assert.equal(existsSync(marker), false);
     assert.ok(!("error" in result && result.error), JSON.stringify(result));
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("sanitization does not overwrite a concurrent .git/config change", async () => {
+  const repo = initRepo();
+  const configPath = join(repo, ".git", "config");
+  setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
+  const original = readFileSync(configPath, "utf8");
+  assert.ok(original.includes("evil.example"));
+  __setProjectRootForTests(repo);
+
+  try {
+    await withSanitizedGitConfigForTests(async () => {
+      let sanitized = "";
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        sanitized = readFileSync(configPath, "utf8");
+        if (!sanitized.includes("evil.example")) break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(sanitized.includes("evil.example"), false, "config should be sanitized during the operation");
+
+      // Simulate a legitimate external edit while the app is using the
+      // temporary sanitized config.
+      writeFileSync(configPath, sanitized + "\n[user]\n\tname = External Editor\n", "utf8");
+      return undefined;
+    });
+
+    const after = readFileSync(configPath, "utf8");
+    assert.ok(after.includes("External Editor"), "external config changes must be preserved");
+    assert.equal(after.includes("evil.example"), false, "the removed dangerous config must not be resurrected");
   } finally {
     __resetProjectRootForTests();
     rmSync(repo, { recursive: true, force: true });
