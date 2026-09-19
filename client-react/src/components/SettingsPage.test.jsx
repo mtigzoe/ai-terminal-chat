@@ -113,6 +113,41 @@ describe('loading settings', () => {
     expect(screen.getByRole('option', { name: 'qwen3.5' })).toBeInTheDocument();
   });
 
+  test('ignores a stale model-list response after switching providers quickly', async () => {
+    await renderLoaded({ provider: 'gemini', model: 'gemini-3.6-flash' });
+
+    let resolveGeminiModels;
+    let resolveOllamaModels;
+    const geminiModels = new Promise((resolve) => { resolveGeminiModels = resolve; });
+    const ollamaModels = new Promise((resolve) => { resolveOllamaModels = resolve; });
+
+    axios.get.mockImplementation((url) => {
+      if (url === `${HOST}/providers/gemini/models`) return geminiModels;
+      if (url === `${HOST}/providers/ollama/models`) return ollamaModels;
+      if (url === `${HOST}/providers/ollama/status`) return Promise.resolve({ data: { installed: false } });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    axios.post.mockImplementation((url, payload) =>
+      url === `${HOST}/providers/select`
+        ? Promise.resolve({ data: { name: payload.provider, model: payload.model || '' } })
+        : Promise.reject(new Error(`unexpected POST ${url}`))
+    );
+
+    fireEvent.change(screen.getByLabelText(/ai provider/i), { target: { value: 'ollama' } });
+    resolveOllamaModels({
+      data: { supports_listing: true, models: [{ id: 'ollama-model' }] },
+    });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'ollama-model' })).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/ai provider/i), { target: { value: 'gemini' } });
+    resolveGeminiModels({
+      data: { supports_listing: true, models: [{ id: 'stale-gemini-model' }] },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/^model$/i)).toHaveValue(''));
+    expect(screen.queryByRole('option', { name: 'stale-gemini-model' })).not.toBeInTheDocument();
+  });
+
   test('surfaces Ollama model listing errors from the backend', async () => {
     axios.get.mockImplementation((url) => {
       if (url === `${HOST}/providers?probe=0`) {
@@ -175,6 +210,36 @@ describe('provider selection persistence', () => {
     expect(JSON.parse(localStorage.getItem('ai-terminal-chat:provider-selection'))).toMatchObject({
       provider: 'ollama',
     });
+  });
+
+  test('serializes rapid provider changes so the backend receives them in order', async () => {
+    await renderLoaded({ provider: 'gemini', model: 'gemini-3.6-flash' });
+
+    const requests = [];
+    axios.post.mockImplementation((url, payload) => {
+      if (url !== `${HOST}/providers/select`) {
+        return Promise.reject(new Error(`unexpected POST ${url}`));
+      }
+      return new Promise((resolve) => requests.push({ payload, resolve }));
+    });
+
+    const providerSelect = screen.getByLabelText(/ai provider/i);
+    fireEvent.change(providerSelect, { target: { value: 'ollama' } });
+    fireEvent.change(providerSelect, { target: { value: 'gemini' } });
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].payload.provider).toBe('ollama');
+
+    requests[0].resolve({ data: { name: 'ollama', model: 'llama3.1' } });
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1].payload.provider).toBe('gemini');
+
+    requests[1].resolve({ data: { name: 'gemini', model: 'gemini-3.6-flash' } });
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem('ai-terminal-chat:provider-selection'))).toMatchObject({
+        provider: 'gemini',
+      })
+    );
   });
 
   test('persists a model change for the active provider', async () => {
