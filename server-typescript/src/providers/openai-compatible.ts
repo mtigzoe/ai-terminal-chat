@@ -278,6 +278,10 @@ export class OpenAICompatibleProvider extends Provider {
     try {
       return await this.complete(contents, useTools, signal);
     } catch (exc) {
+      // A cancelled request must never trigger the tool-disabled fallback.
+      // Otherwise a cancellation error that happens to match the provider's
+      // unsupported-tools markers could start a second network request.
+      if (signal?.aborted) throw exc;
       if (useTools && this._looksLikeToolsUnsupported(exc)) {
         this._capabilities = {
           ...this._capabilities,
