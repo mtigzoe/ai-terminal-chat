@@ -25,10 +25,8 @@ describe("saved user instructions", () => {
       model: "test-model",
     });
     const contents = provider.buildContents("Hello", [], instruction);
-    expect(contents[0]).toEqual({
-      role: "system",
-      content: expect.stringContaining("system instructions"),
-    });
+    expect(contents[0].role).toBe("system");
+    expect(contents[0].content).toContain("You are a local coding/project agent");
     expect(contents[1]).toEqual({
       role: "user",
       content: expect.stringContaining(instruction),
@@ -52,7 +50,7 @@ describe("saved user instructions", () => {
       model: "test-model",
     });
     expect(provider.buildContents("Hello", [], "   ")).toEqual([
-      { role: "system", content: expect.stringContaining("system instructions") },
+      { role: "system", content: expect.stringContaining("You are a local coding/project agent") },
       { role: "user", content: "Hello" },
     ]);
   });
