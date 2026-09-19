@@ -1131,6 +1131,15 @@ export async function* resumeAgentLoop(
     );
   }
 
+  // A disconnect/cancel can arrive after the pending action has been
+  // removed from the store but before the confirmation actually starts.
+  // Do not consume/execute the saved tool call in that case; the caller can
+  // safely restore the still-unexecuted pending action.
+  if (cancelSignal?.aborted) {
+    yield { type: "cancelled" };
+    return;
+  }
+
   const remainingCalls = [...resume.remaining_calls];
   const call = remainingCalls.shift();
   if (!call) {
