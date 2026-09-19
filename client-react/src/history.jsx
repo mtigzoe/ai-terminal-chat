@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import './App.css';
 import './accessibility.css';
-import MainNav from './components/MainNav.jsx';
 import HistoryPage from './components/HistoryPage.jsx';
 
 function HistoryApp() {
