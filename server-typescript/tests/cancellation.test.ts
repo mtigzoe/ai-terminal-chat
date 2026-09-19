@@ -5,7 +5,7 @@ describe("cancellation", () => {
   beforeEach(() => {
     clear();
   });
-
+});
   it("register returns a fresh unset signal", () => {
     const signal = register("req-1");
     expect(signal.aborted).toBe(false);
@@ -45,8 +45,6 @@ describe("cancellation", () => {
     expect(cancel("req-1")).toBe(true);
     expect(first.aborted).toBe(true);
   });
-});
-
 
   it("does not release a newer registration that reused an evicted request ID", () => {
     const firstSignals: AbortSignal[] = [];
