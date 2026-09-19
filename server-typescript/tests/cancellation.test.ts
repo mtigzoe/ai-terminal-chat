@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { clear, cancel, register, release } from "../src/cancellation.ts";
+import { bindRequestCancellation, clear, cancel, register, release } from "../src/cancellation.ts";
 
 describe("cancellation", () => {
   beforeEach(() => {
@@ -62,5 +62,33 @@ describe("cancellation", () => {
     release("req-0", first);
     expect(cancel("req-0")).toBe(true);
     expect(newer.aborted).toBe(true);
+  });
+
+  it("cancels a registered request when its HTTP request aborts", () => {
+    const requestController = new AbortController();
+    const signal = register("req-http-abort");
+    const cleanup = bindRequestCancellation(
+      requestController.signal,
+      "req-http-abort",
+    );
+
+    requestController.abort();
+
+    expect(signal.aborted).toBe(true);
+    cleanup();
+  });
+
+  it("cancels immediately when the HTTP request is already aborted", () => {
+    const requestController = new AbortController();
+    requestController.abort();
+    const signal = register("req-already-aborted");
+
+    const cleanup = bindRequestCancellation(
+      requestController.signal,
+      "req-already-aborted",
+    );
+
+    expect(signal.aborted).toBe(true);
+    cleanup();
   });
 });
