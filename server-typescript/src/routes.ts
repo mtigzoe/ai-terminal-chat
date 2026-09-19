@@ -22,7 +22,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
-import { gitCommittedFileCount, gitDiff, gitLog, gitBranch, gitFetch, gitPull, gitRestore, gitCommit, gitPush } from "./git.ts";
+import { gitCommittedFileCount, gitDiff, gitLog, gitBranch, gitFetch, gitPull, gitRestore, gitCommit, gitPush, gitAdd } from "./git.ts";
 import { gitStatusSummary } from "./git-status-summary.ts";
 import {
   getAllowedCommands,
@@ -1020,7 +1020,7 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>, sign
     write_file: (args) => write_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     apply_patch: (args) => apply_patch(String(args.patch || ""), Boolean(args.confirm)),
     delete_file: (args) => delete_file(String(args.path || ""), Boolean(args.confirm)),
-    git_add: (args, signal) => git_add(String(args.path || ""), Boolean(args.confirm), signal),
+    git_add: (args, signal) => gitAdd(String(args.path || ""), Boolean(args.confirm), signal),
   };
 }
 
