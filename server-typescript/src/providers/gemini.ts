@@ -63,7 +63,7 @@ export class GeminiProvider extends Provider {
     return contents;
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], signal?: AbortSignal): Promise<ProviderResponse> {
     this.requireApiKey();
     const response = await this.request("POST", `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey!)}`, {
       body: JSON.stringify({
@@ -75,7 +75,7 @@ export class GeminiProvider extends Provider {
         generationConfig: {},
         tools: this.capabilities.tools ? this.tools : undefined,
       }),
-    });
+    }, signal);
 
     if (!response.ok) {
       throw new Error(await this.apiError(response, "Gemini request failed"));
