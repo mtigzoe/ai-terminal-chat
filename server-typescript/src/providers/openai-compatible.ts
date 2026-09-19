@@ -94,8 +94,10 @@ export class OpenAICompatibleProvider extends Provider {
       seconds * 1000
     );
     const onParentAbort = () => controller.abort();
+    signal?.addEventListener("abort", onParentAbort, { once: true });
+    // Re-check after listener registration to close the abort race between
+    // the initial check and listener installation.
     if (signal?.aborted) controller.abort();
-    else signal?.addEventListener("abort", onParentAbort, { once: true });
 
     // DNS-pinning fetch: resolve + validate addresses, then connect only to
     // the pinned IP (prevents DNS rebinding between check and connect).
