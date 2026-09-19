@@ -775,8 +775,8 @@ describe("POST /confirm", () => {
 
   it("keeps a pending confirmation when the confirm request is already cancelled", async () => {
     const action = createPending(
-      "git_add",
-      { path: "cancelled-confirm.txt" },
+      "git_push",
+      { branch: "HEAD" },
       { requires_confirmation: true },
       undefined,
     );
