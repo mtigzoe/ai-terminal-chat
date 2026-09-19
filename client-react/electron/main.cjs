@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { handleEditorOpen, getAvailableEditors } = require('./editor-handler.cjs');
 const { validateProjectPath, isSafeExternalUrl, isAllowedNavigationUrl, isAuthorizedProjectRoot } = require('./security-utils.cjs');
 const { createHealthChallenge, verifyHealthProof } = require('./health-check.cjs');
+const { loadAuthorizedProjectRoots, saveAuthorizedProjectRoots } = require('./project-root-store.cjs');
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -15,7 +16,7 @@ let backendProcess = null;
 let backendExit = null;
 let backendStderr = '';
 let projectRoot = null; // Store the selected project root for path validation
-const authorizedProjectRoots = new Set();
+const authorizedProjectRoots = new Set(loadAuthorizedProjectRoots(app.getPath('userData')));
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = 9000;
