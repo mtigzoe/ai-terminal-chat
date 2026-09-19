@@ -24,6 +24,29 @@ export function cancel(requestId: string): boolean {
   return true;
 }
 
+/**
+ * Connect an HTTP request's lifetime to the registered cancellation signal.
+ * Returns a cleanup function that removes the listener.
+ */
+export function bindRequestCancellation(
+  requestSignal: AbortSignal,
+  requestId: string,
+): () => void {
+  const onAbort = () => {
+    cancel(requestId);
+  };
+
+  if (requestSignal.aborted) {
+    onAbort();
+  } else {
+    requestSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return () => {
+    requestSignal.removeEventListener("abort", onAbort);
+  };
+}
+
 export function release(requestId: string, signal?: AbortSignal): void {
   if (!requestId) return;
   const controller = _EVENTS.get(requestId);
