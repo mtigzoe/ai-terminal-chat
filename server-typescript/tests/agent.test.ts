@@ -68,6 +68,54 @@ describe("runAgentLoop", () => {
     expect(events[events.length - 1]).toEqual({ type: "final", text: "hello" });
   });
 
+  it("propagates cancellation into an in-flight tool", async () => {
+    const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+
+    const provider = new FakeProvider([
+      {
+        text: null,
+        tool_calls: [{ name: "fake_wait", args: {}, id: undefined }],
+        raw: null,
+      },
+    ]);
+
+    const toolFunctions = {
+      fake_wait: (
+        _args: Record<string, unknown>,
+        signal?: AbortSignal,
+      ) =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolveStarted();
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ error: "aborted" }),
+            { once: true },
+          );
+        }),
+    };
+
+    const eventsPromise = collectEvents(
+      runAgentLoop({
+        provider,
+        contents: [],
+        toolFunctions,
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    await started;
+    controller.abort();
+
+    const events = await eventsPromise;
+    expect(events.some((event) => event.type === "cancelled")).toBe(true);
+    expect(events.some((event) => event.type === "final")).toBe(false);
+  });
+
   it("executes a read-only tool and continues", async () => {
     const calls: string[] = [];
     const toolFunctions = {
