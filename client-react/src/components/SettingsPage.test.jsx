@@ -644,3 +644,25 @@ describe('memory persistence', () => {
     expect(localStorage.getItem('ai-terminal-chat:restore-chat-id')).toBeNull();
   });
 });
+
+
+test('clears persisted project permissions and pending context when memory is disabled', async () => {
+  await renderLoaded();
+  localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['src/App.jsx']));
+  localStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([{ path: 'src/App.jsx', content: 'secret' }]));
+  localStorage.setItem('ai-terminal-chat:pending-terminal-path', 'src/App.jsx');
+  localStorage.setItem('project-explorer:' + HOST + ':selected', JSON.stringify(['src/App.jsx']));
+  localStorage.setItem('project-explorer:' + HOST + ':expanded', JSON.stringify(['src']));
+  sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([{ path: 'old.txt', content: 'old' }]));
+
+  const toggle = screen.getByRole('switch', { name: /persistent memory/i });
+  fireEvent.click(toggle);
+
+  await screen.findByText(/memory persistence disabled/i);
+  expect(localStorage.getItem('ai-terminal-chat:memory-enabled')).toBe('false');
+  expect(localStorage.getItem('ai-terminal-chat:allowed-paths')).toBeNull();
+  expect(localStorage.getItem('ai-terminal-chat:pending-files')).toBeNull();
+  expect(localStorage.getItem('ai-terminal-chat:pending-terminal-path')).toBeNull();
+  expect(localStorage.getItem('project-explorer:' + HOST + ':selected')).toBeNull();
+  expect(localStorage.getItem('project-explorer:' + HOST + ':expanded')).toBeNull();
+});
