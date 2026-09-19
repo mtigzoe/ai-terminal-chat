@@ -326,6 +326,10 @@ test('shift-click selects the visible file range and ignores files hidden by the
   await user.type(screen.getByLabelText(/filter files and folders/i), 'c');
 
   const filteredC = await screen.findByRole('checkbox', { name: /select c\.txt for the agent/i });
+  await waitFor(() => {
+    expect(screen.queryByRole('checkbox', { name: /select a\.txt for the agent/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /select b\.txt for the agent/i })).not.toBeInTheDocument();
+  });
   await user.keyboard('{Shift>}');
   await user.click(filteredC);
   await user.keyboard('{/Shift}');
