@@ -54,6 +54,51 @@ describe("GeminiProvider", () => {
     }
   });
 
+  it("cancels an in-flight response body read", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          bodyController = streamController;
+          streamController.enqueue(new TextEncoder().encode('{"candidates":['));
+          signal?.addEventListener("abort", () => {
+            streamController.error(signal.reason);
+          }, { once: true });
+          setTimeout(() => {
+            if (!signal?.aborted) {
+              streamController.enqueue(new TextEncoder().encode(
+                '{"content":{"parts":[{"text":"done"}]}}]}'
+              ));
+              streamController.close();
+            }
+          }, 100);
+        },
+        cancel() {
+          bodyController = undefined;
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new GeminiProvider({ model: "gemini-test", api_key: "key" });
+    const pending = provider.generate(
+      provider.buildContents("read README", []),
+      controller.signal,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("parses text and function calls from a native Gemini response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       candidates: [{
