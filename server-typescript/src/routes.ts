@@ -30,7 +30,7 @@ import {
   removeAllowedCommand,
   runCommand,
 } from "./terminal.ts";
-import { createPending, getPending, popPending } from "./pending.ts";
+import { createPending, getPending, popPending, restorePending } from "./pending.ts";
 import { bindRequestCancellation, cancel, release, register } from "./cancellation.ts";
 import {
   runAgentLoop,
@@ -618,8 +618,18 @@ app.post("/chat", async (c) => {
     });
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
-  } finally {
-    cleanupRequestCancellation();
+  }
+
+  // popPending() is intentionally done before execution so competing
+  // confirmations cannot resolve the same action. If cancellation arrives
+  // before resumeAgentLoop() has started the tool, no side effect has begun
+  // and the action can safely be made available for a retry.
+  if (cancelled && cancelSignal.aborted && !resultCaptured) {
+    restorePending(action);
+  }
+
+  cleanupRequestCancellation();
+  release(requestId, cancelSignal);
     release(requestId, cancelSignal);
   }
 
