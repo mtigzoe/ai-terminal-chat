@@ -31,7 +31,7 @@ import {
   runCommand,
 } from "./terminal.ts";
 import { createPending, getPending, popPending } from "./pending.ts";
-import { cancel, release, register } from "./cancellation.ts";
+import { bindRequestCancellation, cancel, release, register } from "./cancellation.ts";
 import {
   runAgentLoop,
   resumeAgentLoop,
@@ -579,6 +579,7 @@ app.post("/chat", async (c) => {
   let errorMessage: string | null = null;
   let cancelled = false;
   const cancelSignal = register(requestId);
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId);
 
   try {
     await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
@@ -618,6 +619,7 @@ app.post("/chat", async (c) => {
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
+    cleanupRequestCancellation();
     release(requestId, cancelSignal);
   }
 
@@ -674,6 +676,7 @@ app.post("/stream", async (c) => {
   }
 
   const cancelSignal = register(requestId);
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId);
   const wantsNdjson = c.req.header("Accept")?.includes("application/x-ndjson") ?? false;
   const stream = new ReadableStream({
     start(controller) {
@@ -704,6 +707,7 @@ app.post("/stream", async (c) => {
             wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
           ));
         } finally {
+          cleanupRequestCancellation();
           release(requestId, cancelSignal);
           controller.close();
         }
@@ -869,12 +873,11 @@ app.post("/confirm", async (c) => {
   } catch (error) {
     return c.json({ error: String(error) }, 409 as any);
   }
-  const onRequestAbort = () => cancel(requestId);
-  c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId);
 
   const action = popPending(actionId);
   if (!action) {
-    c.req.raw.signal.removeEventListener("abort", onRequestAbort);
+    cleanupRequestCancellation();
     release(requestId, cancelSignal);
     return c.json({ error: "Pending action not found or already resolved." }, 404 as any);
   }
@@ -895,7 +898,7 @@ app.post("/confirm", async (c) => {
       const { status, body } = await confirmLegacy(action, actionId, confirmed, cancelSignal);
       return c.json(body, status as any);
     } finally {
-      c.req.raw.signal.removeEventListener("abort", onRequestAbort);
+      cleanupRequestCancellation();
       release(requestId, cancelSignal);
     }
   }
