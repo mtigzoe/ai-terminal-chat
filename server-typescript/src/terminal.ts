@@ -1422,6 +1422,8 @@ export async function runCommand(
 
       return payload;
     } catch (err) {
+      if (signal?.aborted) return { error: "Command cancelled." };
+
       const error = err as NodeJS.ErrnoException & {
         code?: number | string;
         killed?: boolean;
