@@ -964,20 +964,20 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>, sign
       gitDiff(String(args.path || ""), Boolean(args.staged)),
     git_log: (args) => gitLog(Number(args.max_count || 10)),
     git_branch: () => gitBranch(),
-    git_fetch: (args) => gitFetch(String(args.remote || "")),
-    git_pull: (args) =>
-      gitPull(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm)),
-    git_restore: (args) =>
-      gitRestore(String(args.path || ""), Boolean(args.staged), Boolean(args.confirm)),
-    git_commit: (args) =>
-      gitCommit(String(args.message || ""), Boolean(args.confirm)),
-    git_push: (args) =>
-      gitPush(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm)),
+    git_fetch: (args, signal) => gitFetch(String(args.remote || ""), signal),
+    git_pull: (args, signal) =>
+      gitPull(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm), signal),
+    git_restore: (args, signal) =>
+      gitRestore(String(args.path || ""), Boolean(args.staged), Boolean(args.confirm), signal),
+    git_commit: (args, signal) =>
+      gitCommit(String(args.message || ""), Boolean(args.confirm), signal),
+    git_push: (args, signal) =>
+      gitPush(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm), signal),
     create_file: (args) => create_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     write_file: (args) => write_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     apply_patch: (args) => apply_patch(String(args.patch || ""), Boolean(args.confirm)),
     delete_file: (args) => delete_file(String(args.path || ""), Boolean(args.confirm)),
-    git_add: (args) => git_add(String(args.path || ""), Boolean(args.confirm)),
+    git_add: (args, signal) => gitAdd(String(args.path || ""), Boolean(args.confirm), signal),
   };
 }
 
