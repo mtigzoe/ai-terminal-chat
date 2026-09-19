@@ -154,7 +154,7 @@ describe("explicit Git command routing", () => {
       events.push(event);
     }
 
-    expect(gitFetch).toHaveBeenCalledWith({ remote: "origin" });
+    expect(gitFetch).toHaveBeenCalledWith({ remote: "origin" }, expect.any(AbortSignal));
     expect(events.some((event) => event.type === "tool_result")).toBe(true);
   });
 
@@ -172,7 +172,7 @@ describe("explicit Git command routing", () => {
       events.push(event);
     }
 
-    expect(gitFetch).toHaveBeenCalledWith({ remote: "" });
+    expect(gitFetch).toHaveBeenCalledWith({ remote: "" }, expect.any(AbortSignal));
     expect(events.some((event) => event.type === "tool_result")).toBe(true);
   });
 
