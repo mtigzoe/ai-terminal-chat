@@ -964,12 +964,12 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>, sign
     search_files: (args) =>
       searchFiles(String(args.query || ""), String(args.path || ".")),
     run_command: (args, signal) => runCommand(String(args.command || ""), Boolean(args.confirm), signal),
-    git_status: () => gitStatusSummary(),
-    git_committed_file_count: () => gitCommittedFileCount(),
-    git_diff: (args) =>
-      gitDiff(String(args.path || ""), Boolean(args.staged)),
-    git_log: (args) => gitLog(Number(args.max_count || 10)),
-    git_branch: () => gitBranch(),
+    git_status: (_args, signal) => gitStatusSummary(signal),
+    git_committed_file_count: (_args, signal) => gitCommittedFileCount(signal),
+    git_diff: (args, signal) =>
+      gitDiff(String(args.path || ""), Boolean(args.staged), signal),
+    git_log: (args, signal) => gitLog(Number(args.max_count || 10), signal),
+    git_branch: (_args, signal) => gitBranch(signal),
     git_fetch: (args, signal) => gitFetch(String(args.remote || ""), signal),
     git_pull: (args, signal) =>
       gitPull(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm), signal),
