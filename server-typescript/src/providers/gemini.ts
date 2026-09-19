@@ -77,11 +77,12 @@ export class GeminiProvider extends Provider {
       }),
     }, signal);
 
-    if (!response.ok) {
-      throw new Error(await this.apiError(response, "Gemini request failed"));
-    }
+    try {
+      if (!response.ok) {
+        throw new Error(await this.apiError(response, "Gemini request failed"));
+      }
 
-    const data = (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as Record<string, unknown>;
     const candidate = ((data.candidates as unknown[]) || [])[0] as Record<string, unknown> | undefined;
     const content = candidate?.content as { parts?: GeminiPart[]; role?: string } | undefined;
     const parts = content?.parts || [];
@@ -100,7 +101,16 @@ export class GeminiProvider extends Provider {
       .filter(Boolean)
       .join("") || null;
 
-    return { text, tool_calls: toolCalls, raw: content || null };
+      return { text, tool_calls: toolCalls, raw: content || null };
+    } catch (exc) {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Gemini request cancelled."), { code: "ABORT_ERR" });
+        }
+        throw new Error("Gemini request timed out.");
+      }
+      throw exc;
+    }
   }
 
   appendModelTurn(contents: unknown[], response: ProviderResponse): unknown[] {
