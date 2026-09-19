@@ -579,6 +579,8 @@ app.post("/chat", async (c) => {
   let errorMessage: string | null = null;
   let cancelled = false;
   const cancelSignal = register(requestId);
+  const onRequestAbort = () => cancel(requestId);
+  c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
 
   try {
     await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
@@ -618,6 +620,7 @@ app.post("/chat", async (c) => {
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
+    c.req.raw.signal.removeEventListener("abort", onRequestAbort);
     release(requestId);
   }
 
