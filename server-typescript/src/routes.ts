@@ -951,13 +951,13 @@ app.post("/confirm", async (c) => {
   return c.json(baseResponse);
 });
 
-function getToolFunctions(): Record<string, (args: Record<string, unknown>) => unknown> {
+function getToolFunctions(): Record<string, (args: Record<string, unknown>, signal?: AbortSignal) => unknown> {
   return {
     list_files: (args) => listFiles(String(args.path || ".")),
     read_file: (args) => readFile(String(args.path || "")),
     search_files: (args) =>
       searchFiles(String(args.query || ""), String(args.path || ".")),
-    run_command: (args) => runCommand(String(args.command || ""), Boolean(args.confirm)),
+    run_command: (args, signal) => runCommand(String(args.command || ""), Boolean(args.confirm), signal),
     git_status: () => gitStatusSummary(),
     git_committed_file_count: () => gitCommittedFileCount(),
     git_diff: (args) =>
