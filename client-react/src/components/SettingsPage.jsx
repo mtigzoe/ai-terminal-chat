@@ -415,6 +415,13 @@ const SettingsPage = ({ host }) => {
     setMemoryStatus('');
     try {
       localStorage.setItem('ai-terminal-chat:memory-enabled', next ? 'true' : 'false');
+      if (!next) {
+        // Disabling persistent memory must remove already-persisted chat data;
+        // otherwise "kept only in memory" would leave old conversations on disk.
+        localStorage.removeItem('ai-terminal-chat:chats');
+        localStorage.removeItem('ai-terminal-chat:current-chat-id');
+        localStorage.removeItem('ai-terminal-chat:restore-chat-id');
+      }
       setMemoryStatus(next ? 'Memory persistence enabled.' : 'Memory persistence disabled.');
     } catch {
       setMemoryStatus('Could not save memory setting.');
