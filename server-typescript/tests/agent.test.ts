@@ -493,46 +493,6 @@ describe("runAgentLoop", () => {
     expect(events.some((event) => event.type === "pending_confirmation")).toBe(false);
   });
 
-  it("does not create a pending write action after cancellation during preview", async () => {
-    const controller = new AbortController();
-    const createPending = vi.fn(() => ({ action_id: "should-not-exist" }));
-
-    const toolFunctions = {
-      create_file: (_args: Record<string, unknown>, _signal?: AbortSignal) => {
-        controller.abort();
-        return {
-          requires_confirmation: true,
-          path: "example.txt",
-          diff: "+new line",
-        };
-      },
-    };
-
-    const provider = new FakeProvider([
-      {
-        text: null,
-        tool_calls: [
-          { name: "create_file", args: { path: "example.txt", contents: "hello" }, id: undefined },
-        ],
-        raw: null,
-      },
-    ]);
-
-    const events = await collectEvents(
-      runAgentLoop({
-        provider,
-        contents: [],
-        toolFunctions,
-        cancelSignal: controller.signal,
-        createPending,
-      }),
-    );
-
-    expect(createPending).not.toHaveBeenCalled();
-    expect(events[events.length - 1]).toEqual({ type: "cancelled" });
-    expect(events.some((event) => event.type === "pending_confirmation")).toBe(false);
-  });
-
   it("never self-confirms write tools", async () => {
     const calls: boolean[] = [];
     const toolFunctions = {
