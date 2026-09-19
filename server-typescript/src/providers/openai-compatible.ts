@@ -223,7 +223,8 @@ export class OpenAICompatibleProvider extends Provider {
       {
         body: JSON.stringify(body),
       },
-      this.timeout
+      this.timeout,
+      signal,
     );
 
     if (!response.ok) {
