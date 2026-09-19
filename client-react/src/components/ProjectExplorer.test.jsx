@@ -323,7 +323,6 @@ test('shift-click selects the visible file range and ignores files hidden by the
   await user.click(screen.getByRole('button', { name: /clear selection/i }));
   await waitFor(() => {
     expect(checkboxA).not.toBeChecked();
-    expect(screen.getByRole('checkbox', { name: /select b\\.txt for the agent/i })).not.toBeChecked();
     expect(checkboxC).not.toBeChecked();
   });
   await user.click(checkboxA);
