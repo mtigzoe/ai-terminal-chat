@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import SettingsPage from './SettingsPage.jsx';
 
@@ -621,7 +622,7 @@ describe('NVIDIA NIM provider', () => {
   });
   
   test('clears pending project context when persistent memory is disabled', async () => {
-    mockProvidersLoad({ currentProvider: 'gemini', models: [] });
+    mockSuccessfulLoad({ provider: 'gemini', model: 'gemini-3.6-flash' });
     localStorage.setItem('ai-terminal-chat:memory-enabled', 'true');
     localStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([{ path: 'secret.txt', content: 'secret' }]));
     localStorage.setItem('ai-terminal-chat:pending-terminal-path', 'secret.txt');
