@@ -27,7 +27,11 @@ describe("cancellation", () => {
   it("release stops tracking a request", () => {
     register("req-1");
     release("req-1");
-    expect(cancel("req-1")).toBe(false);
+    // After release the ID is no longer active, so a cancellation becomes
+    // a pending intent for a future registration rather than targeting the
+    // released request.
+    expect(cancel("req-1")).toBe(true);
+    expect(register("req-1").aborted).toBe(true);
   });
 
   it("release is safe for unknown or empty id", () => {
