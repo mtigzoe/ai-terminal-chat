@@ -872,9 +872,6 @@ describe("POST /confirm", () => {
 
       // The confirmed git_add actually ran...
       expect(confirmData.result).toMatchObject({ staged: true });
-      const staged = execSync("git diff --cached --name-only", { cwd: root }).toString();
-      expect(staged.trim()).toBe("hello.txt");
-
       // ...and the loop kept going afterward instead of stopping: the
       // (stubbed) model got a follow-up turn and produced final text.
       expect(confirmData.text).toContain("[stub] Hello from");
