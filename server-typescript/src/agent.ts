@@ -617,8 +617,19 @@ async function* agentLoopCore(
             directResponse = directGitCommand(currentContents);
           }
         }
-        response = directResponse ?? (await provider.generate(currentContents));
+        response = directResponse ?? (await provider.generate(currentContents, cancelSignal));
       } catch (exc) {
+        if (cancelSignal?.aborted) {
+          yield {
+            type: "progress",
+            phase: "cancelled",
+            message: "Stopped: cancelled by user",
+            round: roundNumber,
+            max_rounds: MAX_TOOL_ROUNDS,
+          };
+          yield { type: "cancelled" };
+          return;
+        }
         yield {
           type: "progress",
           phase: "error",
