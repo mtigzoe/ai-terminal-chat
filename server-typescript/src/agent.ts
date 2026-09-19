@@ -783,7 +783,8 @@ async function* agentLoopCore(
           toolFn,
           previewArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
 
         if (
@@ -860,8 +861,22 @@ async function* agentLoopCore(
           toolFn,
           functionArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
+      }
+
+      if (cancelSignal?.aborted) {
+        yield {
+          type: "progress",
+          phase: "cancelled",
+          message: "Stopped: cancelled by user",
+          round: roundNumber,
+          max_rounds: MAX_TOOL_ROUNDS,
+          tool: functionName,
+        };
+        yield { type: "cancelled" };
+        return;
       }
 
       // Reading a file outside the user's current Project-page selection is
@@ -1133,27 +1148,37 @@ export async function* resumeAgentLoop(
 }
 
 async function executeTool(
-  fn: (args: Record<string, unknown>) => unknown,
+  fn: (args: Record<string, unknown>, signal?: AbortSignal) => unknown,
   args: Record<string, unknown>,
   name: string,
-  timeoutSeconds: number
+  timeoutSeconds: number,
+  cancelSignal?: AbortSignal
 ): Promise<unknown> {
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort();
+  if (cancelSignal?.aborted) controller.abort();
+  else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
   try {
     return await Promise.race([
-      Promise.resolve(fn(args)),
+      Promise.resolve(fn(args, controller.signal)),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () =>
+          () => {
+            controller.abort();
             reject(
               new Error(
                 `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
               )
-            ),
+            );
+          },
           timeoutSeconds * 1000
         )
       ),
     ]);
   } catch (exc) {
+    if (cancelSignal?.aborted) {
+      return { error: `Tool ${name} cancelled.` };
+    }
     if (
       exc instanceof Error &&
       exc.message.includes("exceeded its") &&
@@ -1165,6 +1190,8 @@ async function executeTool(
       return { error: `Malformed arguments for ${name}: ${exc}` };
     }
     return { error: `Tool ${name} failed: ${exc}` };
+  } finally {
+    cancelSignal?.removeEventListener("abort", onParentAbort);
   }
 }
 
