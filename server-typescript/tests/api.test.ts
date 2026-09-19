@@ -69,7 +69,7 @@ vi.mock("../src/ollama-cli.ts", () => ({
 }));
 
 import { app } from "../src/routes.js";
-import { clear as clearPending, createPending } from "../src/pending.js";
+import { clear as clearPending, createPending, getPending } from "../src/pending.js";
 import { providerFingerprint } from "../src/agent.js";
 import { getProvider } from "../src/providers/factory.js";
 import { clear as clearCancellation } from "../src/cancellation.js";
