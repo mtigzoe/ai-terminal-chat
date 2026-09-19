@@ -155,3 +155,33 @@ test("safeFetch keeps the pinned dispatcher alive until the response body is con
     );
   }
 });
+
+test("safeFetch aborts while DNS resolution is pending", async () => {
+  const controller = new AbortController();
+  let releaseLookup!: () => void;
+  const lookupStarted = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+
+  const lookup: LookupAll = async () => {
+    releaseLookup();
+    await new Promise<void>((resolve) => setTimeout(resolve, 60_000));
+    return [{ address: "8.8.8.8", family: 4 }];
+  };
+
+  const pending = safeFetch(
+    "http://slow-dns.example/test",
+    { signal: controller.signal },
+    { originalHostname: "slow-dns.example", lookupAll: lookup },
+  );
+  await lookupStarted;
+  controller.abort();
+
+  await assert.rejects(
+    pending,
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === "AbortError" &&
+      (error as Error & { code?: string }).code === "ABORT_ERR",
+  );
+});
