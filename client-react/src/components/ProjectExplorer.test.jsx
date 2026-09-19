@@ -326,6 +326,10 @@ test('shift-click selects the visible file range and ignores files hidden by the
   await user.type(screen.getByLabelText(/filter files and folders/i), 'c');
 
   const filteredC = await screen.findByRole('checkbox', { name: /select c\.txt for the agent/i });
+  await waitFor(() => {
+    expect(screen.queryByRole('checkbox', { name: /select a\.txt for the agent/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /select b\.txt for the agent/i })).not.toBeInTheDocument();
+  });
   await user.keyboard('{Shift>}');
   await user.click(filteredC);
   await user.keyboard('{/Shift}');
@@ -636,4 +640,24 @@ test('collapsing a folder while its load is pending does not re-expand when the 
     expect(screen.getByRole('treeitem', { name: /src, directory/i })).toHaveAttribute('aria-expanded', '');
   });
   expect(screen.queryByRole('treeitem', { name: /late\.js/i })).not.toBeInTheDocument();
+});
+
+
+test('keeps project selections in session storage when persistent memory is disabled', async () => {
+  localStorage.setItem('ai-terminal-chat:memory-enabled', 'false');
+  localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['persisted.txt']));
+  localStorage.setItem(`project-explorer:${host}:selected`, JSON.stringify(['persisted.txt']));
+  sessionStorage.setItem(`project-explorer:${host}:selected`, JSON.stringify(['session.txt']));
+  sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['session.txt']));
+
+  axios.get.mockResolvedValueOnce({
+    data: { path: '.', entries: [{ name: 'session.txt', type: 'file' }, { name: 'persisted.txt', type: 'file' }] },
+  });
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('checkbox', { name: /select session\.txt for the agent/i })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /select persisted\.txt for the agent/i })).not.toBeChecked();
+  expect(localStorage.getItem('ai-terminal-chat:allowed-paths')).toBeNull();
+  expect(localStorage.getItem(`project-explorer:${host}:selected`)).toBeNull();
 });
