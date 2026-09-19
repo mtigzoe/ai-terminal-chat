@@ -85,24 +85,19 @@ export class OpenAICompatibleProvider extends Provider {
     timeoutSeconds?: number,
     signal?: AbortSignal,
   ): Promise<Response> {
-    const controller = new AbortController();
-    // Probes/list use a short timeout; chat completions use the full
-    // configured timeout (Ollama cold starts often exceed 10s).
+    // Keep cancellation and timeout attached to the response body. Fetch
+    // resolves when headers arrive, so cleaning up here would leave
+    // response.json()/response.text() running after cancellation.
     const seconds = timeoutSeconds ?? Math.min(this.timeout, 10);
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      seconds * 1000
-    );
-    const onParentAbort = () => controller.abort();
-    signal?.addEventListener("abort", onParentAbort, { once: true });
-    // Re-check after listener registration to close the abort race between
-    // the initial check and listener installation.
-    if (signal?.aborted) controller.abort();
+    const timeoutSignal = AbortSignal.timeout(seconds * 1000);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
 
     // DNS-pinning fetch: resolve + validate addresses, then connect only to
     // the pinned IP (prevents DNS rebinding between check and connect).
     try {
-      const response = await safeFetch(
+      return await safeFetch(
         url,
         {
           method,
@@ -111,21 +106,18 @@ export class OpenAICompatibleProvider extends Provider {
             ...(options.headers as Record<string, string>),
           },
           body: options.body,
-          signal: controller.signal,
+          signal: requestSignal,
         },
         { originalHostname: this.originalHostname },
       );
-
-      return response;
     } catch (exc) {
-      if (exc instanceof Error && exc.name === "AbortError") {
-        if (signal?.aborted) throw Object.assign(new Error(`Request to ${this.displayName} cancelled.`), { code: "ABORT_ERR" });
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error(`Request to ${this.displayName} cancelled.`), { code: "ABORT_ERR" });
+        }
         throw new Error(`Request to ${this.displayName} timed out.`);
       }
       throw new Error(this.unreachableMessage(exc));
-    } finally {
-      clearTimeout(timeoutId);
-      signal?.removeEventListener("abort", onParentAbort);
     }
   }
 
