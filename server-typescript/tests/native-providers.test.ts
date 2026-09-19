@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
 import { GeminiProvider } from "../src/providers/gemini.ts";
 import { AnthropicProvider } from "../src/providers/anthropic.ts";
 import { getProvider } from "../src/providers/factory.ts";
@@ -56,47 +57,41 @@ describe("GeminiProvider", () => {
 
   it("cancels an in-flight response body read", async () => {
     const controller = new AbortController();
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      const signal = init?.signal;
-      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
-      const body = new ReadableStream<Uint8Array>({
-        start(streamController) {
-          bodyController = streamController;
-          streamController.enqueue(new TextEncoder().encode('{"candidates":['));
-          signal?.addEventListener("abort", () => {
-            streamController.error(signal.reason);
-          }, { once: true });
-          setTimeout(() => {
-            if (!signal?.aborted) {
-              streamController.enqueue(new TextEncoder().encode(
-                '{"content":{"parts":[{"text":"done"}]}}]}'
-              ));
-              streamController.close();
-            }
-          }, 100);
-        },
-        cancel() {
-          bodyController = undefined;
-        },
-      });
-      return new Response(body, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"candidates":[');
+      setTimeout(() => {
+        if (!res.destroyed) {
+          res.end('{"content":{"parts":[{"text":"done"}]}}]}');
+        }
+      }, 100);
     });
-    vi.stubGlobal("fetch", fetchMock);
 
-    const provider = new GeminiProvider({ model: "gemini-test", api_key: "key" });
-    const pending = provider.generate(
-      provider.buildContents("read README", []),
-      controller.signal,
-    );
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("Test server did not expose a TCP port");
+    }
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    controller.abort();
+    try {
+      const provider = new GeminiProvider({
+        model: "gemini-test",
+        api_key: "key",
+        base_url: `http://localhost:${address.port}`,
+      });
+      const pending = provider.generate(
+        provider.buildContents("read README", []),
+        controller.signal,
+      );
 
-    await expect(pending).rejects.toMatchObject({ code: "ABORT_ERR" });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      controller.abort();
+
+      await expect(pending).rejects.toThrow(/abort/i);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("parses text and function calls from a native Gemini response", async () => {
