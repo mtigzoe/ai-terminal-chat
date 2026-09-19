@@ -24,8 +24,15 @@ export function cancel(requestId: string): boolean {
   return true;
 }
 
-export function release(requestId: string): void {
+export function release(requestId: string, signal?: AbortSignal): void {
   if (!requestId) return;
+  const controller = _EVENTS.get(requestId);
+  if (!controller) return;
+  // A request can outlive the registry entry when the 200-request cap evicts
+  // it. If the same request ID is subsequently reused, an unconditional
+  // delete from the old request's finally block would remove the newer
+  // request's cancellation controller.
+  if (signal && controller.signal !== signal) return;
   _EVENTS.delete(requestId);
 }
 
