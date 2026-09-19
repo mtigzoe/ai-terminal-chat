@@ -204,7 +204,20 @@ function App() {
   function validationCheck(str) { return str === null || str.match(/^\s*$/) !== null; }
   function getErrorMessage(error, fallback = "Request failed.") { const serverMessage = error?.response?.data?.error; if (serverMessage) return serverMessage; if (error?.response == null && (error?.message === "Network Error" || error?.code === "ERR_NETWORK" || error?.code === "ECONNABORTED")) { const base = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/$/, ""); const code = error?.code ? ` (${error.code})` : ""; const detail = error?.message && error.message !== "Network Error" ? ` ${error.message}` : ""; return (`Cannot reach the backend at ${base}${code}.${detail} Confirm the backend server is running (for example: npm run dev in server-typescript) and that VITE_API_URL matches its address if you changed the default.`).replace(/\s+/g, " ").trim(); } if (error?.message) return error.message; return fallback; }
   const cancelBackendRequest = () => { const requestId = requestIdRef.current; if (!requestId) return; fetch(`${host}/cancel/${requestId}`, { method: "POST" }).catch(() => {}); };
-  const stopCurrentRequest = () => { cancelBackendRequest(); abortControllerRef.current?.abort(); setAgentStatus({ phase: 'cancelled', message: 'Cancelling response.', assertive: false }); };
+  const stopCurrentRequest = () => {
+    // Once the backend has emitted a pending confirmation, the original
+    // request has already paused and released its cancellation handle.
+    // Resolve the pending action as declined instead of sending a cancel for
+    // the already-finished request ID; otherwise Cancel leaves the dialog
+    // open and the action can still be approved afterward.
+    if (pendingConfirmation && confirmationRequestIdRef.current) {
+      resolveConfirmation(false, pendingConfirmation);
+      return;
+    }
+    cancelBackendRequest();
+    abortControllerRef.current?.abort();
+    setAgentStatus({ phase: 'cancelled', message: 'Cancelling response.', assertive: false });
+  };
 
   const resolveConfirmation = async (confirmed, actionOverride = null, auto = false) => {
     const action = actionOverride || pendingConfirmation;
