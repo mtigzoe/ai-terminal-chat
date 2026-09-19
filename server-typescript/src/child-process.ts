@@ -1,4 +1,3 @@
-++ b/server-typescript/src/child-process.ts
 import { spawn } from "node:child_process";
 
 export interface ChildProcessOptions {
