@@ -13,11 +13,22 @@ function HistoryPage() {
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [renameStatus, setRenameStatus] = useState('');
+  const [memoryEnabled, setMemoryEnabled] = useState(() => {
+    try {
+      const raw = localStorage.getItem('ai-terminal-chat:memory-enabled');
+      return raw ? raw !== 'false' : true;
+    } catch {
+      return true;
+    }
+  });
   const renameButtonRefs = useRef({});
   const searchInputRef = useRef(null);
 
   const loadChats = () => {
     try {
+      const memoryRaw = localStorage.getItem('ai-terminal-chat:memory-enabled');
+      if (memoryRaw === 'false') return [];
+
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
@@ -51,6 +62,7 @@ function HistoryPage() {
   const filteredChats = chats.filter((chat) => chatMatchesQuery(chat, normalizeQuery(searchQuery)));
 
   const handleRestore = (chat) => {
+    if (!memoryEnabled) return;
     try {
       localStorage.setItem('ai-terminal-chat:restore-chat-id', chat.id);
     } catch { /* ignore */ }
@@ -74,6 +86,7 @@ function HistoryPage() {
   };
 
   const handleSaveRename = (chat) => {
+    if (!memoryEnabled) return;
     const next = loadChats();
     const target = next.find((c) => c.id === chat.id);
     let trimmed = '';
@@ -94,6 +107,30 @@ function HistoryPage() {
   useEffect(() => {
     setChats(loadChats());
     setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const syncMemory = () => {
+      let enabled = true;
+      try {
+        const raw = localStorage.getItem('ai-terminal-chat:memory-enabled');
+        enabled = raw ? raw !== 'false' : true;
+      } catch {
+        enabled = true;
+      }
+      setMemoryEnabled(enabled);
+      setChats(enabled ? loadChats() : []);
+      if (!enabled) {
+        setRenamingId(null);
+        setRenameValue('');
+      }
+    };
+
+    const handleStorage = (event) => {
+      if (event.key === 'ai-terminal-chat:memory-enabled') syncMemory();
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
   const handleClear = async (event) => {
