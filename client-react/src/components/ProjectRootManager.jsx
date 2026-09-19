@@ -31,6 +31,14 @@ export default function ProjectRootManager({ host }) {
       const path = response.data?.path || '';
       setProjectRoot(path);
       setPathDraft(path);
+      if (path && window.electronAPI?.setProjectRoot) {
+        try {
+          await window.electronAPI.setProjectRoot(path);
+        } catch {
+          // The Electron main process may reject a root that was not approved
+          // by the native folder picker on this machine.
+        }
+      }
       setError(false);
       setStatus(path ? `Active project: ${path}` : 'No active project is configured.');
     } catch (requestError) {
