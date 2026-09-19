@@ -162,7 +162,7 @@ const DEFAULT_TOOL_TIMEOUT = 15;
 export interface AgentLoopOptions {
   provider: Provider;
   contents: unknown[];
-  toolFunctions: Record<string, (args: Record<string, unknown>) => unknown>;
+  toolFunctions: Record<string, (args: Record<string, unknown>, signal?: AbortSignal) => unknown>;
   cancelSignal?: AbortSignal;
   createPending: (
     toolName: string,
@@ -1158,14 +1158,18 @@ async function executeTool(
   const onParentAbort = () => controller.abort();
   if (cancelSignal?.aborted) controller.abort();
   else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
+  const timeoutHandle = setTimeout(
+    () => {
+      controller.abort();
+    },
+    timeoutSeconds * 1000
+  );
   try {
     return await Promise.race([
       Promise.resolve(fn(args, controller.signal)),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () => {
-            controller.abort();
-            reject(
+          () => reject(
               new Error(
                 `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
               )
@@ -1191,6 +1195,7 @@ async function executeTool(
     }
     return { error: `Tool ${name} failed: ${exc}` };
   } finally {
+    clearTimeout(timeoutHandle);
     cancelSignal?.removeEventListener("abort", onParentAbort);
   }
 }
