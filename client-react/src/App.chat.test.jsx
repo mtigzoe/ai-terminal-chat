@@ -167,6 +167,52 @@ describe('non-streaming chat lifecycle', () => {
     expect(getTextarea()).not.toBeDisabled();
   });
 
+  test('cancelling a pending confirmation declines it and closes the dialog', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+    let confirmCall = 0;
+    axios.post.mockImplementation((url) => {
+      if (url.includes('/confirm')) {
+        confirmCall += 1;
+        return Promise.resolve({
+          data: {
+            confirmed: false,
+            action_id: 'pending-1',
+            tool: 'write_file',
+            cancelled: true,
+            tool_activity: [{ type: 'tool_result', name: 'write_file', result: { cancelled: true } }],
+            text: '',
+            request_id: 'confirm-1',
+          },
+        });
+      }
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            { type: 'pending_confirmation', action_id: 'pending-1', name: 'write_file', args: { path: 'notes.txt' } },
+          ],
+          request_id: 'request-1',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write notes.txt');
+    await screen.findByRole('dialog', { name: /confirmation required/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel response/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(confirmCall).toBe(1);
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/cancel/'),
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(screen.getByRole('button', { name: /send message/i })).not.toBeDisabled();
+  });
+
   test('cancelling an in-flight request stops it, notifies the backend, and re-enables input', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     axios.post.mockImplementation((url, data, config) => (
