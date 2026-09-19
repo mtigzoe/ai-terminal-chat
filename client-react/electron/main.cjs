@@ -263,6 +263,10 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
   return selectedPath;
 });
 
+ipcMain.handle('project:isAuthorizedRoot', async (event, nextRoot) => {
+  return isAuthorizedProjectRoot(nextRoot, authorizedProjectRoots);
+});
+
 ipcMain.handle('project:setRoot', async (event, nextRoot) => {
   if (!nextRoot || typeof nextRoot !== 'string' || !nextRoot.trim()) {
     return false;
