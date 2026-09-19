@@ -31,6 +31,14 @@ export default function ProjectRootManager({ host }) {
       const path = response.data?.path || '';
       setProjectRoot(path);
       setPathDraft(path);
+      if (path && window.electronAPI?.setProjectRoot) {
+        try {
+          await window.electronAPI.setProjectRoot(path);
+        } catch {
+          // The Electron main process may reject a root that was not approved
+          // by the native folder picker on this machine.
+        }
+      }
       setError(false);
       setStatus(path ? `Active project: ${path}` : 'No active project is configured.');
     } catch (requestError) {
@@ -62,6 +70,15 @@ export default function ProjectRootManager({ host }) {
     setStatus(`Saving project: ${trimmed}`);
 
     try {
+      if (window.electronAPI?.isProjectRootAuthorized) {
+        const authorized = await window.electronAPI.isProjectRootAuthorized(trimmed);
+        if (!authorized) {
+          throw new Error(
+            'This folder has not been approved by the desktop app. Use "Choose and use project folder" to select it.'
+          );
+        }
+      }
+
       const response = await axios.post(`${host}/project-root`, { path: trimmed });
       const savedPath = response.data?.path || trimmed;
       setProjectRoot(savedPath);
@@ -69,10 +86,11 @@ export default function ProjectRootManager({ host }) {
       setError(false);
       setStatus(`Active project changed to ${savedPath}.`);
       if (window.electronAPI?.setProjectRoot) {
-        try {
-          await window.electronAPI.setProjectRoot(savedPath);
-        } catch {
-          // Non-fatal: editor/reveal validation may use a stale root until restart.
+        const synchronized = await window.electronAPI.setProjectRoot(savedPath);
+        if (!synchronized) {
+          throw new Error(
+            'The desktop app could not authorize the selected project folder. Use "Choose and use project folder" instead.'
+          );
         }
       }
       window.dispatchEvent(

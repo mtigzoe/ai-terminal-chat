@@ -53,8 +53,12 @@ export class GeminiProvider extends Provider {
     }));
   }
 
-  buildContents(msg: string, history: unknown[]): unknown[] {
+  buildContents(msg: string, history: unknown[], userInstructions?: string): unknown[] {
     const contents: GeminiContent[] = [];
+    const instructions = userInstructions?.trim();
+    if (instructions) {
+      contents.push({ role: "user", parts: [{ text: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\\n${instructions}` }] });
+    }
     for (const item of history) {
       const normalized = this.normalizeHistoryItem(item);
       if (normalized) contents.push(normalized);
@@ -63,7 +67,7 @@ export class GeminiProvider extends Provider {
     return contents;
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], cancelSignal?: AbortSignal): Promise<ProviderResponse> {
     this.requireApiKey();
     const response = await this.request("POST", `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey!)}`, {
       body: JSON.stringify({
@@ -75,7 +79,7 @@ export class GeminiProvider extends Provider {
         generationConfig: {},
         tools: this.capabilities.tools ? this.tools : undefined,
       }),
-    });
+    }, cancelSignal);
 
     if (!response.ok) {
       throw new Error(await this.apiError(response, "Gemini request failed"));
@@ -260,9 +264,12 @@ export class GeminiProvider extends Provider {
     if (!this.apiKey) throw new Error("Gemini API key is not configured (GOOGLE_API_KEY).");
   }
 
-  private async request(method: string, url: string, options: RequestInit = {}): Promise<Response> {
+  private async request(method: string, url: string, options: RequestInit = {}, cancelSignal?: AbortSignal): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+    const signal = cancelSignal
+      ? AbortSignal.any([controller.signal, cancelSignal])
+      : controller.signal;
     try {
       const hostname = new URL(url).hostname;
       return await safeFetch(
@@ -271,11 +278,14 @@ export class GeminiProvider extends Provider {
           ...options,
           method,
           headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string> | undefined) },
-          signal: controller.signal,
+          signal,
         },
         { originalHostname: hostname },
       );
     } catch (exc) {
+      if (cancelSignal?.aborted) {
+        throw exc;
+      }
       if (exc instanceof Error && exc.name === "AbortError") {
         throw new Error("Gemini request timed out.");
       }

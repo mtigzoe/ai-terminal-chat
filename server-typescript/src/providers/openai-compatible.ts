@@ -82,7 +82,8 @@ export class OpenAICompatibleProvider extends Provider {
     method: string,
     url: string,
     options: RequestInit = {},
-    timeoutSeconds?: number
+    timeoutSeconds?: number,
+    cancelSignal?: AbortSignal
   ): Promise<Response> {
     const controller = new AbortController();
     // Probes/list use a short timeout; chat completions use the full
@@ -92,6 +93,9 @@ export class OpenAICompatibleProvider extends Provider {
       () => controller.abort(),
       seconds * 1000
     );
+    const signal = cancelSignal
+      ? AbortSignal.any([controller.signal, cancelSignal])
+      : controller.signal;
 
     // DNS-pinning fetch: resolve + validate addresses, then connect only to
     // the pinned IP (prevents DNS rebinding between check and connect).
@@ -105,13 +109,16 @@ export class OpenAICompatibleProvider extends Provider {
             ...(options.headers as Record<string, string>),
           },
           body: options.body,
-          signal: controller.signal,
+          signal,
         },
         { originalHostname: this.originalHostname },
       );
 
       return response;
     } catch (exc) {
+      if (cancelSignal?.aborted) {
+        throw exc;
+      }
       if (exc instanceof Error && exc.name === "AbortError") {
         throw new Error(`Request to ${this.displayName} timed out.`);
       }
@@ -169,7 +176,7 @@ export class OpenAICompatibleProvider extends Provider {
     }
   }
 
-  buildContents(msg: string, history: unknown[]): unknown[] {
+  buildContents(msg: string, history: unknown[], userInstructions?: string): unknown[] {
     const contents: { role: string; content: string }[] = [
       {
         role: "system",
@@ -178,6 +185,11 @@ export class OpenAICompatibleProvider extends Provider {
           : CHAT_ONLY_INSTRUCTION,
       },
     ];
+
+    const instructions = userInstructions?.trim();
+    if (instructions) {
+      contents.push({ role: "user", content: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\\n${instructions}` });
+    }
 
     for (const item of history) {
       if (item && typeof item === "object") {
@@ -200,7 +212,8 @@ export class OpenAICompatibleProvider extends Provider {
 
   private async complete(
     contents: unknown[],
-    useTools: boolean
+    useTools: boolean,
+    cancelSignal?: AbortSignal
   ): Promise<ProviderResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -216,7 +229,8 @@ export class OpenAICompatibleProvider extends Provider {
       {
         body: JSON.stringify(body),
       },
-      this.timeout
+      this.timeout,
+      cancelSignal
     );
 
     if (!response.ok) {
@@ -263,10 +277,10 @@ export class OpenAICompatibleProvider extends Provider {
     }
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], cancelSignal?: AbortSignal): Promise<ProviderResponse> {
     const useTools = this._capabilities.tools;
     try {
-      return await this.complete(contents, useTools);
+      return await this.complete(contents, useTools, cancelSignal);
     } catch (exc) {
       if (useTools && this._looksLikeToolsUnsupported(exc)) {
         this._capabilities = {
@@ -275,7 +289,7 @@ export class OpenAICompatibleProvider extends Provider {
           notes:
             "This model or server rejected tool calling. Continuing in chat-only mode.",
         };
-        return await this.complete(contents, false);
+        return await this.complete(contents, false, cancelSignal);
       }
       throw exc;
     }

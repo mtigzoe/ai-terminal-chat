@@ -304,8 +304,17 @@ function loadProjectRootFromDisk(): string {
   return resolveFollowingSymlinks(process.cwd());
 }
 
+const projectRootContext = new AsyncLocalStorage<string>();
+
+/** Run request work against a stable project root even if another request changes the global root. */
+export function runWithProjectRoot<T>(root: string, callback: () => Promise<T>): Promise<T> {
+  return projectRootContext.run(root, callback);
+}
+
 /** Return the currently configured absolute project root, loading it on first use. */
 export function getProjectRoot(): string {
+  const requestRoot = projectRootContext.getStore();
+  if (requestRoot) return requestRoot;
   if (currentProjectRoot === null) {
     currentProjectRoot = loadProjectRootFromDisk();
   }

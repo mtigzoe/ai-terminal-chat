@@ -148,6 +148,7 @@ export interface IsolatedGitOptions {
   dynamicOverrides?: string[];
   holdLock?: boolean;
   input?: string | Buffer;
+  signal?: AbortSignal;
 }
 
 class GitOperationMutex {
@@ -164,6 +165,7 @@ class GitOperationMutex {
 const gitOperationMutex = new GitOperationMutex();
 export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T> { return gitOperationMutex.runExclusive(fn); }
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
+export function withSanitizedGitConfigForTests<T>(fn: () => Promise<T>): Promise<T> { return withSanitizedGitConfig(fn); }
 
 const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$/i;
 
@@ -287,7 +289,7 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
     const configPaths = [join(commonDir, "config")];
     const worktreeConfig = join(gitDir, "config.worktree");
     if (existsSync(worktreeConfig) && worktreeConfig !== configPaths[0]) configPaths.push(worktreeConfig);
-    const originals: Array<{ path: string; content: string; sanitized: string }> = [];
+    const originals: Array<{ path: string; content: string; sanitized: string; resolved: string }> = [];
     for (const configPath of configPaths) {
       const stat = lstatSync(configPath);
       if (stat.isSymbolicLink()) throw new Error(`Git config path must not be a symlink: ${configPath}`);
@@ -295,13 +297,32 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
       const resolved = realpathSync(configPath);
       if (resolved !== configPath && resolved.toLowerCase() !== configPath.toLowerCase()) throw new Error(`Git config path must resolve to itself: ${configPath}`);
       const original = readFileSync(configPath, "utf8");
-      originals.push({ path: configPath, content: original, sanitized: stripDangerousGitConfig(original) });
+      originals.push({ path: configPath, content: original, sanitized: stripDangerousGitConfig(original), resolved });
     }
     const changed = originals.filter((entry) => entry.sanitized !== entry.content);
     if (changed.length === 0) return fn();
     for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
     try { return await fn(); }
-    finally { for (const entry of changed) { try { writeFileSync(entry.path, entry.content, "utf8"); } catch { } } }
+    finally {
+      for (const entry of changed) {
+        try {
+          // Do not overwrite a config change made by another process while
+          // the temporary sanitization was active. Also refuse to follow a
+          // path that was replaced by a symlink or another file.
+          const stat = lstatSync(entry.path);
+          if (stat.isSymbolicLink() || !stat.isFile()) continue;
+          const currentResolved = realpathSync(entry.path);
+          if (currentResolved !== entry.resolved && currentResolved.toLowerCase() !== entry.resolved.toLowerCase()) {
+            continue;
+          }
+          const current = readFileSync(entry.path, "utf8");
+          if (current !== entry.sanitized) continue;
+          writeFileSync(entry.path, entry.content, "utf8");
+        } catch {
+          // Preserve the current file if it cannot be safely restored.
+        }
+      }
+    }
 }
 
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -330,17 +351,21 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     if (options.input !== undefined) {
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });
+        const onAbort = () => child.kill();
+        if (options.signal?.aborted) onAbort();
+        else options.signal?.addEventListener("abort", onAbort, { once: true });
         let out = ""; let err = "";
         const timer = setTimeout(() => { child.kill("SIGKILL"); reject(Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" })); }, timeout);
         child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); }); child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8"); });
-        child.on("error", (e) => { clearTimeout(timer); reject(e); }); child.on("close", (code) => { clearTimeout(timer); if (code === 0) resolve(out); else reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })); });
+        child.on("error", (e) => { clearTimeout(timer); options.signal?.removeEventListener("abort", onAbort); reject(e); }); child.on("close", (code) => { clearTimeout(timer); options.signal?.removeEventListener("abort", onAbort); if (options.signal?.aborted) { reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" })); return; } if (code === 0) resolve(out); else reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })); });
         child.stdin.write(options.input!); child.stdin.end();
       });
       return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(stdout) : stdout, stderr: "" };
     }
-    const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, windowsHide: true, maxBuffer, encoding: "utf8", env });
+    const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, signal: options.signal, windowsHide: true, maxBuffer, encoding: "utf8", env });
     return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stdout ?? "")) : String(result.stdout ?? ""), stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stderr ?? "")) : String(result.stderr ?? "") };
   } catch (error) {
+    if (options.signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
     const value = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; status?: number; code?: number | string; killed?: boolean };
     if (value.code === "ENOENT") throw error;
     if (value.code === "ETIMEDOUT" || value.killed) throw Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" });

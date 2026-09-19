@@ -53,8 +53,12 @@ export class AnthropicProvider extends Provider {
     }));
   }
 
-  buildContents(msg: string, history: unknown[]): unknown[] {
+  buildContents(msg: string, history: unknown[], userInstructions?: string): unknown[] {
     const messages: AnthropicMessage[] = [];
+    const instructions = userInstructions?.trim();
+    if (instructions) {
+      messages.push({ role: "user", content: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\\n${instructions}` });
+    }
     for (const item of history) {
       const normalized = this.normalizeHistoryItem(item);
       if (normalized) messages.push(normalized);
@@ -63,7 +67,7 @@ export class AnthropicProvider extends Provider {
     return messages;
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], cancelSignal?: AbortSignal): Promise<ProviderResponse> {
     this.requireApiKey();
     const response = await this.request("POST", `${this.baseUrl}/v1/messages`, {
       body: JSON.stringify({
@@ -73,7 +77,7 @@ export class AnthropicProvider extends Provider {
         messages: contents,
         tools: this.capabilities.tools ? this.tools : undefined,
       }),
-    });
+    }, cancelSignal);
 
     if (!response.ok) {
       throw new Error(await this.apiError(response, "Anthropic request failed"));
@@ -195,9 +199,12 @@ export class AnthropicProvider extends Provider {
     if (!this.apiKey) throw new Error("Anthropic API key is not configured (ANTHROPIC_API_KEY).");
   }
 
-  private async request(method: string, url: string, options: RequestInit = {}): Promise<Response> {
+  private async request(method: string, url: string, options: RequestInit = {}, cancelSignal?: AbortSignal): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+    const signal = cancelSignal
+      ? AbortSignal.any([controller.signal, cancelSignal])
+      : controller.signal;
     try {
       const hostname = new URL(url).hostname;
       return await safeFetch(
@@ -211,11 +218,14 @@ export class AnthropicProvider extends Provider {
             "anthropic-version": "2023-06-01",
             ...(options.headers as Record<string, string> | undefined),
           },
-          signal: controller.signal,
+          signal,
         },
         { originalHostname: hostname },
       );
     } catch (exc) {
+      if (cancelSignal?.aborted) {
+        throw exc;
+      }
       if (exc instanceof Error && exc.name === "AbortError") {
         throw new Error("Anthropic request timed out.");
       }
