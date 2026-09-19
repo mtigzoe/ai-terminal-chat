@@ -29,8 +29,9 @@ afterEach(() => {
   }
   try {
     localStorage.clear();
+    sessionStorage.clear();
   } catch {
-    // ignore unavailable localStorage
+    // ignore unavailable storage
   }
 });
 
@@ -210,8 +211,8 @@ describe('client-react smoke tests', () => {
           expect.any(Object)
         );
       });
-    })
-    
+    });
+
     test('memory-disabled file selection stays in session storage and is consumed', async () => {
       mockAxiosGet({ path: '/tmp/project' });
       mockAxiosPost({ text: 'ack', tool_activity: [], request_id: 'r1' });
