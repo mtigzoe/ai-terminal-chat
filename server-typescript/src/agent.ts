@@ -831,6 +831,18 @@ async function* agentLoopCore(
             consecutive_repeat_count: consecutiveRepeatCount,
             consecutive_error_count: consecutiveErrorCount,
           };
+          if (cancelSignal?.aborted) {
+            yield {
+              type: "progress",
+              phase: "cancelled",
+              message: "Stopped: cancelled by user",
+              round: roundNumber,
+              max_rounds: MAX_TOOL_ROUNDS,
+            };
+            yield { type: "cancelled" };
+            return;
+          }
+
           const action = createPending(
             functionName,
             functionArgs,
@@ -932,6 +944,18 @@ async function* agentLoopCore(
             message: `The assistant wants to read '${readPath}'. Allowing this will add the file to your Project-page agent selection.`,
             permission_request: true,
           };
+          if (cancelSignal?.aborted) {
+            yield {
+              type: "progress",
+              phase: "cancelled",
+              message: "Stopped: cancelled by user",
+              round: roundNumber,
+              max_rounds: MAX_TOOL_ROUNDS,
+            };
+            yield { type: "cancelled" };
+            return;
+          }
+
           const action = createPending(
             "read_file_permission",
             { path: readPath },
