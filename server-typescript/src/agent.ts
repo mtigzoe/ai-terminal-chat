@@ -1104,7 +1104,8 @@ export async function* resumeAgentLoop(
           toolFn,
           functionArgs,
           "read_file",
-          TOOL_TIMEOUTS["read_file"] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS["read_file"] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
       }
     } else {
@@ -1120,7 +1121,8 @@ export async function* resumeAgentLoop(
         toolFn,
         confirmArgs,
         functionName,
-        TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+        TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+        cancelSignal
       );
     }
   } else {
