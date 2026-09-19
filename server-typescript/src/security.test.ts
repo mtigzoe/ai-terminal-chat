@@ -11,6 +11,7 @@ import {
   CHOOSE_PROJECT_ROOT,
   getConfigFile,
   getProjectRoot,
+  runWithProjectRoot,
   isAbsoluteOnAnyPlatform,
   isPathWithinRoot,
   isSensitiveFilename,
@@ -38,6 +39,26 @@ beforeEach(() => {
 afterEach(() => {
   __setProjectRootForTests(originalProjectRoot);
   rmSync(projectRoot, { recursive: true, force: true });
+});
+
+describe("project-root request binding", () => {
+  test("keeps an in-flight request on its captured root when the global root changes", async () => {
+    const rootA = projectRoot;
+    const rootB = mkdtempSync(join(tmpdir(), "ai-terminal-chat-security-other-root-"));
+    __setProjectRootForTests(rootA);
+
+    const requestRoot = await runWithProjectRoot(rootA, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return getProjectRoot();
+    });
+
+    __setProjectRootForTests(rootB);
+
+    assert.equal(requestRoot, rootA);
+    assert.equal(getProjectRoot(), rootB);
+
+    rmSync(rootB, { recursive: true, force: true });
+  });
 });
 
 describe("safePath", () => {
