@@ -126,12 +126,11 @@ function HistoryPage() {
       }
     };
 
-    window.addEventListener('storage', (event) => {
+    const handleStorage = (event) => {
       if (event.key === 'ai-terminal-chat:memory-enabled') syncMemory();
-    });
-    return () => window.removeEventListener('storage', (event) => {
-      if (event.key === 'ai-terminal-chat:memory-enabled') syncMemory();
-    });
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
   const handleClear = async (event) => {
