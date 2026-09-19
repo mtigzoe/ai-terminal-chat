@@ -219,6 +219,7 @@ describe('client-react smoke tests', () => {
     test('sends current allowed_paths when confirming an agent action', async () => {
       mockAxiosGet({ path: '/tmp/project' });
       defaultFetch();
+      localStorage.setItem('ai-terminal-chat:agent-permission-mode', 'ask');
       localStorage.setItem(
         'ai-terminal-chat:allowed-paths',
         JSON.stringify(['src/App.jsx'])
