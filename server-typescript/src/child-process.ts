@@ -19,10 +19,10 @@ interface ChildProcessFailure extends Error {
 function terminateProcessTree(pid: number | undefined): void {
   if (!pid) return;
 
-  // Windows' child_process.kill() only terminates the immediate process.
-  // npm, pytest, and similar commands commonly create descendants, so use
-  // taskkill's process-tree mode when the terminal operation is cancelled.
   if (process.platform === "win32") {
+    // Windows' child_process.kill() only terminates the immediate process.
+    // npm, pytest, and similar commands commonly create descendants, so use
+    // taskkill's process-tree mode when the terminal operation is cancelled.
     try {
       spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
         shell: false,
@@ -34,6 +34,15 @@ function terminateProcessTree(pid: number | undefined): void {
     } catch {
       // Best-effort tree termination; the direct child is still killed below.
     }
+    return;
+  }
+
+  // Detached POSIX children become the leader of their own process group.
+  // A negative PID targets that entire group, covering npm/pytest descendants.
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // The process group may already have exited.
   }
 }
 
@@ -54,6 +63,7 @@ export function runChildProcess(
       cwd: options.cwd,
       shell: false,
       windowsHide: true,
+      detached: process.platform !== "win32",
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -81,14 +91,14 @@ export function runChildProcess(
     };
 
     const terminate = () => {
-      // kill() handles the direct process immediately; on Windows the
-      // asynchronous taskkill call also terminates its descendants.
+      // The process group/tree is terminated first. On Windows this is
+      // asynchronous, so also kill the direct child immediately.
+      terminateProcessTree(child.pid);
       try {
         child.kill();
       } catch {
         // The child may have exited between the check and kill().
       }
-      terminateProcessTree(child.pid);
     };
 
     const onAbort = () => {
@@ -122,8 +132,6 @@ export function runChildProcess(
       const failure = error as ChildProcessFailure;
       failure.stdout = stdout;
       failure.stderr = stderr;
-      // Keep waiting for close only when a process was actually spawned and
-      // is being terminated; spawn errors have no close guarantee we need.
       if (failure.code === "ENOENT") {
         settled = true;
         cleanup();
