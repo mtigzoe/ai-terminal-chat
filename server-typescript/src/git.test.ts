@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 
 import { __setProjectRootForTests, getProjectRoot, runWithAllowedReadPaths } from "./security.js";
-import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus } from "./git.js";
+import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus, withGitOperationLockForTests } from "./git.js";
 
 let originalProjectRoot: string;
 
@@ -65,4 +65,24 @@ test("gitAdd rejects paths outside the allowed read selection", async () => {
       assert.ok(errorMessage.toLowerCase().includes("not selected"), `unexpected error: ${errorMessage}`);
     }
   });
+});
+
+
+test("cancelled Git operation waiting for the mutex does not wait for the active operation", async () => {
+  let releaseActive!: () => void;
+  const active = new Promise<void>((resolve) => { releaseActive = resolve; });
+  const activeLock = withGitOperationLockForTests(async () => active);
+
+  const controller = new AbortController();
+  const queued = withGitOperationLockForTests(async () => {
+    throw new Error("cancelled waiter must never enter the lock");
+  }, controller.signal);
+
+  controller.abort();
+  await assert.rejects(queued, (error: unknown) =>
+    error instanceof Error && error.message === "Git command cancelled.",
+  );
+
+  releaseActive();
+  await activeLock;
 });
