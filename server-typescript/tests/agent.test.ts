@@ -174,6 +174,44 @@ describe("runAgentLoop", () => {
     expect(events.some((event) => event.type === "cancelled")).toBe(true);
   });
 
+  it("propagates cancellation into an in-flight provider request", async () => {
+    const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+
+    const provider = new FakeProvider([]);
+    provider.generate = vi.fn(
+      (_contents: unknown[], signal?: AbortSignal) =>
+        new Promise<ProviderResponse>((_resolve, reject) => {
+          resolveStarted();
+          signal?.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("cancelled"), { code: "ABORT_ERR" })),
+            { once: true },
+          );
+        }),
+    );
+
+    const eventsPromise = collectEvents(
+      runAgentLoop({
+        provider,
+        contents: [],
+        toolFunctions: {},
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    await started;
+    controller.abort();
+
+    const events = await eventsPromise;
+    expect(events.some((event) => event.type === "cancelled")).toBe(true);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
   it("executes a read-only tool and continues", async () => {
     const calls: string[] = [];
     const toolFunctions = {
