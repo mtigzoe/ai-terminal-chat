@@ -63,7 +63,7 @@ export class AnthropicProvider extends Provider {
     return messages;
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], signal?: AbortSignal): Promise<ProviderResponse> {
     this.requireApiKey();
     const response = await this.request("POST", `${this.baseUrl}/v1/messages`, {
       body: JSON.stringify({
@@ -73,7 +73,7 @@ export class AnthropicProvider extends Provider {
         messages: contents,
         tools: this.capabilities.tools ? this.tools : undefined,
       }),
-    });
+    }, signal);
 
     if (!response.ok) {
       throw new Error(await this.apiError(response, "Anthropic request failed"));
