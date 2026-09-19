@@ -258,7 +258,10 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
   }
   const selectedPath = fs.realpathSync.native(result.filePaths[0]);
   authorizedProjectRoots.add(selectedPath);
-  saveAuthorizedProjectRoots(app.getPath('userData'), authorizedProjectRoots);
+  if (!saveAuthorizedProjectRoots(app.getPath('userData'), authorizedProjectRoots)) {
+    authorizedProjectRoots.delete(selectedPath);
+    throw new Error('Could not persist the approved project folder. The folder was not activated.');
+  }
   // Authorization is recorded here, but the active root is changed only after
   // the renderer successfully persists the same root with the backend. This
   // keeps a failed Apply operation from leaving Electron and the backend out
