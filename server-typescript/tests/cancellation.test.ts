@@ -63,3 +63,4 @@ describe("cancellation", () => {
     expect(cancel("req-0")).toBe(true);
     expect(newer.aborted).toBe(true);
   });
+});
