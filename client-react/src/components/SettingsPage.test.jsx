@@ -197,6 +197,18 @@ describe('provider selection persistence', () => {
       model: 'qwen3.5',
       ollama_hostname: 'cyber.local:11434',
     }));
+    axios.post.mockImplementation((url, payload) => {
+      if (url === `${HOST}/providers/select`) {
+        return Promise.resolve({
+          data: {
+            name: payload.provider,
+            model: payload.model || 'llama3.1',
+            base_url: payload.ollama_base_url,
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
     await renderLoaded({ provider: 'gemini', model: 'gemini-3.6-flash' });
 
     expect(axios.post).toHaveBeenCalledWith(`${HOST}/providers/select`, {
