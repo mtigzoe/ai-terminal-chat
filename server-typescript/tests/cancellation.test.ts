@@ -18,8 +18,10 @@ describe("cancellation", () => {
     expect(signal.aborted).toBe(true);
   });
 
-  it("cancel unknown request id returns false", () => {
-    expect(cancel("never-registered")).toBe(false);
+  it("cancel unknown request id is applied when the request later registers", () => {
+    expect(cancel("registers-later")).toBe(true);
+    const signal = register("registers-later");
+    expect(signal.aborted).toBe(true);
   });
 
   it("release stops tracking a request", () => {
