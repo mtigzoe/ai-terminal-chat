@@ -221,7 +221,12 @@ export class AnthropicProvider extends Provider {
         {
           ...options,
           method,
-          headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string> | undefined) },
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": this.apiKey || "",
+            "anthropic-version": "2023-06-01",
+            ...(options.headers as Record<string, string> | undefined),
+          },
           signal: requestSignal,
         },
         { originalHostname: hostname },
