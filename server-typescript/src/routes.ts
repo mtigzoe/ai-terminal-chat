@@ -674,6 +674,8 @@ app.post("/stream", async (c) => {
   }
 
   const cancelSignal = register(requestId);
+  const onRequestAbort = () => cancel(requestId);
+  c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
   const wantsNdjson = c.req.header("Accept")?.includes("application/x-ndjson") ?? false;
   const stream = new ReadableStream({
     start(controller) {
@@ -704,6 +706,7 @@ app.post("/stream", async (c) => {
             wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
           ));
         } finally {
+          c.req.raw.signal.removeEventListener("abort", onRequestAbort);
           release(requestId);
           controller.close();
         }
