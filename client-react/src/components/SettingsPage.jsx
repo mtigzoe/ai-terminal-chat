@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import MainNav from './MainNav.jsx';
 import ProjectRootManager from './ProjectRootManager.jsx';
@@ -54,6 +54,8 @@ const SettingsPage = ({ host }) => {
   const [memoryStatus, setMemoryStatus] = useState('');
   const [agentPermissionMode, setAgentPermissionMode] = useState(readAgentPermissionMode);
   const [agentPermissionStatus, setAgentPermissionStatus] = useState('');
+  const modelLoadRequestRef = useRef(0);
+  const persistSelectionQueueRef = useRef(Promise.resolve());
 
   const STORAGE_KEY = 'ai-terminal-chat:provider-selection';
 
@@ -90,11 +92,13 @@ const SettingsPage = ({ host }) => {
 
   const loadModels = async (providerName, preserveModel = '') => {
     if (!providerName) return;
+    const requestId = ++modelLoadRequestRef.current;
     setLoadingModels(true);
     setModelsError('');
     try {
       const response = await axios.get(`${host}/providers/${providerName}/models`);
       const availableModels = response.data.models || [];
+      if (requestId !== modelLoadRequestRef.current) return;
       setModels(availableModels);
       setModelsSupported(Boolean(response.data.supports_listing));
       if (response.data.error) {
@@ -106,6 +110,7 @@ const SettingsPage = ({ host }) => {
         setModel(availableModels[0].id || '');
       }
     } catch (error) {
+      if (requestId !== modelLoadRequestRef.current) return;
       setModels([]);
       setModelsSupported(false);
       setModelsError(
@@ -114,7 +119,7 @@ const SettingsPage = ({ host }) => {
           'Could not load models for this provider.'
       );
     } finally {
-      setLoadingModels(false);
+      if (requestId === modelLoadRequestRef.current) setLoadingModels(false);
     }
   };
 
@@ -181,30 +186,38 @@ const SettingsPage = ({ host }) => {
       }
     }
 
-    try {
-      const response = await axios.post(`${host}/providers/select`, payload);
-      const savedName = response.data.name || providerName;
-      const savedModel = response.data.model || modelName || '';
-      if (savedName.toLowerCase() === 'ollama') {
-        const savedHostname = formatOllamaHostname(response.data.base_url || ollamaHost);
-        writeStoredProvider({
-          provider: savedName,
-          model: savedModel,
-          ollama_hostname: savedHostname,
-        });
-      } else {
-        writeStoredProvider({ provider: savedName, model: savedModel });
-      }
-      return true;
-    } catch (error) {
-      setStatusIsError(true);
-      setStatusMessage(
-        error?.response?.data?.error ||
-          error?.message ||
-          'Could not persist provider selection.'
-      );
-      return false;
-    }
+    // Serialize selection writes so rapid provider/model changes cannot
+    // arrive at the backend out of order and leave a stale selection active.
+    const save = persistSelectionQueueRef.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          const response = await axios.post(`${host}/providers/select`, payload);
+          const savedName = response.data.name || providerName;
+          const savedModel = response.data.model || modelName || '';
+          if (savedName.toLowerCase() === 'ollama') {
+            const savedHostname = formatOllamaHostname(response.data.base_url || ollamaHost);
+            writeStoredProvider({
+              provider: savedName,
+              model: savedModel,
+              ollama_hostname: savedHostname,
+            });
+          } else {
+            writeStoredProvider({ provider: savedName, model: savedModel });
+          }
+          return true;
+        } catch (error) {
+          setStatusIsError(true);
+          setStatusMessage(
+            error?.response?.data?.error ||
+              error?.message ||
+              'Could not persist provider selection.'
+          );
+          return false;
+        }
+      });
+    persistSelectionQueueRef.current = save;
+    return save;
   };
 
   const handleProviderChange = async (event) => {
