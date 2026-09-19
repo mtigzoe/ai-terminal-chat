@@ -805,6 +805,7 @@ async function confirmLegacy(
 
   const confirmedArgs = { ...action.args, confirm: true };
   const timeoutSeconds = 60;
+  let timedOut = false;
 
   const controller = new AbortController();
   const onParentAbort = () => controller.abort();
@@ -814,6 +815,7 @@ async function confirmLegacy(
   try {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
+        timedOut = true;
         controller.abort();
         reject(new Error("timeout"));
       }, timeoutSeconds * 1000);
@@ -822,6 +824,15 @@ async function confirmLegacy(
       Promise.resolve(fn(confirmedArgs, controller.signal)),
       timeoutPromise,
     ]);
+
+    if (timedOut) {
+      return {
+        status: 500,
+        body: {
+          error: `Tool ${action.tool_name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`,
+        },
+      };
+    }
 
     if (result && typeof result === "object" && "error" in result && result.error) {
       return {
@@ -835,6 +846,14 @@ async function confirmLegacy(
       body: { confirmed: true, action_id: actionId, tool: action.tool_name, result },
     };
   } catch (exc) {
+    if (timedOut) {
+      return {
+        status: 500,
+        body: {
+          error: `Tool ${action.tool_name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`,
+        },
+      };
+    }
     if (cancelSignal?.aborted) {
       return {
         status: 200,
