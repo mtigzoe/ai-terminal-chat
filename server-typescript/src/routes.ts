@@ -883,7 +883,7 @@ app.post("/confirm", async (c) => {
   }
 
   if (!CONFIRMABLE_TOOL_NAMES.has(action.tool_name)) {
-    c.req.raw.signal.removeEventListener("abort", onRequestAbort);
+    cleanupRequestCancellation();
     release(requestId, cancelSignal);
     return c.json({ error: "Only pending write actions can be confirmed." }, 400 as any);
   }
@@ -968,7 +968,7 @@ app.post("/confirm", async (c) => {
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
-    c.req.raw.signal.removeEventListener("abort", onRequestAbort);
+    cleanupRequestCancellation();
     release(requestId, cancelSignal);
   }
 
