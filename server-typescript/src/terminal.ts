@@ -1283,6 +1283,7 @@ function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
 export async function runCommand(
   command: string,
   confirm = false,
+  signal?: AbortSignal,
 ): Promise<RunCommandResult> {
   if (!command || !command.trim()) {
     return { error: "No command was provided." };
@@ -1394,6 +1395,7 @@ export async function runCommand(
       const result = await runIsolatedGit(fileArgs, {
         timeout: COMMAND_TIMEOUT_MS,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
+        signal,
       });
 
       const remoteOutput =
@@ -1453,6 +1455,7 @@ export async function runCommand(
         cwd: getProjectRoot(),
         shell: false,
         timeout: COMMAND_TIMEOUT_MS,
+        signal,
         windowsHide: true,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
         encoding: "utf8",
@@ -1480,6 +1483,7 @@ export async function runCommand(
 
     return payload;
   } catch (err) {
+    if (signal?.aborted) return { error: "Command cancelled." };
     const error = err as NodeJS.ErrnoException & {
       stdout?: string;
       stderr?: string;

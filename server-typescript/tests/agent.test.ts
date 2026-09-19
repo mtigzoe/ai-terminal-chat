@@ -123,6 +123,42 @@ describe("runAgentLoop", () => {
     expect(events[events.length - 1]).toEqual({ type: "final", text: "tests passed" });
   });
 
+  it("cancels an in-flight provider request", async () => {
+    const controller = new AbortController();
+    let observedAbort = false;
+    const provider = new FakeProvider([]);
+    provider.generate = async (_contents: unknown[], signal?: AbortSignal) => {
+      await new Promise<never>((_, reject) => {
+        if (signal?.aborted) {
+          observedAbort = true;
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          observedAbort = true;
+          reject(new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      });
+      throw new Error("unreachable");
+    };
+
+    const eventsPromise = collectEvents(runAgentLoop({
+      provider,
+      contents: [],
+      toolFunctions: {},
+      cancelSignal: controller.signal,
+      createPending: () => ({ action_id: "" }),
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    controller.abort();
+    const events = await eventsPromise;
+
+    expect(observedAbort).toBe(true);
+    expect(events[events.length - 1]).toEqual({ type: "cancelled" });
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+  });
+
   it("stops before any provider call when cancelled before start", async () => {
     const provider = new FakeProvider([{ text: "should not run", tool_calls: [], raw: null }]);
     const controller = new AbortController();
