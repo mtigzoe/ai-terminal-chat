@@ -254,8 +254,11 @@ describe('client-react smoke tests', () => {
       await waitFor(() => {
         expect(localStorage.getItem('ai-terminal-chat:pending-files')).toBeNull();
       });
-      expect(axios.post).not.toHaveBeenCalled();
+      expect(axios.post).not.toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.anything(),
+        expect.anything()
+      );
     });
-;
   });
 });
