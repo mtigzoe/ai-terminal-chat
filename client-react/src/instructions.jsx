@@ -9,8 +9,7 @@ import InstructionsPage from './components/InstructionsPage.jsx';
 function InstructionsApp() {
   return (
     <div className="instructions-app">
-      <MainNav />
-      <InstructionsPage />
+        <InstructionsPage />
     </div>
   );
 }
