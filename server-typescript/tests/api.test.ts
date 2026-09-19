@@ -80,10 +80,11 @@ function createTestApp() {
 }
 
 beforeEach(() => {
-  // Reset allowlist to defaults on disk so that mutations from other
-  // test files cannot leak into these tests, then reload into memory.
+  // Reset allowlist and request-cancellation state so mutations from one
+  // API test cannot leak into another test.
   persistAllowedCommands([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
   reloadAllowedCommands();
+  clearCancellation();
   // Ensure the allowlist starts from defaults so earlier test files
   // that modified or persisted the allowlist do not affect these tests.
 });
@@ -740,13 +741,13 @@ describe("POST /stream", () => {
 });
 
 describe("POST /cancel/:request_id", () => {
-  it("returns cancelled=false for unknown request", async () => {
+  it("records cancellation for an unknown request id", async () => {
     const res = await createTestApp().request("http://localhost/cancel/nonexistent", {
       method: "POST",
     });
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.cancelled).toBe(false);
+    expect(data.cancelled).toBe(true);
   });
 });
 
