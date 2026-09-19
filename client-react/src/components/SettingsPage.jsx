@@ -415,6 +415,14 @@ const SettingsPage = ({ host }) => {
     setMemoryStatus('');
     try {
       localStorage.setItem('ai-terminal-chat:memory-enabled', next ? 'true' : 'false');
+      if (!next) {
+        // Pending project context can contain file contents, so it must not
+        // survive a switch to session-only memory.
+        localStorage.removeItem('ai-terminal-chat:pending-files');
+        localStorage.removeItem('ai-terminal-chat:pending-terminal-path');
+        sessionStorage.removeItem('ai-terminal-chat:pending-files');
+        sessionStorage.removeItem('ai-terminal-chat:pending-terminal-path');
+      }
       setMemoryStatus(next ? 'Memory persistence enabled.' : 'Memory persistence disabled.');
     } catch {
       setMemoryStatus('Could not save memory setting.');
