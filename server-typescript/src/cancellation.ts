@@ -31,8 +31,16 @@ export function cancel(requestId: string): boolean {
 export function bindRequestCancellation(
   requestSignal: AbortSignal,
   requestId: string,
+  registeredSignal?: AbortSignal,
 ): () => void {
   const onAbort = () => {
+    // An evicted request can outlive its registry entry. If its HTTP
+    // connection aborts later, it must not cancel a newer request reusing the
+    // same request ID.
+    if (registeredSignal) {
+      const current = _EVENTS.get(requestId);
+      if (!current || current.signal !== registeredSignal) return;
+    }
     cancel(requestId);
   };
 
