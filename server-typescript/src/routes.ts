@@ -892,7 +892,7 @@ app.post("/confirm", async (c) => {
   } catch (error) {
     return c.json({ error: String(error) }, 409 as any);
   }
-  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId);
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
 
   const action = popPending(actionId);
   if (!action) {
