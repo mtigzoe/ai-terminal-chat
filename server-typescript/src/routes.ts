@@ -766,7 +766,8 @@ const CONFIRMABLE_TOOL_NAMES = new Set([
 async function confirmLegacy(
   action: PendingAction,
   actionId: string,
-  confirmed: boolean
+  confirmed: boolean,
+  cancelSignal?: AbortSignal
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   if (action.tool_name === "read_file_permission") {
     const readPath = action.args.path;
@@ -816,13 +817,22 @@ async function confirmLegacy(
 
   const confirmedArgs = { ...action.args, confirm: true };
   const timeoutSeconds = 60;
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort();
+  if (cancelSignal?.aborted) controller.abort();
+  else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
   try {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        controller.abort();
+        reject(new Error("timeout"));
+      }, timeoutSeconds * 1000);
+    });
     const result = await Promise.race([
-      Promise.resolve(fn(confirmedArgs)),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), timeoutSeconds * 1000)
-      ),
+      Promise.resolve(fn.length >= 2 ? fn(confirmedArgs, controller.signal) : fn(confirmedArgs)),
+      timeoutPromise,
     ]);
 
     if (result && typeof result === "object" && "error" in result && result.error) {
@@ -837,10 +847,19 @@ async function confirmLegacy(
       body: { confirmed: true, action_id: actionId, tool: action.tool_name, result },
     };
   } catch (exc) {
+    if (cancelSignal?.aborted) {
+      return {
+        status: 200,
+        body: { confirmed: true, action_id: actionId, tool: action.tool_name, cancelled: true },
+      };
+    }
     return {
       status: 500,
       body: { error: `Tool ${action.tool_name} failed: ${exc}` },
     };
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    cancelSignal?.removeEventListener("abort", onParentAbort);
   }
 }
 
@@ -870,13 +889,22 @@ app.post("/confirm", async (c) => {
   }
 
   const provider = getActiveProvider();
+  const cancelSignal = register(requestId);
+  const onRequestAbort = () => cancel(requestId);
+  c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
+
   const canResume =
     action.resume !== undefined &&
     action.resume.provider_fingerprint === providerFingerprint(provider);
 
   if (!canResume) {
-    const { status, body } = await confirmLegacy(action, actionId, confirmed);
-    return c.json(body, status as any);
+    try {
+      const { status, body } = await confirmLegacy(action, actionId, confirmed, cancelSignal);
+      return c.json(body, status as any);
+    } finally {
+      c.req.raw.signal.removeEventListener("abort", onRequestAbort);
+      release(requestId);
+    }
   }
 
   const baseResponse: Record<string, unknown> = {
@@ -895,8 +923,6 @@ app.post("/confirm", async (c) => {
   let cancelled = false;
   let nextPending: PendingConfirmationEvent | null = null;
   let resultCaptured = false;
-  const cancelSignal = register(requestId);
-
   let allowedPaths = extractAllowedPaths(data);
   if (
     action.tool_name === "read_file_permission" &&
@@ -945,6 +971,7 @@ app.post("/confirm", async (c) => {
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
+    c.req.raw.signal.removeEventListener("abort", onRequestAbort);
     release(requestId);
   }
 
