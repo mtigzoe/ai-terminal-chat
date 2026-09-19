@@ -133,7 +133,15 @@ function App() {
   });
   const [newChatAvailable, setNewChatAvailable] = useState(false);
   const [allowedPaths, setAllowedPaths] = useState(() => {
-    try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths') ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+    try {
+      const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+      if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths');
+      const storage = memoryEnabled ? localStorage : sessionStorage;
+      const raw = storage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
   });
   const is_stream = toggled;
 
@@ -146,7 +154,15 @@ function App() {
   }, [toggled]);
 
   const resolveAllowedPaths = () => {
-    try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths') ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : []; } catch { return []; }
+    try {
+      const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+      if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths');
+      const storage = memoryEnabled ? localStorage : sessionStorage;
+      const raw = storage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : [];
+    } catch { return []; }
   };
   const resolveUserInstructions = () => {
     try {
@@ -207,7 +223,13 @@ function App() {
         if (typeof path === 'string' && path.trim()) {
           const paths = Array.from(new Set([...resolveAllowedPaths(), path.trim()]));
           setAllowedPaths(paths);
-          try { localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths)); } catch {}
+          try {
+            const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+            const storage = memoryEnabled ? localStorage : sessionStorage;
+            const otherStorage = memoryEnabled ? sessionStorage : localStorage;
+            storage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
+            otherStorage.removeItem('ai-terminal-chat:allowed-paths');
+          } catch {}
           window.dispatchEvent(new CustomEvent('ai-terminal-chat:allowed-paths-changed', { detail: { paths } }));
         }
       }
