@@ -523,3 +523,27 @@ describe('NVIDIA NIM provider', () => {
     ).toBeTruthy();
   });
 });
+
+describe('memory persistence', () => {
+  test('clearing persistent memory removes previously saved chat state', async () => {
+    localStorage.setItem(
+      'ai-terminal-chat:chats',
+      JSON.stringify([{ id: 'chat-1', title: 'Saved chat', messages: [] }])
+    );
+    localStorage.setItem('ai-terminal-chat:current-chat-id', 'chat-1');
+    localStorage.setItem('ai-terminal-chat:restore-chat-id', 'chat-1');
+
+    await renderLoaded();
+
+    const toggle = screen.getByRole('switch', { name: /persistent memory/i });
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    await screen.findByText(/memory persistence disabled/i);
+    expect(localStorage.getItem('ai-terminal-chat:memory-enabled')).toBe('false');
+    expect(localStorage.getItem('ai-terminal-chat:chats')).toBeNull();
+    expect(localStorage.getItem('ai-terminal-chat:current-chat-id')).toBeNull();
+    expect(localStorage.getItem('ai-terminal-chat:restore-chat-id')).toBeNull();
+  });
+});
