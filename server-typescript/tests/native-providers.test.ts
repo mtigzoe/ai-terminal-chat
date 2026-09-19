@@ -95,7 +95,7 @@ describe("GeminiProvider", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     controller.abort();
 
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await expect(pending).rejects.toMatchObject({ code: "ABORT_ERR" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
