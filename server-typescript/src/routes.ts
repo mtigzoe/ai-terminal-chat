@@ -579,7 +579,7 @@ app.post("/chat", async (c) => {
   let errorMessage: string | null = null;
   let cancelled = false;
   const cancelSignal = register(requestId);
-  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId);
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
 
   try {
     await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
