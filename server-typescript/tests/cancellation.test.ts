@@ -46,3 +46,22 @@ describe("cancellation", () => {
     expect(first.aborted).toBe(true);
   });
 });
+
+
+  it("does not release a newer registration that reused an evicted request ID", () => {
+    const firstSignals: AbortSignal[] = [];
+    for (let i = 0; i < 200; i += 1) firstSignals.push(register(`req-${i}`));
+    const first = firstSignals[0];
+
+    // Registering the 201st request evicts and aborts req-0.
+    register("req-200");
+    expect(first.aborted).toBe(true);
+
+    // The evicted request ID may now be reused by a new request.
+    const newer = register("req-0");
+
+    // Cleanup from the old request must not delete the newer registration.
+    release("req-0", first);
+    expect(cancel("req-0")).toBe(true);
+    expect(newer.aborted).toBe(true);
+  });
