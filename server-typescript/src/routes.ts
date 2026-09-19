@@ -915,6 +915,11 @@ app.post("/confirm", async (c) => {
   if (!canResume) {
     try {
       const { status, body } = await confirmLegacy(action, actionId, confirmed, cancelSignal);
+      if (body.cancelled === true && cancelSignal.aborted) {
+        // The action was popped before execution. If cancellation prevented
+        // the confirmed tool from running, keep it available for retry.
+        restorePending(action);
+      }
       return c.json(body, status as any);
     } finally {
       cleanupRequestCancellation();
