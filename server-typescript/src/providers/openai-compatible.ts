@@ -221,14 +221,15 @@ export class OpenAICompatibleProvider extends Provider {
       signal,
     );
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `${this.displayName} request failed (HTTP ${response.status}): ${text}`
-      );
-    }
+    try {
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(
+          `${this.displayName} request failed (HTTP ${response.status}): ${text}`
+        );
+      }
 
-    const data = (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as Record<string, unknown>;
     try {
       const choice = (data.choices as unknown[])[0] as Record<string, unknown>;
       const message = choice.message as Record<string, unknown>;
@@ -261,7 +262,16 @@ export class OpenAICompatibleProvider extends Provider {
         raw: message,
       };
     } catch (exc) {
-      throw new Error(`Unexpected response shape: ${data}`);
+        throw new Error(`Unexpected response shape: ${data}`);
+      }
+    } catch (exc) {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error(`Request to ${this.displayName} cancelled.`), { code: "ABORT_ERR" });
+        }
+        throw new Error(`Request to ${this.displayName} timed out.`);
+      }
+      throw exc;
     }
   }
 
