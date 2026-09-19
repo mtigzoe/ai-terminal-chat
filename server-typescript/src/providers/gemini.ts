@@ -53,8 +53,12 @@ export class GeminiProvider extends Provider {
     }));
   }
 
-  buildContents(msg: string, history: unknown[]): unknown[] {
+  buildContents(msg: string, history: unknown[], userInstructions?: string): unknown[] {
     const contents: GeminiContent[] = [];
+    const instructions = userInstructions?.trim();
+    if (instructions) {
+      contents.push({ role: "user", parts: [{ text: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\\n${instructions}` }] });
+    }
     for (const item of history) {
       const normalized = this.normalizeHistoryItem(item);
       if (normalized) contents.push(normalized);
