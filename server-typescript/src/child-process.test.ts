@@ -55,6 +55,25 @@ test("runChildProcess reports timeout after the child has closed", async () => {
   });
 });
 
+test("runChildProcess preserves signal termination as a failure", { skip: process.platform === "win32" }, async () => {
+  const promise = runChildProcess(
+    process.execPath,
+    ["-e", "process.kill(process.pid, 'SIGTERM')"],
+    {
+      cwd: process.cwd(),
+      timeout: 5000,
+      maxBuffer: 10000,
+      env: process.env,
+    },
+  );
+
+  await assert.rejects(promise, (error: Error & { code?: string; signal?: string }) => {
+    assert.equal(error.code, "SIGTERM");
+    assert.equal(error.signal, "SIGTERM");
+    return true;
+  });
+});
+
 test("Windows cancellation terminates descendants, not just the direct child", { skip: process.platform !== "win32" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "terminal-child-tree-"));
   const pidFile = join(dir, "child.pid");
