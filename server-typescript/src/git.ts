@@ -415,8 +415,11 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
           settled = true;
           fn();
         };
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        // The signal can abort between the initial check and listener
+        // registration. Re-check after installing the listener so the Git
+        // process cannot escape cancellation during that race.
         if (options.signal?.aborted) onAbort();
-        else options.signal?.addEventListener("abort", onAbort, { once: true });
         child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); });
         child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8"); });
         child.on("error", (e) => {
