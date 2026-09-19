@@ -226,37 +226,43 @@ describe('client-react smoke tests', () => {
         JSON.stringify(['src/App.jsx'])
       );
 
-      axios.post
-        .mockResolvedValueOnce({
-          data: {
-            text: '',
-            tool_activity: [{
-              type: 'pending_confirmation',
-              name: 'write_file',
-              action_id: 'action-1',
-              args: { path: 'src/App.jsx', contents: 'updated' },
-              preview: { description: 'Write src/App.jsx' },
-            }],
-            request_id: 'r-confirm',
-            pending_confirmation: {
-              type: 'pending_confirmation',
-              name: 'write_file',
-              action_id: 'action-1',
-              args: { path: 'src/App.jsx', contents: 'updated' },
-              preview: { description: 'Write src/App.jsx' },
+      axios.post.mockImplementation(async (requestUrl) => {
+        if (requestUrl.endsWith('/chat')) {
+          return {
+            data: {
+              text: '',
+              tool_activity: [{
+                type: 'pending_confirmation',
+                name: 'write_file',
+                action_id: 'action-1',
+                args: { path: 'src/App.jsx', contents: 'updated' },
+                preview: { description: 'Write src/App.jsx' },
+              }],
+              request_id: 'r-confirm',
+              pending_confirmation: {
+                type: 'pending_confirmation',
+                name: 'write_file',
+                action_id: 'action-1',
+                args: { path: 'src/App.jsx', contents: 'updated' },
+                preview: { description: 'Write src/App.jsx' },
+              },
             },
-          },
-        })
-        .mockResolvedValueOnce({
-          data: {
-            text: 'Done',
-            tool_activity: [{
-              type: 'tool_result',
-              name: 'write_file',
-              result: { ok: true },
-            }],
-          },
-        });
+          };
+        }
+        if (requestUrl.endsWith('/confirm')) {
+          return {
+            data: {
+              text: 'Done',
+              tool_activity: [{
+                type: 'tool_result',
+                name: 'write_file',
+                result: { ok: true },
+              }],
+            },
+          };
+        }
+        throw new Error(`Unexpected POST: ${requestUrl}`);
+      });
 
       render(<App />);
       fireEvent.change(screen.getByLabelText(/chat message/i), {
@@ -264,6 +270,7 @@ describe('client-react smoke tests', () => {
       });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
+      await screen.findByRole('dialog', { name: /confirmation required/i });
       const allow = await screen.findByRole('button', { name: /^allow$/i });
       fireEvent.click(allow);
 
