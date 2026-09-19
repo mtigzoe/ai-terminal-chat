@@ -82,7 +82,8 @@ export class OpenAICompatibleProvider extends Provider {
     method: string,
     url: string,
     options: RequestInit = {},
-    timeoutSeconds?: number
+    timeoutSeconds?: number,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const controller = new AbortController();
     // Probes/list use a short timeout; chat completions use the full
@@ -92,6 +93,9 @@ export class OpenAICompatibleProvider extends Provider {
       () => controller.abort(),
       seconds * 1000
     );
+    const onParentAbort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", onParentAbort, { once: true });
 
     // DNS-pinning fetch: resolve + validate addresses, then connect only to
     // the pinned IP (prevents DNS rebinding between check and connect).
@@ -113,11 +117,13 @@ export class OpenAICompatibleProvider extends Provider {
       return response;
     } catch (exc) {
       if (exc instanceof Error && exc.name === "AbortError") {
+        if (signal?.aborted) throw Object.assign(new Error(`Request to ${this.displayName} cancelled.`), { code: "ABORT_ERR" });
         throw new Error(`Request to ${this.displayName} timed out.`);
       }
       throw new Error(this.unreachableMessage(exc));
     } finally {
       clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onParentAbort);
     }
   }
 
@@ -200,7 +206,8 @@ export class OpenAICompatibleProvider extends Provider {
 
   private async complete(
     contents: unknown[],
-    useTools: boolean
+    useTools: boolean,
+    signal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -263,10 +270,10 @@ export class OpenAICompatibleProvider extends Provider {
     }
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], signal?: AbortSignal): Promise<ProviderResponse> {
     const useTools = this._capabilities.tools;
     try {
-      return await this.complete(contents, useTools);
+      return await this.complete(contents, useTools, signal);
     } catch (exc) {
       if (useTools && this._looksLikeToolsUnsupported(exc)) {
         this._capabilities = {
@@ -275,7 +282,7 @@ export class OpenAICompatibleProvider extends Provider {
           notes:
             "This model or server rejected tool calling. Continuing in chat-only mode.",
         };
-        return await this.complete(contents, false);
+        return await this.complete(contents, false, signal);
       }
       throw exc;
     }
