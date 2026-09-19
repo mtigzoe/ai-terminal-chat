@@ -5,8 +5,7 @@
 // explicitly blocked patterns are rejected, output is capped, and the
 // user-configurable allowlist is persisted in the shared config file.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runChildProcess } from "./child-process.ts";
 
 import { loadAppConfig, persistAppConfig } from "./config.js";
 import type { RunCommandResult } from "./types.js";
@@ -23,7 +22,7 @@ import {
 import { ISOLATED_GIT_SUBCOMMANDS, runIsolatedGit } from "./git.ts";
 import { resolveTrustedExecutable, TrustedExecutableError } from "./trusted-exec.ts";
 
-const execFileAsync = promisify(execFile);
+
 
 export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "git status",
@@ -1448,17 +1447,14 @@ export async function runCommand(
   }
 
   try {
-    const { stdout, stderr } = await execFileAsync(
+    const { stdout, stderr, code } = await runChildProcess(
       file,
       fileArgs,
       {
         cwd: getProjectRoot(),
-        shell: false,
         timeout: COMMAND_TIMEOUT_MS,
         signal,
-        windowsHide: true,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
-        encoding: "utf8",
         env: sanitizedTerminalEnv(),
       },
     );
@@ -1469,7 +1465,7 @@ export async function runCommand(
 
     const payload: RunCommandResult = {
       command: normalized,
-      returncode: 0,
+      returncode: code,
       stdout: out.value,
       stderr: err.value,
       truncated,

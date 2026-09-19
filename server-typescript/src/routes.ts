@@ -32,7 +32,7 @@ import {
   runCommand,
 } from "./terminal.ts";
 import { createPending, getPending, popPending } from "./pending.ts";
-import { cancel, release, register } from "./cancellation.ts";
+import { bindRequestCancellation, cancel, release, register } from "./cancellation.ts";
 import {
   runAgentLoop,
   resumeAgentLoop,
@@ -581,6 +581,7 @@ app.post("/chat", async (c) => {
   let errorMessage: string | null = null;
   let cancelled = false;
   const cancelSignal = register(requestId);
+  const cancelCleanup = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
 
   try {
     await runWithProjectRoot(getProjectRoot(), () =>
@@ -622,7 +623,8 @@ app.post("/chat", async (c) => {
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
-    release(requestId);
+    cancelCleanup();
+    release(requestId, cancelSignal);
   }
 
   if (cancelled) {
@@ -679,6 +681,7 @@ app.post("/stream", async (c) => {
   }
 
   const cancelSignal = register(requestId);
+  const cancelCleanup = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
   const wantsNdjson = c.req.header("Accept")?.includes("application/x-ndjson") ?? false;
   const stream = new ReadableStream({
     start(controller) {
@@ -711,7 +714,8 @@ app.post("/stream", async (c) => {
             wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
           ));
         } finally {
-          release(requestId);
+          cancelCleanup();
+          release(requestId, cancelSignal);
           controller.close();
         }
       })();
