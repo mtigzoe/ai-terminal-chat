@@ -136,8 +136,7 @@ function App() {
     try {
       const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
       if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths');
-      const storage = memoryEnabled ? localStorage : sessionStorage;
-      const raw = storage.getItem('ai-terminal-chat:allowed-paths');
+      const raw = (memoryEnabled ? localStorage : sessionStorage).getItem('ai-terminal-chat:allowed-paths');
       if (!raw) return [];
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed : [];
@@ -157,8 +156,7 @@ function App() {
     try {
       const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
       if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths');
-      const storage = memoryEnabled ? localStorage : sessionStorage;
-      const raw = storage.getItem('ai-terminal-chat:allowed-paths');
+      const raw = (memoryEnabled ? localStorage : sessionStorage).getItem('ai-terminal-chat:allowed-paths');
       if (!raw) return [];
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : [];
