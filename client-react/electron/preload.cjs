@@ -32,4 +32,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<boolean>}
    */
   setProjectRoot: (path) => ipcRenderer.invoke('project:setRoot', path),
+  isProjectRootAuthorized: (path) => ipcRenderer.invoke('project:isAuthorizedRoot', path),
 });
