@@ -213,3 +213,28 @@ describe('client-react smoke tests', () => {
     });
   });
 });
+
+
+  describe('Memory and project permissions', () => {
+    test('does not send persisted file permissions when persistent memory is disabled', async () => {
+      localStorage.setItem('ai-terminal-chat:memory-enabled', 'false');
+      localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['persisted.txt']));
+      sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['session.txt']));
+      mockAxiosGet({ path: '/tmp/project' });
+      mockAxiosPost({ text: 'ack', tool_activity: [], request_id: 'r1' });
+      defaultFetch();
+
+      render(<App />);
+      fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: 'hi' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+
+      await waitFor(() => {
+        expect(axios.post).toHaveBeenCalledWith(
+          expect.stringContaining('/chat'),
+          expect.objectContaining({ allowed_paths: ['session.txt'] }),
+          expect.any(Object)
+        );
+      });
+      expect(localStorage.getItem('ai-terminal-chat:allowed-paths')).toBeNull();
+    });
+  });
