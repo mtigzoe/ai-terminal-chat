@@ -48,11 +48,15 @@ describe("project-root request binding", () => {
     __setProjectRootForTests(rootA);
 
     const requestRoot = await runWithProjectRoot(rootA, async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          __setProjectRootForTests(rootB);
+          resolve();
+        }, 5);
+      });
       await new Promise((resolve) => setTimeout(resolve, 10));
       return getProjectRoot();
     });
-
-    __setProjectRootForTests(rootB);
 
     assert.equal(requestRoot, rootA);
     assert.equal(getProjectRoot(), rootB);
