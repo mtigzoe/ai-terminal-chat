@@ -261,13 +261,14 @@ export class GeminiProvider extends Provider {
   }
 
   private async request(method: string, url: string, options: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
-    const onParentAbort = () => controller.abort();
-    signal?.addEventListener("abort", onParentAbort, { once: true });
-    // Re-check after listener registration to close the abort race between
-    // the initial check and listener installation.
-    if (signal?.aborted) controller.abort();
+    // Keep cancellation and timeout attached to the response body. Fetch
+    // resolves when headers arrive, so cleaning up here would leave
+    // response.json()/response.text() running after cancellation.
+    const timeoutSignal = AbortSignal.timeout(this.timeout * 1000);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+
     try {
       const hostname = new URL(url).hostname;
       return await safeFetch(
@@ -276,19 +277,18 @@ export class GeminiProvider extends Provider {
           ...options,
           method,
           headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string> | undefined) },
-          signal: controller.signal,
+          signal: requestSignal,
         },
         { originalHostname: hostname },
       );
     } catch (exc) {
-      if (exc instanceof Error && exc.name === "AbortError") {
-        if (signal?.aborted) throw Object.assign(new Error("Gemini request cancelled."), { code: "ABORT_ERR" });
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Gemini request cancelled."), { code: "ABORT_ERR" });
+        }
         throw new Error("Gemini request timed out.");
       }
       throw new Error(`Could not reach Gemini: ${exc}`);
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onParentAbort);
     }
   }
 
