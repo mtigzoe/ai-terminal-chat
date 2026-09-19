@@ -146,7 +146,10 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed) || parsed.length === 0) return;
         const paths = parsed.filter((p) => typeof p === 'string' && p.trim());
-        if (!paths.length) return;
+        if (!paths.length) {
+          setSelectedFiles((current) => current.size ? new Set() : current);
+          return;
+        }
         setSelectedFiles((current) => {
           let currentPaths = paths;
           try {
@@ -305,6 +308,7 @@ useLayoutEffect(() => {
       localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify([]));
     } catch {}
     setStatus('Cleared agent file selection.');
+    window.dispatchEvent(new Event('ai-terminal-chat:allowed-paths-changed'));
   };
   const useSelectedFiles = async () => { const paths = Array.from(selectedFiles); if (!paths.length) { setStatus('No files are selected for the agent.'); onUseSelectedFiles?.([]); return; } setStatus(`Reading ${paths.length} selected ${paths.length === 1 ? 'file' : 'files'} for the agent.`); setError(''); try { const files = []; for (const path of paths) { const response = await axios.get(`${host}/project/read`, { params: { path } }); files.push({ path: response.data?.path || path, content: response.data?.contents ?? response.data?.content ?? '' }); } onUseSelectedFiles?.(files); setStatus(`${files.length} ${files.length === 1 ? 'file' : 'files'} supplied to the agent.`); } catch (err) { const message = err?.response?.data?.error || err?.message || 'Unable to read selected files.'; setError(message); setStatus('Unable to supply selected files to the agent.'); } };
   const normalizedFilter = filterQuery.trim().toLowerCase(); const entryMatchesFilter = (entry) => !normalizedFilter || entryName(entry).toLowerCase().includes(normalizedFilter); const subtreeHasMatch = (entries, parentPath) => { if (!normalizedFilter) return true; for (const entry of entries) { if (entryMatchesFilter(entry)) return true; const path = entryPath(entry, parentPath); if (isDirectory(entry) && children[path] && subtreeHasMatch(children[path], path)) return true; } return false; };
