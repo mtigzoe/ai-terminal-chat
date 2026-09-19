@@ -148,6 +148,7 @@ export interface IsolatedGitOptions {
   dynamicOverrides?: string[];
   holdLock?: boolean;
   input?: string | Buffer;
+  signal?: AbortSignal;
 }
 
 class GitOperationMutex {
@@ -330,17 +331,21 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     if (options.input !== undefined) {
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });
+        const onAbort = () => child.kill();
+        if (options.signal?.aborted) onAbort();
+        else options.signal?.addEventListener("abort", onAbort, { once: true });
         let out = ""; let err = "";
         const timer = setTimeout(() => { child.kill("SIGKILL"); reject(Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" })); }, timeout);
         child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); }); child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8"); });
-        child.on("error", (e) => { clearTimeout(timer); reject(e); }); child.on("close", (code) => { clearTimeout(timer); if (code === 0) resolve(out); else reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })); });
+        child.on("error", (e) => { clearTimeout(timer); options.signal?.removeEventListener("abort", onAbort); reject(e); }); child.on("close", (code) => { clearTimeout(timer); options.signal?.removeEventListener("abort", onAbort); if (options.signal?.aborted) { reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" })); return; } if (code === 0) resolve(out); else reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })); });
         child.stdin.write(options.input!); child.stdin.end();
       });
       return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(stdout) : stdout, stderr: "" };
     }
-    const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, windowsHide: true, maxBuffer, encoding: "utf8", env });
+    const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, signal: options.signal, windowsHide: true, maxBuffer, encoding: "utf8", env });
     return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stdout ?? "")) : String(result.stdout ?? ""), stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stderr ?? "")) : String(result.stderr ?? "") };
   } catch (error) {
+    if (options.signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
     const value = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; status?: number; code?: number | string; killed?: boolean };
     if (value.code === "ENOENT") throw error;
     if (value.code === "ETIMEDOUT" || value.killed) throw Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" });
