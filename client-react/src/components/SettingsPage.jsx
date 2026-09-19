@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import MainNav from './MainNav.jsx';
 import ProjectRootManager from './ProjectRootManager.jsx';
@@ -54,6 +54,8 @@ const SettingsPage = ({ host }) => {
   const [memoryStatus, setMemoryStatus] = useState('');
   const [agentPermissionMode, setAgentPermissionMode] = useState(readAgentPermissionMode);
   const [agentPermissionStatus, setAgentPermissionStatus] = useState('');
+  const modelLoadRequestRef = useRef(0);
+  const persistSelectionQueueRef = useRef(Promise.resolve());
 
   const STORAGE_KEY = 'ai-terminal-chat:provider-selection';
 
@@ -90,11 +92,13 @@ const SettingsPage = ({ host }) => {
 
   const loadModels = async (providerName, preserveModel = '') => {
     if (!providerName) return;
+    const requestId = ++modelLoadRequestRef.current;
     setLoadingModels(true);
     setModelsError('');
     try {
       const response = await axios.get(`${host}/providers/${providerName}/models`);
       const availableModels = response.data.models || [];
+      if (requestId !== modelLoadRequestRef.current) return;
       setModels(availableModels);
       setModelsSupported(Boolean(response.data.supports_listing));
       if (response.data.error) {
@@ -106,6 +110,7 @@ const SettingsPage = ({ host }) => {
         setModel(availableModels[0].id || '');
       }
     } catch (error) {
+      if (requestId !== modelLoadRequestRef.current) return;
       setModels([]);
       setModelsSupported(false);
       setModelsError(
@@ -114,7 +119,7 @@ const SettingsPage = ({ host }) => {
           'Could not load models for this provider.'
       );
     } finally {
-      setLoadingModels(false);
+      if (requestId === modelLoadRequestRef.current) setLoadingModels(false);
     }
   };
 
@@ -142,15 +147,47 @@ const SettingsPage = ({ host }) => {
         ]);
         if (!active) return;
         setProviderNames(providerResponse.data.providers || []);
-        setProvider(providerResponse.data.name || '');
-        setModel(providerResponse.data.model || '');
-        if ((providerResponse.data.name || '').toLowerCase() === 'ollama') {
-          setOllamaHostname(formatOllamaHostname(providerResponse.data.base_url));
+
+        // The backend may start from its environment/default provider on a
+        // fresh process. Restore the user's last local selection before the
+        // backend response overwrites the cached UI selection.
+        const cached = readStoredProvider();
+        let restored = providerResponse.data;
+        let restoreError = '';
+        if (
+          cached?.provider &&
+          (providerResponse.data.providers || []).includes(cached.provider) &&
+          (cached.provider !== providerResponse.data.name ||
+            (cached.model && cached.model !== providerResponse.data.model))
+        ) {
+          try {
+            const payload = {
+              provider: cached.provider,
+              model: cached.model || undefined,
+            };
+            if (cached.provider.toLowerCase() === 'ollama') {
+              payload.ollama_base_url = cached.ollama_hostname || 'localhost:11434';
+            }
+            const restoreResponse = await axios.post(host + '/providers/select', payload);
+            restored = restoreResponse.data;
+          } catch (error) {
+            restoreError =
+              error?.response?.data?.error ||
+              error?.message ||
+              'Could not restore the saved provider selection.';
+          }
+        }
+
+        setProvider(restored.name || cached?.provider || '');
+        setModel(restored.model || cached?.model || '');
+        if ((restored.name || '').toLowerCase() === 'ollama') {
+          setOllamaHostname(formatOllamaHostname(restored.base_url || cached?.ollama_hostname));
           checkOllamaCli();
         }
         setAllowedCommands(allowedCommandsResponse.data.commands || []);
-        setStatusMessage('');
-        void loadModels(providerResponse.data.name, providerResponse.data.model || '');
+        setStatusIsError(Boolean(restoreError));
+        setStatusMessage(restoreError);
+        void loadModels(restored.name, restored.model || '');
       } catch {
         if (active) {
           setStatusIsError(true);
@@ -181,30 +218,38 @@ const SettingsPage = ({ host }) => {
       }
     }
 
-    try {
-      const response = await axios.post(`${host}/providers/select`, payload);
-      const savedName = response.data.name || providerName;
-      const savedModel = response.data.model || modelName || '';
-      if (savedName.toLowerCase() === 'ollama') {
-        const savedHostname = formatOllamaHostname(response.data.base_url || ollamaHost);
-        writeStoredProvider({
-          provider: savedName,
-          model: savedModel,
-          ollama_hostname: savedHostname,
-        });
-      } else {
-        writeStoredProvider({ provider: savedName, model: savedModel });
-      }
-      return true;
-    } catch (error) {
-      setStatusIsError(true);
-      setStatusMessage(
-        error?.response?.data?.error ||
-          error?.message ||
-          'Could not persist provider selection.'
-      );
-      return false;
-    }
+    // Serialize selection writes so rapid provider/model changes cannot
+    // arrive at the backend out of order and leave a stale selection active.
+    const save = persistSelectionQueueRef.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          const response = await axios.post(`${host}/providers/select`, payload);
+          const savedName = response.data.name || providerName;
+          const savedModel = response.data.model || modelName || '';
+          if (savedName.toLowerCase() === 'ollama') {
+            const savedHostname = formatOllamaHostname(response.data.base_url || ollamaHost);
+            writeStoredProvider({
+              provider: savedName,
+              model: savedModel,
+              ollama_hostname: savedHostname,
+            });
+          } else {
+            writeStoredProvider({ provider: savedName, model: savedModel });
+          }
+          return true;
+        } catch (error) {
+          setStatusIsError(true);
+          setStatusMessage(
+            error?.response?.data?.error ||
+              error?.message ||
+              'Could not persist provider selection.'
+          );
+          return false;
+        }
+      });
+    persistSelectionQueueRef.current = save;
+    return save;
   };
 
   const handleProviderChange = async (event) => {
