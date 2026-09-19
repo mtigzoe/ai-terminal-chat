@@ -281,8 +281,7 @@ describe('client-react smoke tests', () => {
             action_id: 'action-1',
             confirmed: true,
             allowed_paths: ['src/App.jsx'],
-          }),
-          expect.any(Object)
+          })
         );
       });
     });
