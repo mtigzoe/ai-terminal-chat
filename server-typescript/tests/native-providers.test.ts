@@ -88,7 +88,7 @@ describe("GeminiProvider", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       controller.abort();
 
-      await expect(pending).rejects.toThrow(/abort/i);
+      await expect(pending).rejects.toMatchObject({ code: "ABORT_ERR" });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
