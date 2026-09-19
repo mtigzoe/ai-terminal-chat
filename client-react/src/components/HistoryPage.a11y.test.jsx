@@ -28,6 +28,53 @@ describe('HistoryPage accessibility', () => {
     window.location.assign.mockClear();
   });
 
+  test('does not expose saved chats when persistent memory is disabled', async () => {
+    const chats = [
+      { id: '1', title: 'Private saved chat', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'secret' }] }] },
+    ];
+    mockLocalStorage.getItem.mockImplementation((key) => {
+      if (key === 'ai-terminal-chat:memory-enabled') return 'false';
+      if (key === 'ai-terminal-chat:chats') return JSON.stringify(chats);
+      return null;
+    });
+
+    render(<HistoryPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/no saved chats yet/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/private saved chat/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /restore chat: private saved chat/i })).not.toBeInTheDocument();
+  });
+
+  test('updates history when persistent memory is disabled in another app window', async () => {
+    const chats = [
+      { id: '1', title: 'Previously saved chat', date: '2024-01-01T10:00:00Z', messages: [{ parts: [{ text: 'hello' }] }] },
+    ];
+    mockLocalStorage.getItem.mockImplementation((key) => {
+      if (key === 'ai-terminal-chat:memory-enabled') return 'true';
+      if (key === 'ai-terminal-chat:chats') return JSON.stringify(chats);
+      return null;
+    });
+
+    render(<HistoryPage />);
+    await waitFor(() => {
+      expect(screen.getByText(/previously saved chat/i)).toBeInTheDocument();
+    });
+
+    mockLocalStorage.getItem.mockImplementation((key) => {
+      if (key === 'ai-terminal-chat:memory-enabled') return 'false';
+      if (key === 'ai-terminal-chat:chats') return JSON.stringify(chats);
+      return null;
+    });
+    fireEvent(window, new StorageEvent('storage', { key: 'ai-terminal-chat:memory-enabled', newValue: 'false' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/no saved chats yet/i)).toBeInTheDocument();
+      expect(screen.queryByText(/previously saved chat/i)).not.toBeInTheDocument();
+    });
+  });
+
   test('has no automated accessibility violations', async () => {
     const { container } = render(<HistoryPage />);
     const results = await axe(container);
