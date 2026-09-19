@@ -778,16 +778,7 @@ describe("POST /confirm", () => {
       "git_add",
       { path: "cancelled-confirm.txt" },
       { requires_confirmation: true },
-      {
-        provider_fingerprint: providerFingerprint(getProvider()),
-        contents: [],
-        round_index: 0,
-        tool_results: [],
-        remaining_calls: [],
-        last_call_signature: null,
-        consecutive_repeat_count: 0,
-        consecutive_error_count: 0,
-      },
+      undefined,
     );
 
     const controller = new AbortController();
