@@ -195,9 +195,12 @@ export class AnthropicProvider extends Provider {
     if (!this.apiKey) throw new Error("Anthropic API key is not configured (ANTHROPIC_API_KEY).");
   }
 
-  private async request(method: string, url: string, options: RequestInit = {}): Promise<Response> {
+  private async request(method: string, url: string, options: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+    const onParentAbort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", onParentAbort, { once: true });
     try {
       const hostname = new URL(url).hostname;
       return await safeFetch(
@@ -217,11 +220,13 @@ export class AnthropicProvider extends Provider {
       );
     } catch (exc) {
       if (exc instanceof Error && exc.name === "AbortError") {
+        if (signal?.aborted) throw Object.assign(new Error("Anthropic request cancelled."), { code: "ABORT_ERR" });
         throw new Error("Anthropic request timed out.");
       }
       throw new Error(`Could not reach Anthropic: ${exc}`);
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onParentAbort);
     }
   }
 
