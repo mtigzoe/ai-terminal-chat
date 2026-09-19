@@ -644,6 +644,22 @@ async function* agentLoopCore(
         return;
       }
 
+      // A provider may return normally even after cancellation (for example,
+      // a custom provider that does not honor AbortSignal). Do not allow a
+      // late response to complete or execute tools after the request was
+      // cancelled.
+      if (cancelSignal?.aborted) {
+        yield {
+          type: "progress",
+          phase: "cancelled",
+          message: "Stopped: cancelled by user",
+          round: roundNumber,
+          max_rounds: MAX_TOOL_ROUNDS,
+        };
+        yield { type: "cancelled" };
+        return;
+      }
+
       if (!response.tool_calls || response.tool_calls.length === 0) {
         if (!response.text) {
           yield {
