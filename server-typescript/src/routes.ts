@@ -620,7 +620,7 @@ app.post("/chat", async (c) => {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
     c.req.raw.signal.removeEventListener("abort", onRequestAbort);
-    release(requestId);
+    release(requestId, cancelSignal);
   }
 
   if (cancelled) {
@@ -715,7 +715,7 @@ app.post("/stream", async (c) => {
           }
         } finally {
           c.req.raw.signal.removeEventListener("abort", onRequestAbort);
-          release(requestId);
+          release(requestId, cancelSignal);
           try {
             controller.close();
           } catch {
@@ -902,7 +902,7 @@ app.post("/confirm", async (c) => {
       return c.json(body, status as any);
     } finally {
       c.req.raw.signal.removeEventListener("abort", onRequestAbort);
-      release(requestId);
+      release(requestId, cancelSignal);
     }
   }
 
@@ -971,7 +971,7 @@ app.post("/confirm", async (c) => {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
     c.req.raw.signal.removeEventListener("abort", onRequestAbort);
-    release(requestId);
+    release(requestId, cancelSignal);
   }
 
   baseResponse.tool_activity = toolActivity;
