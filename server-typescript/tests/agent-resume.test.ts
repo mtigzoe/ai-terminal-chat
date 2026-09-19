@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { runAgentLoop, resumeAgentLoop, type AgentEvent, type PendingConfirmationEvent } from "../src/agent.ts";
 import { Provider, ProviderResponse } from "../src/providers/base.ts";
 import { clear, createPending, getPending, type PendingAction, type ResumeState } from "../src/pending.ts";
+import { __setProjectRootForTests, __resetProjectRootForTests } from "../src/security.ts";
 
 class FakeProvider implements Provider {
   name = "fake";
@@ -390,4 +391,50 @@ describe("resumeAgentLoop", () => {
       text: "Okay, I won't read that file.",
     });
   });
+
+  it("rejects a pending action when the active project root changed", async () => {
+    const originalRoot = process.cwd();
+    const alternateRoot = originalRoot.includes("project-root-a")
+      ? originalRoot + "-project-root-b"
+      : originalRoot + "-project-root-a";
+    __setProjectRootForTests(originalRoot);
+
+    const action: PendingAction = {
+      action_id: "root-mismatch-1",
+      tool_name: "git_add",
+      args: { path: "a.txt" },
+      preview: { requires_confirmation: true },
+      resume: {
+        provider_fingerprint: "fake:fake-model",
+        project_root: originalRoot,
+        contents: [],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [{ name: "git_add", args: { path: "a.txt" } }],
+        last_call_signature: null,
+        consecutive_repeat_count: 1,
+        consecutive_error_count: 0,
+      },
+    };
+
+    try {
+      __setProjectRootForTests(alternateRoot);
+      await expect(async () => {
+        for await (const _ of resumeAgentLoop({
+          provider: new FakeProvider([]),
+          action,
+          confirmed: true,
+          toolFunctions: {
+            git_add: () => ({ staged: true }),
+          },
+          createPending: realCreatePending,
+        })) {
+          // drain
+        }
+      }).rejects.toThrow(/active project folder differs/);
+    } finally {
+      __resetProjectRootForTests();
+    }
+  });
+
 });
