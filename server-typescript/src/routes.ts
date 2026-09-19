@@ -530,7 +530,7 @@ app.post("/terminal/run", async (c) => {
   // toolFunctions with confirm driven by the pending-confirmation flow.
   const confirm =
     data.confirm === undefined ? true : Boolean(data.confirm);
-  const result = await runCommand(command, confirm);
+  const result = await runCommand(command, confirm, c.req.raw.signal);
   if (result && typeof result === "object" && "error" in result) {
     return c.json(result, 400 as any);
   }
