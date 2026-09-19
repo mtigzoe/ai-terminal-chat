@@ -788,6 +788,10 @@ describe("POST /confirm", () => {
     execSync("git init -q", { cwd: root, stdio: "ignore" });
     execSync('git config user.email "test@example.com"', { cwd: root, stdio: "ignore" });
     execSync('git config user.name "Test"', { cwd: root, stdio: "ignore" });
+    // Ensure the confirmation starts from a real, stable index file rather
+    // than Git's initial missing-index state.
+    fs.writeFileSync(path.join(root, "tracked.txt"), "stable\n");
+    execSync("git add tracked.txt", { cwd: root, stdio: "ignore" });
     setProjectRoot(root);
 
     try {
