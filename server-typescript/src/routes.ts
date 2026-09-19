@@ -676,7 +676,7 @@ app.post("/stream", async (c) => {
   }
 
   const cancelSignal = register(requestId);
-  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId);
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
   const wantsNdjson = c.req.header("Accept")?.includes("application/x-ndjson") ?? false;
   const stream = new ReadableStream({
     start(controller) {
