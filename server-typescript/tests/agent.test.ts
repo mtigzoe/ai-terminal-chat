@@ -116,6 +116,49 @@ describe("runAgentLoop", () => {
     expect(events.some((event) => event.type === "final")).toBe(false);
   });
 
+  it("does not execute a resumed tool when already cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let called = false;
+    const provider = new FakeProvider([]);
+    const action = {
+      action_id: "action-already-cancelled",
+      tool_name: "fake_write",
+      args: {},
+      preview: {},
+      resume: {
+        provider_fingerprint: "fake:fake-model",
+        contents: [],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [{ name: "fake_write", args: {}, id: undefined }],
+        last_call_signature: null,
+        consecutive_repeat_count: 0,
+        consecutive_error_count: 0,
+      },
+    };
+
+    const events = await collectEvents(
+      resumeAgentLoop({
+        provider,
+        action,
+        confirmed: true,
+        toolFunctions: {
+          fake_write: () => {
+            called = true;
+            return { written: true };
+          },
+        },
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    expect(called).toBe(false);
+    expect(events.some((event) => event.type === "tool_result")).toBe(true);
+    expect(events[events.length - 1]).toEqual({ type: "cancelled" });
+  });
+
   it("propagates cancellation into a resumed confirmed tool", async () => {
     const controller = new AbortController();
     let resolveStarted!: () => void;
