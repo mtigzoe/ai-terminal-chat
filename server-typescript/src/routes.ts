@@ -618,18 +618,8 @@ app.post("/chat", async (c) => {
     });
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
-  }
-
-  // popPending() is intentionally done before execution so competing
-  // confirmations cannot resolve the same action. If cancellation arrives
-  // before resumeAgentLoop() has started the tool, no side effect has begun
-  // and the action can safely be made available for a retry.
-  if (cancelled && cancelSignal.aborted && !resultCaptured) {
-    restorePending(action);
-  }
-
-  cleanupRequestCancellation();
-  release(requestId, cancelSignal);
+  } finally {
+    cleanupRequestCancellation();
     release(requestId, cancelSignal);
   }
 
@@ -996,10 +986,18 @@ app.post("/confirm", async (c) => {
     });
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
-  } finally {
-    cleanupRequestCancellation();
-    release(requestId, cancelSignal);
   }
+
+  // popPending() is intentionally done before execution so competing
+  // confirmations cannot resolve the same action. If cancellation arrived
+  // before resumeAgentLoop() started the tool, no side effect occurred and
+  // the action can safely be made available for a retry.
+  if (cancelled && cancelSignal.aborted && !resultCaptured) {
+    restorePending(action);
+  }
+
+  cleanupRequestCancellation();
+  release(requestId, cancelSignal);
 
   baseResponse.tool_activity = toolActivity;
   baseResponse.text = finalText;
