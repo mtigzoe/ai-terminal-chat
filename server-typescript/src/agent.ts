@@ -1172,7 +1172,7 @@ async function executeTool(
   });
   try {
     return await Promise.race([
-      Promise.resolve(fn.length >= 2 ? fn(args, controller.signal) : fn(args)),
+      Promise.resolve(fn(args, controller.signal)),
       timeoutPromise,
     ]);
   } catch (exc) {
