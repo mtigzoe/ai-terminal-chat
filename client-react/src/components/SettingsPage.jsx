@@ -461,11 +461,19 @@ const SettingsPage = ({ host }) => {
     try {
       localStorage.setItem('ai-terminal-chat:memory-enabled', next ? 'true' : 'false');
       if (!next) {
-        // Disabling persistent memory must remove already-persisted chat data;
-        // otherwise "kept only in memory" would leave old conversations on disk.
+        // Remove all project/agent state that could otherwise survive a
+        // session-only memory setting and expose prior file permissions or
+        // file contents after a later launch.
         localStorage.removeItem('ai-terminal-chat:chats');
         localStorage.removeItem('ai-terminal-chat:current-chat-id');
         localStorage.removeItem('ai-terminal-chat:restore-chat-id');
+        localStorage.removeItem('ai-terminal-chat:allowed-paths');
+        localStorage.removeItem('ai-terminal-chat:pending-files');
+        localStorage.removeItem('ai-terminal-chat:pending-terminal-path');
+        for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+          const key = localStorage.key(index);
+          if (key?.startsWith('project-explorer:')) localStorage.removeItem(key);
+        }
       }
       setMemoryStatus(next ? 'Memory persistence enabled.' : 'Memory persistence disabled.');
     } catch {
