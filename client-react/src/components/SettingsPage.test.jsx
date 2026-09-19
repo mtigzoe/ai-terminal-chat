@@ -133,19 +133,22 @@ describe('loading settings', () => {
         : Promise.reject(new Error(`unexpected POST ${url}`))
     );
 
-    fireEvent.change(screen.getByLabelText(/ai provider/i), { target: { value: 'ollama' } });
-    resolveOllamaModels({
-      data: { supports_listing: true, models: [{ id: 'ollama-model' }] },
-    });
-    await waitFor(() => expect(screen.getByRole('option', { name: 'ollama-model' })).toBeInTheDocument());
+    const providerSelect = screen.getByLabelText(/ai provider/i);
+    fireEvent.change(providerSelect, { target: { value: 'ollama' } });
+    await waitFor(() => expect(screen.getByText(/ollama is not installed/i)).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText(/ai provider/i), { target: { value: 'gemini' } });
+    fireEvent.change(providerSelect, { target: { value: 'gemini' } });
     resolveGeminiModels({
-      data: { supports_listing: true, models: [{ id: 'stale-gemini-model' }] },
+      data: { supports_listing: true, models: [{ id: 'current-gemini-model' }] },
+    });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'current-gemini-model' })).toBeInTheDocument());
+
+    resolveOllamaModels({
+      data: { supports_listing: true, models: [{ id: 'stale-ollama-model' }] },
     });
 
-    await waitFor(() => expect(screen.getByLabelText(/^model$/i)).toHaveValue(''));
-    expect(screen.queryByRole('option', { name: 'stale-gemini-model' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/ai provider/i)).toHaveValue('gemini'));
+    expect(screen.queryByRole('option', { name: 'stale-ollama-model' })).not.toBeInTheDocument();
   });
 
   test('surfaces Ollama model listing errors from the backend', async () => {
