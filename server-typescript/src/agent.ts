@@ -1182,6 +1182,13 @@ async function executeTool(
   timeoutSeconds: number,
   cancelSignal?: AbortSignal
 ): Promise<unknown> {
+  // Never invoke a tool after its parent request has already been cancelled.
+  // Passing an aborted signal is not sufficient because legacy/custom tools
+  // may ignore AbortSignal and perform side effects anyway.
+  if (cancelSignal?.aborted) {
+    return { error: `Tool ${name} cancelled.` };
+  }
+
   const controller = new AbortController();
   const onParentAbort = () => controller.abort();
   if (cancelSignal?.aborted) controller.abort();
