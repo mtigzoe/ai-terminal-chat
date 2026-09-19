@@ -787,12 +787,13 @@ describe("POST /confirm", () => {
 
     gitCommitMock.mockImplementationOnce(
       async (_message: string, _confirmed: boolean, signal?: AbortSignal) =>
-        await new Promise((resolve) => {
+        await new Promise((_resolve, reject) => {
+          const rejectCancelled = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
           if (signal?.aborted) {
-            resolve({ cancelled: true });
+            rejectCancelled();
             return;
           }
-          signal?.addEventListener("abort", () => resolve({ cancelled: true }), { once: true });
+          signal?.addEventListener("abort", rejectCancelled, { once: true });
         }),
     );
 
