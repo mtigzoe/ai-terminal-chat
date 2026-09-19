@@ -199,8 +199,10 @@ export class AnthropicProvider extends Provider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
     const onParentAbort = () => controller.abort();
+    signal?.addEventListener("abort", onParentAbort, { once: true });
+    // Re-check after listener registration to close the abort race between
+    // the initial check and listener installation.
     if (signal?.aborted) controller.abort();
-    else signal?.addEventListener("abort", onParentAbort, { once: true });
     try {
       const hostname = new URL(url).hostname;
       return await safeFetch(
