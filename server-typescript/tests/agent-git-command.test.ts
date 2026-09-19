@@ -70,7 +70,7 @@ describe("explicit Git command routing", () => {
     expect(gitAdd).toHaveBeenCalledWith({
       path: "hellov4.txt",
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(createPending).toHaveBeenCalledWith(
       "git_add",
       { path: "hellov4.txt" },
@@ -113,7 +113,7 @@ describe("explicit Git command routing", () => {
     expect(gitAdd).toHaveBeenCalledWith({
       path: "src/index.ts",
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "pending_confirmation",
@@ -136,7 +136,7 @@ describe("explicit Git command routing", () => {
       events.push(event);
     }
 
-    expect(gitStatus).toHaveBeenCalledWith({});
+    expect(gitStatus).toHaveBeenCalledWith({}, expect.any(AbortSignal));
     expect(events.some((event) => event.type === "tool_result")).toBe(true);
   });
 
@@ -154,7 +154,7 @@ describe("explicit Git command routing", () => {
       events.push(event);
     }
 
-    expect(gitFetch).toHaveBeenCalledWith({ remote: "origin" });
+    expect(gitFetch).toHaveBeenCalledWith({ remote: "origin" }, expect.any(AbortSignal));
     expect(events.some((event) => event.type === "tool_result")).toBe(true);
   });
 
@@ -172,7 +172,7 @@ describe("explicit Git command routing", () => {
       events.push(event);
     }
 
-    expect(gitFetch).toHaveBeenCalledWith({ remote: "" });
+    expect(gitFetch).toHaveBeenCalledWith({ remote: "" }, expect.any(AbortSignal));
     expect(events.some((event) => event.type === "tool_result")).toBe(true);
   });
 
@@ -239,7 +239,7 @@ describe("explicit Git command routing", () => {
       remote: "origin",
       branch: "main",
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "pending_confirmation",
@@ -295,7 +295,7 @@ describe("explicit Git command routing", () => {
       path: "file.txt",
       staged: false,
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "pending_confirmation",
@@ -327,7 +327,7 @@ describe("explicit Git command routing", () => {
       path: "file.txt",
       staged: true,
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "pending_confirmation",
@@ -381,7 +381,7 @@ describe("explicit Git command routing", () => {
     expect(gitCommit).toHaveBeenCalledWith({
       message: "update feature",
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "pending_confirmation",
@@ -484,7 +484,7 @@ describe("explicit Git command routing", () => {
       remote: "origin",
       branch: "main",
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "pending_confirmation",
@@ -516,7 +516,7 @@ describe("explicit Git command routing", () => {
       remote: "",
       branch: "",
       confirm: false,
-    });
+    }, expect.any(AbortSignal));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "pending_confirmation",

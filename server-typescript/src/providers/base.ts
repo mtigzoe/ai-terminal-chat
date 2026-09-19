@@ -64,7 +64,7 @@ export abstract class Provider {
 
   abstract buildContents(msg: string, history: unknown[], userInstructions?: string): unknown[];
 
-  abstract generate(contents: unknown[]): Promise<ProviderResponse>;
+  abstract generate(contents: unknown[], cancelSignal?: AbortSignal): Promise<ProviderResponse>;
 
   abstract appendModelTurn(
     contents: unknown[],
