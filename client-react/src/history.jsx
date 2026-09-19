@@ -9,8 +9,7 @@ import HistoryPage from './components/HistoryPage.jsx';
 function HistoryApp() {
   return (
     <div className="history-app">
-      <MainNav />
-      <HistoryPage />
+        <HistoryPage />
     </div>
   );
 }
