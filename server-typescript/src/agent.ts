@@ -617,7 +617,7 @@ async function* agentLoopCore(
             directResponse = directGitCommand(currentContents);
           }
         }
-        response = directResponse ?? (await provider.generate(currentContents));
+        response = directResponse ?? (await provider.generate(currentContents, cancelSignal));
       } catch (exc) {
         yield {
           type: "progress",
