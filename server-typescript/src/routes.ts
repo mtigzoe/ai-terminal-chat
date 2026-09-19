@@ -977,7 +977,7 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>, sign
     write_file: (args) => write_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     apply_patch: (args) => apply_patch(String(args.patch || ""), Boolean(args.confirm)),
     delete_file: (args) => delete_file(String(args.path || ""), Boolean(args.confirm)),
-    git_add: (args, signal) => gitAdd(String(args.path || ""), Boolean(args.confirm), signal),
+    git_add: (args) => git_add(String(args.path || ""), Boolean(args.confirm)),
   };
 }
 
