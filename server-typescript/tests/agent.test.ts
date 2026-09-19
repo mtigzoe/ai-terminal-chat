@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { runAgentLoop, MAX_TOOL_ROUNDS, MAX_CONSECUTIVE_IDENTICAL_CALLS, HARD_ABORT_CONSECUTIVE_CALLS, MAX_CONSECUTIVE_ERRORS } from "../src/agent.ts";
+import { runAgentLoop, resumeAgentLoop, MAX_TOOL_ROUNDS, MAX_CONSECUTIVE_IDENTICAL_CALLS, HARD_ABORT_CONSECUTIVE_CALLS, MAX_CONSECUTIVE_ERRORS } from "../src/agent.ts";
 import { Provider, ProviderResponse } from "../src/providers/base.ts";
 import { clear, createPending, getPending, popPending } from "../src/pending.ts";
 
@@ -66,6 +66,243 @@ describe("runAgentLoop", () => {
     const events = await collectEvents(runAgentLoop({ provider, contents: [], toolFunctions: {}, createPending: () => ({ action_id: "" }) }));
     expect(events[0]).toMatchObject({ type: "progress", phase: "plan" });
     expect(events[events.length - 1]).toEqual({ type: "final", text: "hello" });
+  });
+
+  it("reports a tool timeout even when the tool resolves from abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new FakeProvider([
+        {
+          text: null,
+          tool_calls: [{ name: "fake_wait", args: {}, id: undefined }],
+          raw: null,
+        },
+        { text: "after timeout", tool_calls: [], raw: null },
+      ]);
+
+      const toolFunctions = {
+        fake_wait: (
+          _args: Record<string, unknown>,
+          signal?: AbortSignal,
+        ) =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            signal?.addEventListener(
+              "abort",
+              () => resolve({ error: "aborted" }),
+              { once: true },
+            );
+          }),
+      };
+
+      const eventsPromise = collectEvents(
+        runAgentLoop({
+          provider,
+          contents: [],
+          toolFunctions,
+          createPending: () => ({ action_id: "" }),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const events = await eventsPromise;
+      const toolResult = events.find((event) => event.type === "tool_result") as
+        | { type: "tool_result"; result: { error?: string } }
+        | undefined;
+
+      expect(toolResult?.result.error).toContain(
+        "exceeded its 15s execution limit",
+      );
+      expect(events.some((event) => event.type === "final")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates cancellation into an in-flight tool", async () => {
+    const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+
+    const provider = new FakeProvider([
+      {
+        text: null,
+        tool_calls: [{ name: "fake_wait", args: {}, id: undefined }],
+        raw: null,
+      },
+    ]);
+
+    const toolFunctions = {
+      fake_wait: (
+        _args: Record<string, unknown>,
+        signal?: AbortSignal,
+      ) =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolveStarted();
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ error: "aborted" }),
+            { once: true },
+          );
+        }),
+    };
+
+    const eventsPromise = collectEvents(
+      runAgentLoop({
+        provider,
+        contents: [],
+        toolFunctions,
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    await started;
+    controller.abort();
+
+    const events = await eventsPromise;
+    expect(events.some((event) => event.type === "cancelled")).toBe(true);
+    expect(events.some((event) => event.type === "final")).toBe(false);
+  });
+
+  it("does not execute a resumed tool when already cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let called = false;
+    const provider = new FakeProvider([]);
+    const action = {
+      action_id: "action-already-cancelled",
+      tool_name: "fake_write",
+      args: {},
+      preview: {},
+      resume: {
+        provider_fingerprint: "fake:fake-model",
+        contents: [],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [{ name: "fake_write", args: {}, id: undefined }],
+        last_call_signature: null,
+        consecutive_repeat_count: 0,
+        consecutive_error_count: 0,
+      },
+    };
+
+    const events = await collectEvents(
+      resumeAgentLoop({
+        provider,
+        action,
+        confirmed: true,
+        toolFunctions: {
+          fake_write: () => {
+            called = true;
+            return { written: true };
+          },
+        },
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    expect(called).toBe(false);
+    expect(events.some((event) => event.type === "tool_result")).toBe(false);
+    expect(events[events.length - 1]).toEqual({ type: "cancelled" });
+  });
+
+  it("propagates cancellation into a resumed confirmed tool", async () => {
+    const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+
+    const toolFunctions = {
+      fake_write: (
+        _args: Record<string, unknown>,
+        signal?: AbortSignal,
+      ) =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolveStarted();
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ error: "aborted" }),
+            { once: true },
+          );
+        }),
+    };
+
+    const provider = new FakeProvider([]);
+    const action = {
+      action_id: "action-resume-cancel",
+      tool_name: "fake_write",
+      args: {},
+      preview: {},
+      resume: {
+        provider_fingerprint: "fake:fake-model",
+        contents: [],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [{ name: "fake_write", args: {}, id: undefined }],
+        last_call_signature: null,
+        consecutive_repeat_count: 0,
+        consecutive_error_count: 0,
+      },
+    };
+
+    const eventsPromise = collectEvents(
+      resumeAgentLoop({
+        provider,
+        action,
+        confirmed: true,
+        toolFunctions,
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    await started;
+    controller.abort();
+
+    const events = await eventsPromise;
+    expect(events.some((event) => event.type === "cancelled")).toBe(true);
+  });
+
+  it("propagates cancellation into an in-flight provider request", async () => {
+    const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+
+    const provider = new FakeProvider([]);
+    provider.generate = vi.fn(
+      (_contents: unknown[], signal?: AbortSignal) =>
+        new Promise<ProviderResponse>((_resolve, reject) => {
+          resolveStarted();
+          signal?.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("cancelled"), { code: "ABORT_ERR" })),
+            { once: true },
+          );
+        }),
+    );
+
+    const eventsPromise = collectEvents(
+      runAgentLoop({
+        provider,
+        contents: [],
+        toolFunctions: {},
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    await started;
+    controller.abort();
+
+    const events = await eventsPromise;
+    expect(events.some((event) => event.type === "cancelled")).toBe(true);
+    expect(events.some((event) => event.type === "error")).toBe(false);
   });
 
   it("executes a read-only tool and continues", async () => {
@@ -135,6 +372,30 @@ describe("runAgentLoop", () => {
     expect(events.some((e) => e.type === "progress" && (e as { phase: string }).phase === "cancelled")).toBe(true);
   });
 
+  it("ignores a provider response that arrives after cancellation", async () => {
+    const controller = new AbortController();
+    const provider = new FakeProvider([]);
+    provider.generate = vi.fn(
+      async () => {
+        controller.abort();
+        return { text: "late response", tool_calls: [], raw: null };
+      },
+    );
+
+    const events = await collectEvents(
+      runAgentLoop({
+        provider,
+        contents: [],
+        toolFunctions: {},
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    expect(events[events.length - 1]).toEqual({ type: "cancelled" });
+    expect(events.some((event) => event.type === "final")).toBe(false);
+  });
+
   it("stops between rounds when cancelled mid-loop", async () => {
     const toolFunctions = {
       fake_read: (_args: Record<string, unknown>) => ({ value: "ok" }),
@@ -190,6 +451,46 @@ describe("runAgentLoop", () => {
 
     expect(calls).toEqual(["first"]);
     expect(events[events.length - 1]).toEqual({ type: "cancelled" });
+  });
+
+  it("does not create a pending write action after cancellation during preview", async () => {
+    const controller = new AbortController();
+    const createPending = vi.fn(() => ({ action_id: "should-not-exist" }));
+
+    const toolFunctions = {
+      create_file: (_args: Record<string, unknown>, _signal?: AbortSignal) => {
+        controller.abort();
+        return {
+          requires_confirmation: true,
+          path: "example.txt",
+          diff: "+new line",
+        };
+      },
+    };
+
+    const provider = new FakeProvider([
+      {
+        text: null,
+        tool_calls: [
+          { name: "create_file", args: { path: "example.txt", contents: "hello" }, id: undefined },
+        ],
+        raw: null,
+      },
+    ]);
+
+    const events = await collectEvents(
+      runAgentLoop({
+        provider,
+        contents: [],
+        toolFunctions,
+        cancelSignal: controller.signal,
+        createPending,
+      }),
+    );
+
+    expect(createPending).not.toHaveBeenCalled();
+    expect(events[events.length - 1]).toEqual({ type: "cancelled" });
+    expect(events.some((event) => event.type === "pending_confirmation")).toBe(false);
   });
 
   it("never self-confirms write tools", async () => {

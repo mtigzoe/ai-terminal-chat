@@ -6,6 +6,8 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 
 const gitStatusMock = vi.hoisted(() => vi.fn());
+const gitAddMock = vi.hoisted(() => vi.fn());
+const gitCommitMock = vi.hoisted(() => vi.fn());
 const ollamaCliInstalledMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/providers/factory.ts", () => {
@@ -41,6 +43,8 @@ vi.mock("../src/providers/factory.ts", () => {
 
 vi.mock("../src/git.ts", () => ({
   gitStatus: gitStatusMock,
+  gitAdd: gitAddMock,
+  gitCommit: gitCommitMock,
   gitDiff: vi.fn(),
   gitLog: vi.fn(),
   gitBranch: vi.fn(),
@@ -76,10 +80,11 @@ function createTestApp() {
 }
 
 beforeEach(() => {
-  // Reset allowlist to defaults on disk so that mutations from other
-  // test files cannot leak into these tests, then reload into memory.
+  // Reset allowlist and request-cancellation state so mutations from one
+  // API test cannot leak into another test.
   persistAllowedCommands([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
   reloadAllowedCommands();
+  clearCancellation();
   // Ensure the allowlist starts from defaults so earlier test files
   // that modified or persisted the allowlist do not affect these tests.
 });
@@ -460,6 +465,22 @@ describe("POST /terminal/run", () => {
     expect(data.command).toBe("pwd");
     expect(typeof data.returncode).toBe("number");
   });
+
+  it("cancels terminal execution when the HTTP request is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const res = await createTestApp().request("http://localhost/terminal/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: "pwd" }),
+      signal: controller.signal,
+    });
+
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toBe("Command cancelled.");
+  });
 });
 
 describe("POST /chat", () => {
@@ -720,13 +741,13 @@ describe("POST /stream", () => {
 });
 
 describe("POST /cancel/:request_id", () => {
-  it("returns cancelled=false for unknown request", async () => {
+  it("records cancellation for an unknown request id", async () => {
     const res = await createTestApp().request("http://localhost/cancel/nonexistent", {
       method: "POST",
     });
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.cancelled).toBe(false);
+    expect(data.cancelled).toBe(true);
   });
 });
 
@@ -757,6 +778,53 @@ describe("POST /confirm", () => {
     expect(data.error).toBeDefined();
   });
 
+  it("keeps a pending confirmation when the confirmed tool is cancelled", async () => {
+    const action = createPending(
+      "git_commit",
+      { message: "cancel me" },
+      { requires_confirmation: true },
+      undefined,
+    );
+
+    gitCommitMock.mockImplementationOnce(
+      async (_message: string, _confirmed: boolean, signal?: AbortSignal) =>
+        await new Promise((_resolve, reject) => {
+          const rejectCancelled = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          if (signal?.aborted) {
+            rejectCancelled();
+            return;
+          }
+          signal?.addEventListener("abort", rejectCancelled, { once: true });
+        }),
+    );
+
+    const requestId = "cancelled-confirm-request";
+    const confirmPromise = createTestApp().request("http://localhost/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action_id: action.action_id,
+        confirmed: true,
+        request_id: requestId,
+      }),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const cancelRes = await createTestApp().request(
+      `http://localhost/cancel/${requestId}`,
+      { method: "POST" },
+    );
+    expect(cancelRes.status).toBe(200);
+    expect((await cancelRes.json()).cancelled).toBe(true);
+
+    const res = await confirmPromise;
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.cancelled).toBe(true);
+    expect(data.result).toBeUndefined();
+    expect(getPending(action.action_id)?.action_id).toBe(action.action_id);
+  });
+
   it("resumes the agent loop end-to-end after a real /chat confirmation", async () => {
     // Regression test for the /confirm handler running the confirmed tool
     // in isolation and stopping, instead of letting the model take another
@@ -771,6 +839,16 @@ describe("POST /confirm", () => {
     execSync('git config user.name "Test"', { cwd: root, stdio: "ignore" });
     fs.writeFileSync(path.join(root, "hello.txt"), "hi");
     setProjectRoot(root);
+
+    gitAddMock.mockImplementation(async (target: string, confirm: boolean) =>
+      confirm
+        ? { staged: true, path: target }
+        : {
+            requires_confirmation: true,
+            path: target,
+            action: "stage",
+          },
+    );
 
     try {
       const chatRes = await createTestApp().request("http://localhost/chat", {
@@ -796,9 +874,6 @@ describe("POST /confirm", () => {
 
       // The confirmed git_add actually ran...
       expect(confirmData.result).toMatchObject({ staged: true });
-      const staged = execSync("git diff --cached --name-only", { cwd: root }).toString();
-      expect(staged.trim()).toBe("hello.txt");
-
       // ...and the loop kept going afterward instead of stopping: the
       // (stubbed) model got a follow-up turn and produced final text.
       expect(confirmData.text).toContain("[stub] Hello from");

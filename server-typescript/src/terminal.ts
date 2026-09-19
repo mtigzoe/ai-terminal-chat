@@ -5,8 +5,7 @@
 // explicitly blocked patterns are rejected, output is capped, and the
 // user-configurable allowlist is persisted in the shared config file.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runChildProcess } from "./child-process.ts";
 
 import { loadAppConfig, persistAppConfig } from "./config.js";
 import type { RunCommandResult } from "./types.js";
@@ -23,7 +22,6 @@ import {
 import { ISOLATED_GIT_SUBCOMMANDS, runIsolatedGit } from "./git.ts";
 import { resolveTrustedExecutable, TrustedExecutableError } from "./trusted-exec.ts";
 
-const execFileAsync = promisify(execFile);
 
 export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "git status",
@@ -1283,6 +1281,7 @@ function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
 export async function runCommand(
   command: string,
   confirm = false,
+  signal?: AbortSignal,
 ): Promise<RunCommandResult> {
   if (!command || !command.trim()) {
     return { error: "No command was provided." };
@@ -1394,6 +1393,7 @@ export async function runCommand(
       const result = await runIsolatedGit(fileArgs, {
         timeout: COMMAND_TIMEOUT_MS,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
+        signal,
       });
 
       const remoteOutput =
@@ -1420,6 +1420,8 @@ export async function runCommand(
 
       return payload;
     } catch (err) {
+      if (signal?.aborted) return { error: "Command cancelled." };
+
       const error = err as NodeJS.ErrnoException & {
         code?: number | string;
         killed?: boolean;
@@ -1446,16 +1448,14 @@ export async function runCommand(
   }
 
   try {
-    const { stdout, stderr } = await execFileAsync(
+    const { stdout, stderr, code } = await runChildProcess(
       file,
       fileArgs,
       {
         cwd: getProjectRoot(),
-        shell: false,
         timeout: COMMAND_TIMEOUT_MS,
-        windowsHide: true,
+        signal,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
-        encoding: "utf8",
         env: sanitizedTerminalEnv(),
       },
     );
@@ -1466,7 +1466,7 @@ export async function runCommand(
 
     const payload: RunCommandResult = {
       command: normalized,
-      returncode: 0,
+      returncode: code,
       stdout: out.value,
       stderr: err.value,
       truncated,
@@ -1480,6 +1480,7 @@ export async function runCommand(
 
     return payload;
   } catch (err) {
+    if (signal?.aborted) return { error: "Command cancelled." };
     const error = err as NodeJS.ErrnoException & {
       stdout?: string;
       stderr?: string;
@@ -1488,7 +1489,7 @@ export async function runCommand(
       signal?: string;
     };
 
-    if (error.killed && error.signal === "SIGTERM") {
+    if (error.code === "ETIMEDOUT") {
       return {
         error:
           `Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds.`,

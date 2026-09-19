@@ -92,6 +92,18 @@ function currentProviderFingerprint(): string | undefined {
   }
 }
 
+export function restorePending(action: PendingAction): boolean {
+  if (_PENDING.has(action.action_id)) return false;
+
+  if (_PENDING.size >= MAX_PENDING_ACTIONS) {
+    const oldestId = _PENDING.keys().next().value!;
+    _PENDING.delete(oldestId);
+  }
+
+  _PENDING.set(action.action_id, action);
+  return true;
+}
+
 export function popPending(actionId: string): PendingAction | undefined {
   const action = _PENDING.get(actionId);
   if (!action) return undefined;

@@ -116,13 +116,13 @@ function errorText(error: unknown): string {
   return value.message ?? String(error);
 }
 
-async function readGitIdentityValue(scope: "--local" | "--global", key: "user.name" | "user.email"): Promise<string | undefined> {
+async function readGitIdentityValue(scope: "--local" | "--global", key: "user.name" | "user.email", signal?: AbortSignal): Promise<string | undefined> {
   const env = { ...process.env };
   delete env.GIT_CONFIG; delete env.GIT_CONFIG_GLOBAL; delete env.GIT_CONFIG_SYSTEM; delete env.GIT_CONFIG_NOSYSTEM;
   try {
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
     const result = await execFileAsync(gitExecutable, [scope, "--no-includes", "--get", key], {
-      cwd: getProjectRoot(), shell: false, timeout: 5_000, windowsHide: true, maxBuffer: 8_192, encoding: "utf8", env,
+      cwd: getProjectRoot(), shell: false, timeout: 5_000, signal, windowsHide: true, maxBuffer: 8_192, encoding: "utf8", env,
     });
     const value = String(result.stdout ?? "").trim();
     if (!value || value.length > 256 || /[\u0000\r\n]/.test(value)) return undefined;
@@ -130,9 +130,9 @@ async function readGitIdentityValue(scope: "--local" | "--global", key: "user.na
   } catch { return undefined; }
 }
 
-async function getSafeCommitIdentity(): Promise<{ name?: string; email?: string }> {
-  const name = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME ?? await readGitIdentityValue("--local", "user.name") ?? await readGitIdentityValue("--global", "user.name");
-  const email = process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL ?? await readGitIdentityValue("--local", "user.email") ?? await readGitIdentityValue("--global", "user.email");
+async function getSafeCommitIdentity(signal?: AbortSignal): Promise<{ name?: string; email?: string }> {
+  const name = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME ?? await readGitIdentityValue("--local", "user.name", signal) ?? await readGitIdentityValue("--global", "user.name", signal);
+  const email = process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL ?? await readGitIdentityValue("--local", "user.email", signal) ?? await readGitIdentityValue("--global", "user.email", signal);
   return { name, email };
 }
 
@@ -148,21 +148,77 @@ export interface IsolatedGitOptions {
   dynamicOverrides?: string[];
   holdLock?: boolean;
   input?: string | Buffer;
+  signal?: AbortSignal;
 }
 
 class GitOperationMutex {
   private chain: Promise<unknown> = Promise.resolve();
   private depth = 0;
-  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.chain.then(async () => { this.depth++; try { return await fn(); } finally { this.depth--; } }, async () => { this.depth++; try { return await fn(); } finally { this.depth--; } });
+  runExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) {
+      return Promise.reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }));
+    }
+
+    const run = this.chain.then(
+      async () => {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
+        }
+        this.depth++;
+        try {
+          return await fn();
+        } finally {
+          this.depth--;
+        }
+      },
+      async () => {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
+        }
+        this.depth++;
+        try {
+          return await fn();
+        } finally {
+          this.depth--;
+        }
+      },
+    );
     this.chain = run.then(() => undefined, () => undefined);
-    return run;
+
+    if (!signal) return run;
+
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }));
+      };
+
+      signal.addEventListener("abort", onAbort, { once: true });
+      run.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(value);
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        },
+      );
+    });
   }
   get isHeld(): boolean { return this.depth > 0; }
 }
 
 const gitOperationMutex = new GitOperationMutex();
-export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T> { return gitOperationMutex.runExclusive(fn); }
+export function withGitOperationLockForTests<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> { return gitOperationMutex.runExclusive(fn, signal); }
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
 
 const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$/i;
@@ -255,12 +311,16 @@ export function stripDangerousGitConfig(content: string): string {
   return out2.join("\n");
 }
 
-async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
-  return gitOperationMutex.runExclusive(() => withSanitizedGitConfigUnlocked(fn));
+async function withSanitizedGitConfig<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return gitOperationMutex.runExclusive(() => {
+    if (signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
+    return withSanitizedGitConfigUnlocked(fn, signal);
+  });
 }
 
-async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<T> {
+async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const { readFileSync, writeFileSync, existsSync, lstatSync, realpathSync } = await import("node:fs");
+    if (signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
     const root = getProjectRoot();
     const gitEntry = join(root, ".git");
     let gitDir: string;
@@ -300,12 +360,12 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
     const changed = originals.filter((entry) => entry.sanitized !== entry.content);
     if (changed.length === 0) return fn();
     for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
-    try { return await fn(); }
+    try { if (signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }); return await fn(); }
     finally { for (const entry of changed) { try { writeFileSync(entry.path, entry.content, "utf8"); } catch { } } }
 }
 
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
-  if (!options.holdLock) return gitOperationMutex.runExclusive(() => runIsolatedGit(args, { ...options, holdLock: true }));
+  if (!options.holdLock) return gitOperationMutex.runExclusive(() => { if (options.signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }); return runIsolatedGit(args, { ...options, holdLock: true }); }, options.signal);
   const timeout = options.timeout ?? 15_000;
   const maxBuffer = options.maxBuffer ?? Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000);
   const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
@@ -318,8 +378,15 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     // or filter.*.{clean,smudge,process}. Sanitize repository config when such keys
     // are present instead of appending an empty command-line value.
     if (!options.skipDynamicOverrides && dynamic.length > 0) {
-      return await withSanitizedGitConfigUnlocked(() =>
-        runIsolatedGit(args, { ...options, skipDynamicOverrides: true, dynamicOverrides: dynamic, holdLock: true }),
+      return await withSanitizedGitConfigUnlocked(
+        () =>
+          runIsolatedGit(args, {
+            ...options,
+            skipDynamicOverrides: true,
+            dynamicOverrides: dynamic,
+            holdLock: true,
+          }),
+        options.signal,
       );
     }
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
@@ -330,17 +397,57 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     if (options.input !== undefined) {
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });
-        let out = ""; let err = "";
-        const timer = setTimeout(() => { child.kill("SIGKILL"); reject(Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" })); }, timeout);
-        child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); }); child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8"); });
-        child.on("error", (e) => { clearTimeout(timer); reject(e); }); child.on("close", (code) => { clearTimeout(timer); if (code === 0) resolve(out); else reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })); });
-        child.stdin.write(options.input!); child.stdin.end();
+        const onAbort = () => child.kill();
+        let timedOut = false;
+        let settled = false;
+        let out = "";
+        let err = "";
+        const timer = setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, timeout);
+        const cleanup = () => {
+          clearTimeout(timer);
+          options.signal?.removeEventListener("abort", onAbort);
+        };
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          fn();
+        };
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        // The signal can abort between the initial check and listener
+        // registration. Re-check after installing the listener so the Git
+        // process cannot escape cancellation during that race.
+        if (options.signal?.aborted) onAbort();
+        child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); });
+        child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8"); });
+        child.on("error", (e) => {
+          cleanup();
+          finish(() => reject(e));
+        });
+        child.on("close", (code) => {
+          cleanup();
+          if (options.signal?.aborted) {
+            finish(() => reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" })));
+            return;
+          }
+          if (timedOut) {
+            finish(() => reject(Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" })));
+            return;
+          }
+          if (code === 0) finish(() => resolve(out));
+          else finish(() => reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })));
+        });
+        child.stdin.write(options.input!);
+        child.stdin.end();
       });
       return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(stdout) : stdout, stderr: "" };
     }
-    const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, windowsHide: true, maxBuffer, encoding: "utf8", env });
+    const result = await execFileAsync(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, timeout, signal: options.signal, windowsHide: true, maxBuffer, encoding: "utf8", env });
     return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stdout ?? "")) : String(result.stdout ?? ""), stderr: isRemoteCommand ? sanitizeGitRemoteOutput(String(result.stderr ?? "")) : String(result.stderr ?? "") };
   } catch (error) {
+    if (options.signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
     const value = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; status?: number; code?: number | string; killed?: boolean };
     if (value.code === "ENOENT") throw error;
     if (value.code === "ETIMEDOUT" || value.killed) throw Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" });
@@ -348,58 +455,58 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
   } finally { try { rmSync(isolationDir, { recursive: true, force: true }); } catch { } }
 }
 
-async function runGit(args: string[], timeout: number, holdLock = false): Promise<{ code: number; stdout: string; stderr: string }> { return runIsolatedGit(args, { timeout, holdLock }); }
+async function runGit(args: string[], timeout: number, holdLock = false, signal?: AbortSignal): Promise<{ code: number; stdout: string; stderr: string }> { return runIsolatedGit(args, { timeout, holdLock, signal }); }
 
-export async function gitStatus(): Promise<Record<string, unknown>> {
-  try { const result = await runGit(["status", "--short", "--branch"], GIT_STATUS_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." }; const status = cap(result.stdout, GIT_STATUS_MAX_CHARS); return { status: status.value, truncated: status.truncated, ...(status.truncated ? { truncation_note: `Status output was truncated to ${GIT_STATUS_MAX_CHARS} characters.` } : {}) }; }
+export async function gitStatus(signal?: AbortSignal): Promise<Record<string, unknown>> {
+  try { const result = await runGit(["status", "--short", "--branch"], GIT_STATUS_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." }; const status = cap(result.stdout, GIT_STATUS_MAX_CHARS); return { status: status.value, truncated: status.truncated, ...(status.truncated ? { truncation_note: `Status output was truncated to ${GIT_STATUS_MAX_CHARS} characters.` } : {}) }; }
   catch (error) { return { error: errorText(error) }; }
 }
 
-export async function gitCommittedFileCount(): Promise<Record<string, unknown>> {
-  try { const result = await runGit(["ls-tree", "-r", "--name-only", "HEAD"], GIT_STATUS_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "Could not count files in the current commit. The repository may not have a commit yet." }; return { committed_files: result.stdout.split(/\r?\n/).filter(Boolean).length }; }
+export async function gitCommittedFileCount(signal?: AbortSignal): Promise<Record<string, unknown>> {
+  try { const result = await runGit(["ls-tree", "-r", "--name-only", "HEAD"], GIT_STATUS_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "Could not count files in the current commit. The repository may not have a commit yet." }; return { committed_files: result.stdout.split(/\r?\n/).filter(Boolean).length }; }
   catch (error) { return { error: errorText(error) }; }
 }
 
-export async function gitDiff(path = "", staged = false): Promise<Record<string, unknown>> {
+export async function gitDiff(path = "", staged = false, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const args = ["diff", "--no-ext-diff", "--no-textconv"]; if (staged) args.push("--staged");
   const allowed = getAllowedReadPaths();
   if (allowed !== undefined) {
     if (path) { try { const filePath = safePath(path); if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` }; if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` }; const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, "")); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; } }
     else { const selected = [...allowed]; if (selected.length === 0) return { diff: "", truncated: false }; args.push("--", ...selected); }
   } else if (path) { let filePath: string; try { filePath = safePath(path); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; } if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` }; const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, "")); }
-  try { const result = await runGit(args, GIT_DIFF_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." }; const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS); return { diff: diff.value, truncated: diff.truncated, ...(diff.truncated ? { truncation_note: `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.` } : {}) }; }
+  try { const result = await runGit(args, GIT_DIFF_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." }; const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS); return { diff: diff.value, truncated: diff.truncated, ...(diff.truncated ? { truncation_note: `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.` } : {}) }; }
   catch (error) { return { error: errorText(error) }; }
 }
 
-export async function gitLog(maxCount = 10): Promise<Record<string, unknown>> { const numeric = Number(maxCount); if (!Number.isInteger(numeric)) return { error: "max_count must be a whole number." }; const count = Math.max(1, Math.min(numeric, 100)); try { const result = await runGit(["log", `-${count}`, "--oneline", "--decorate"], GIT_LOG_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." }; const log = cap(result.stdout, GIT_LOG_MAX_CHARS); return { log: log.value, truncated: log.truncated, ...(log.truncated ? { truncation_note: `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; } }
-export async function gitBranch(): Promise<Record<string, unknown>> { try { const result = await runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." }; const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS); return { branches: branches.value, truncated: branches.truncated, ...(branches.truncated ? { truncation_note: `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; }
+export async function gitLog(maxCount = 10, signal?: AbortSignal): Promise<Record<string, unknown>> { const numeric = Number(maxCount); if (!Number.isInteger(numeric)) return { error: "max_count must be a whole number." }; const count = Math.max(1, Math.min(numeric, 100)); try { const result = await runGit(["log", `-${count}`, "--oneline", "--decorate"], GIT_LOG_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." }; const log = cap(result.stdout, GIT_LOG_MAX_CHARS); return { log: log.value, truncated: log.truncated, ...(log.truncated ? { truncation_note: `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; } }
+export async function gitBranch(signal?: AbortSignal): Promise<Record<string, unknown>> { try { const result = await runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." }; const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS); return { branches: branches.value, truncated: branches.truncated, ...(branches.truncated ? { truncation_note: `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; }
 }
 
-async function stageFileWithoutFilters(relativePath: string, absolutePath: string, lexicalPath: string): Promise<void> {
+async function stageFileWithoutFilters(relativePath: string, absolutePath: string, lexicalPath: string, signal?: AbortSignal): Promise<void> {
   const { fstatSync, readSync, closeSync, constants: fsConstants, lstatSync, readlinkSync } = await import("node:fs"); let mode = "100644"; let payload: Buffer; const lexicalStat = lstatSync(lexicalPath); if (lexicalStat.isSymbolicLink()) { const target = readlinkSync(lexicalPath, "utf8"); mode = "120000"; payload = Buffer.from(target, "utf8"); } else { const { fd } = openWithinProject(relativePath, fsConstants.O_RDONLY);
   try { const st = fstatSync(fd); if (!st.isFile()) throw new Error("git_add can only stage a single file, not a directory."); mode = (st.mode & 0o111) !== 0 ? "100755" : "100644"; payload = Buffer.alloc(st.size); let offset = 0; while (offset < st.size) { const n = readSync(fd, payload, offset, st.size - offset, offset); if (n === 0) break; offset += n; } if (offset < st.size) payload = payload.subarray(0, offset); } finally { closeSync(fd); } }
   void absolutePath;
-  const hashed = await runIsolatedGit(["hash-object", "-w", "--stdin", "--no-filters"], { timeout: GIT_ADD_TIMEOUT_MS, input: payload }); if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed"); const oid = hashed.stdout.trim(); if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error(`Unexpected hash-object output: ${oid}`); const updated = await runIsolatedGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`], { timeout: GIT_ADD_TIMEOUT_MS }); if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
+  const hashed = await runIsolatedGit(["hash-object", "-w", "--stdin", "--no-filters"], { timeout: GIT_ADD_TIMEOUT_MS, input: payload, signal }); if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed"); const oid = hashed.stdout.trim(); if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error(`Unexpected hash-object output: ${oid}`); const updated = await runIsolatedGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`], { timeout: GIT_ADD_TIMEOUT_MS, signal }); if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
 }
 
-async function restoreWorktreeWithoutFilters(relativePath: string): Promise<void> { const indexPath = relativePath.replace(/\\/g, "/"); const result = await runGit(["checkout-index", "--force", "--", indexPath], GIT_RESTORE_TIMEOUT_MS); if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git checkout-index failed"); }
+async function restoreWorktreeWithoutFilters(relativePath: string, signal?: AbortSignal): Promise<void> { const indexPath = relativePath.replace(/\\/g, "/"); const result = await runGit(["checkout-index", "--force", "--", indexPath], GIT_RESTORE_TIMEOUT_MS, false, signal); if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git checkout-index failed"); }
 
-export async function gitAdd(path: string, confirm = false): Promise<Record<string, unknown>> {
+export async function gitAdd(path: string, confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> {
   let filePath: string; try { filePath = safePath(path); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
   if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` }; if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${path}` };
-  try { const repository = await runGit(["rev-parse", "--show-toplevel"], GIT_ADD_TIMEOUT_MS); if (repository.code !== 0) return { error: "git_add requires the project to be inside a git repository." }; } catch (error) { return { error: errorText(error) }; }
+  try { const repository = await runGit(["rev-parse", "--show-toplevel"], GIT_ADD_TIMEOUT_MS, false, signal); if (repository.code !== 0) return { error: "git_add requires the project to be inside a git repository." }; } catch (error) { return { error: errorText(error) }; }
   const { lstatSync } = await import("node:fs"); try { const lexicalStat = lstatSync(resolve(getProjectRoot(), path.trim())); if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) return { error: "git_add can only stage a single file, not a directory." }; } catch { return { error: `File does not exist: ${path}` }; }
   const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); const relativePath = lexicalPath.slice(root.length).replace(/^[/\\]+/, "");
   if (!confirm) return { requires_confirmation: true, path: relativePath, message: `'${relativePath}' was NOT staged. Ask the user to explicitly confirm it, then call git_add again with confirm=true.` };
-  try { await stageFileWithoutFilters(relativePath, filePath, lexicalPath); return { path: relativePath, staged: true }; } catch (error) { return { error: `Could not stage file: ${errorText(error)}` }; }
+  try { await stageFileWithoutFilters(relativePath, filePath, lexicalPath, signal); return { path: relativePath, staged: true }; } catch (error) { return { error: `Could not stage file: ${errorText(error)}` }; }
 }
 
 const PREVIEW_CHAR_LIMIT = 2000;
-export async function gitFetch(remote = ""): Promise<Record<string, unknown>> { const args = ["fetch", "--no-recurse-submodules", "--upload-pack=git-upload-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_FETCH_TIMEOUT_MS, true); if (result.code !== 0) return { error: result.stderr.trim() || "git fetch failed." }; let output = result.stdout.trim(); if (!output && !result.stderr.trim()) output = "Fetch completed successfully."; return { output: output.slice(0, GIT_FETCH_MAX_CHARS), remote: remote || "all remotes" }; }); } catch (exc) { return { error: errorText(exc) }; } }
+export async function gitFetch(remote = "", signal?: AbortSignal): Promise<Record<string, unknown>> { const args = ["fetch", "--no-recurse-submodules", "--upload-pack=git-upload-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_FETCH_TIMEOUT_MS, true, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git fetch failed." }; let output = result.stdout.trim(); if (!output && !result.stderr.trim()) output = "Fetch completed successfully."; return { output: output.slice(0, GIT_FETCH_MAX_CHARS), remote: remote || "all remotes" }; }); } catch (exc) { return { error: errorText(exc) }; } }
 
-export async function gitPull(remote = "", branch = "", confirm = false): Promise<Record<string, unknown>> { if (branch && !remote) return { error: "A remote is required when specifying a branch." }; if (!confirm) return { requires_confirmation: true, remote: remote || "default", branch: branch || "current", message: `This will pull from '${remote || "default remote"}' and merge into the current branch. This changes local files and may create merge conflicts. Confirm to proceed.` }; const args = ["pull", "--no-recurse-submodules", "--upload-pack=git-upload-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } if (branch) { const validation = safeValidate(validateGitBranch, branch); if ("error" in validation) return validation; args.push(validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_PULL_TIMEOUT_MS, true); if (result.code !== 0) return { error: result.stderr.trim() || "git pull failed." }; return { output: (result.stdout || "").slice(0, GIT_PULL_MAX_CHARS), remote: remote || "default", branch: branch || "current" }; }); } catch (exc) { return { error: errorText(exc) }; } }
+export async function gitPull(remote = "", branch = "", confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> { if (branch && !remote) return { error: "A remote is required when specifying a branch." }; if (!confirm) return { requires_confirmation: true, remote: remote || "default", branch: branch || "current", message: `This will pull from '${remote || "default remote"}' and merge into the current branch. This changes local files and may create merge conflicts. Confirm to proceed.` }; const args = ["pull", "--no-recurse-submodules", "--upload-pack=git-upload-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } if (branch) { const validation = safeValidate(validateGitBranch, branch); if ("error" in validation) return validation; args.push(validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_PULL_TIMEOUT_MS, true, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git pull failed." }; return { output: (result.stdout || "").slice(0, GIT_PULL_MAX_CHARS), remote: remote || "default", branch: branch || "current" }; }); } catch (exc) { return { error: errorText(exc) }; } }
 
-export async function gitRestore(path: string, staged = false, confirm = false): Promise<Record<string, unknown>> {
+export async function gitRestore(path: string, staged = false, confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> {
   if (!isReadAllowed(path)) return { error: "Access denied: '" + path + "' is not selected for the agent." };
   let filePath: string;
   try { filePath = safePath(path); } catch (exc) { return { error: String(exc) }; }
@@ -415,19 +522,19 @@ export async function gitRestore(path: string, staged = false, confirm = false):
   }
   try {
     if (staged) {
-      const result = await runGit(["restore", "--staged", "--", relativePath], GIT_RESTORE_TIMEOUT_MS);
+      const result = await runGit(["restore", "--staged", "--", relativePath], GIT_RESTORE_TIMEOUT_MS, false, signal);
       if (result.code !== 0) return { error: `git restore failed: ${result.stderr.trim() || result.stdout.trim()}` };
       return { path: relativePath, restored: false, unstaged: true };
     }
-    await restoreWorktreeWithoutFilters(relativePath);
+    await restoreWorktreeWithoutFilters(relativePath, signal);
     return { path: relativePath, restored: true, unstaged: false };
   } catch (exc) { return { error: errorText(exc) }; }
 }
 
-async function validateCommitScope(): Promise<Record<string, unknown> | null> {
+async function validateCommitScope(signal?: AbortSignal): Promise<Record<string, unknown> | null> {
   const allowed = getAllowedReadPaths();
   if (allowed === undefined) return null;
-  const result = await runGit(["diff", "--cached", "--name-only", "-z"], GIT_COMMIT_TIMEOUT_MS);
+  const result = await runGit(["diff", "--cached", "--name-only", "-z"], GIT_COMMIT_TIMEOUT_MS, false, signal);
   if (result.code !== 0) return { error: result.stderr.trim() || "Could not inspect staged files." };
   const staged = result.stdout.split("\0").filter(Boolean);
   for (const stagedPath of staged) {
@@ -437,6 +544,6 @@ async function validateCommitScope(): Promise<Record<string, unknown> | null> {
   return null;
 }
 
-export async function gitCommit(message: string, confirm = false): Promise<Record<string, unknown>> { if (!message || !message.trim()) return { error: "A commit message is required." }; const trimmedMessage = message.trim(); const scopeError = await validateCommitScope(); if (scopeError) return scopeError; if (!confirm) { const diffResult = await gitDiff("", true); let diffText = ""; if (diffResult && typeof diffResult === "object" && "diff" in diffResult) diffText = String(diffResult.diff ?? ""); if (!diffText) return { error: "No staged changes to commit." }; const preview = diffText.slice(0, PREVIEW_CHAR_LIMIT); const previewTruncated = diffText.length > PREVIEW_CHAR_LIMIT; return { requires_confirmation: true, commit_message: trimmedMessage, preview, preview_truncated: previewTruncated, message: `About to commit with message: '${trimmedMessage}'. This creates a new commit in the repository. Confirm to proceed.` }; } try { const identity = await getSafeCommitIdentity(); const identityArgs: string[] = []; if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`); if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`); const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." }; return { output: (result.stdout || "").slice(0, GIT_COMMIT_MAX_CHARS), commit_message: trimmedMessage, committed: true }; } catch (exc) { return { error: errorText(exc) }; } }
+export async function gitCommit(message: string, confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> { if (!message || !message.trim()) return { error: "A commit message is required." }; const trimmedMessage = message.trim(); const scopeError = await validateCommitScope(signal); if (scopeError) return scopeError; if (!confirm) { const diffResult = await gitDiff("", true, signal); let diffText = ""; if (diffResult && typeof diffResult === "object" && "diff" in diffResult) diffText = String(diffResult.diff ?? ""); if (!diffText) return { error: "No staged changes to commit." }; const preview = diffText.slice(0, PREVIEW_CHAR_LIMIT); const previewTruncated = diffText.length > PREVIEW_CHAR_LIMIT; return { requires_confirmation: true, commit_message: trimmedMessage, preview, preview_truncated: previewTruncated, message: `About to commit with message: '${trimmedMessage}'. This creates a new commit in the repository. Confirm to proceed.` }; } try { const identity = await getSafeCommitIdentity(signal); const identityArgs: string[] = []; if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`); if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`); const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." }; return { output: (result.stdout || "").slice(0, GIT_COMMIT_MAX_CHARS), commit_message: trimmedMessage, committed: true }; } catch (exc) { return { error: errorText(exc) }; } }
 
-export async function gitPush(remote = "", branch = "", confirm = false): Promise<Record<string, unknown>> { if (!confirm) return { requires_confirmation: true, remote: remote || "default", branch: branch || "current", message: `This will push commits to '${remote || "default"}' on branch '${branch || "current branch"}'. This updates the remote repository. Confirm to proceed.` }; const args = ["push", "--no-recurse-submodules", "--receive-pack=git-receive-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } if (branch) { const validation = safeValidate(validateGitBranch, branch); if ("error" in validation) return validation; args.push(validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_PUSH_TIMEOUT_MS, true); if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." }; return { output: (result.stdout || "").slice(0, GIT_PUSH_MAX_CHARS), remote: remote || "default", branch: branch || "current", pushed: true }; }); } catch (exc) { return { error: errorText(exc) }; } }
+export async function gitPush(remote = "", branch = "", confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> { if (!confirm) return { requires_confirmation: true, remote: remote || "default", branch: branch || "current", message: `This will push commits to '${remote || "default"}' on branch '${branch || "current branch"}'. This updates the remote repository. Confirm to proceed.` }; const args = ["push", "--no-recurse-submodules", "--receive-pack=git-receive-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } if (branch) { const validation = safeValidate(validateGitBranch, branch); if ("error" in validation) return validation; args.push(validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_PUSH_TIMEOUT_MS, true, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." }; return { output: (result.stdout || "").slice(0, GIT_PUSH_MAX_CHARS), remote: remote || "default", branch: branch || "current", pushed: true }; }); } catch (exc) { return { error: errorText(exc) }; } }

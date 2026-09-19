@@ -63,7 +63,7 @@ export class GeminiProvider extends Provider {
     return contents;
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], signal?: AbortSignal): Promise<ProviderResponse> {
     this.requireApiKey();
     const response = await this.request("POST", `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey!)}`, {
       body: JSON.stringify({
@@ -75,13 +75,14 @@ export class GeminiProvider extends Provider {
         generationConfig: {},
         tools: this.capabilities.tools ? this.tools : undefined,
       }),
-    });
+    }, signal);
 
-    if (!response.ok) {
-      throw new Error(await this.apiError(response, "Gemini request failed"));
-    }
+    try {
+      if (!response.ok) {
+        throw new Error(await this.apiError(response, "Gemini request failed"));
+      }
 
-    const data = (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as Record<string, unknown>;
     const candidate = ((data.candidates as unknown[]) || [])[0] as Record<string, unknown> | undefined;
     const content = candidate?.content as { parts?: GeminiPart[]; role?: string } | undefined;
     const parts = content?.parts || [];
@@ -100,7 +101,16 @@ export class GeminiProvider extends Provider {
       .filter(Boolean)
       .join("") || null;
 
-    return { text, tool_calls: toolCalls, raw: content || null };
+      return { text, tool_calls: toolCalls, raw: content || null };
+    } catch (exc) {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Gemini request cancelled."), { code: "ABORT_ERR" });
+        }
+        throw new Error("Gemini request timed out.");
+      }
+      throw exc;
+    }
   }
 
   appendModelTurn(contents: unknown[], response: ProviderResponse): unknown[] {
@@ -260,9 +270,15 @@ export class GeminiProvider extends Provider {
     if (!this.apiKey) throw new Error("Gemini API key is not configured (GOOGLE_API_KEY).");
   }
 
-  private async request(method: string, url: string, options: RequestInit = {}): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+  private async request(method: string, url: string, options: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
+    // Keep cancellation and timeout attached to the response body. Fetch
+    // resolves when headers arrive, so cleaning up here would leave
+    // response.json()/response.text() running after cancellation.
+    const timeoutSignal = AbortSignal.timeout(this.timeout * 1000);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+
     try {
       const hostname = new URL(url).hostname;
       return await safeFetch(
@@ -271,17 +287,18 @@ export class GeminiProvider extends Provider {
           ...options,
           method,
           headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string> | undefined) },
-          signal: controller.signal,
+          signal: requestSignal,
         },
         { originalHostname: hostname },
       );
     } catch (exc) {
-      if (exc instanceof Error && exc.name === "AbortError") {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Gemini request cancelled."), { code: "ABORT_ERR" });
+        }
         throw new Error("Gemini request timed out.");
       }
       throw new Error(`Could not reach Gemini: ${exc}`);
-    } finally {
-      clearTimeout(timer);
     }
   }
 

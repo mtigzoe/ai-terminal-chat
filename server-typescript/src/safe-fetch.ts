@@ -338,7 +338,29 @@ export async function safeFetch(
     throw new Error("SSRF protection: Only http: and https: schemes are allowed");
   }
 
-  const resolved = await resolveAndPinHostname(url.hostname, options.lookupAll);
+  if (init.signal?.aborted) {
+    throw Object.assign(new Error("The operation was aborted."), { name: "AbortError", code: "ABORT_ERR" });
+  }
+
+  // DNS resolution is not natively cancelled by AbortSignal. Race it against
+  // the caller's signal so provider cancellation/timeout cannot remain stuck
+  // waiting for a slow resolver.
+  const resolution = resolveAndPinHostname(url.hostname, options.lookupAll);
+  const resolved = init.signal
+    ? await Promise.race([
+        resolution,
+        new Promise<never>((_, reject) => {
+          const onAbort = () =>
+            reject(Object.assign(new Error("The operation was aborted."), {
+              name: "AbortError",
+              code: "ABORT_ERR",
+            }));
+          if (init.signal!.aborted) onAbort();
+          else init.signal!.addEventListener("abort", onAbort, { once: true });
+          resolution.finally(() => init.signal?.removeEventListener("abort", onAbort)).catch(() => {});
+        }),
+      ])
+    : await resolution;
   if (!resolved.ok) {
     throw new Error(`SSRF protection: ${resolved.error}`);
   }

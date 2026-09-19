@@ -63,7 +63,7 @@ export class AnthropicProvider extends Provider {
     return messages;
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], signal?: AbortSignal): Promise<ProviderResponse> {
     this.requireApiKey();
     const response = await this.request("POST", `${this.baseUrl}/v1/messages`, {
       body: JSON.stringify({
@@ -73,13 +73,14 @@ export class AnthropicProvider extends Provider {
         messages: contents,
         tools: this.capabilities.tools ? this.tools : undefined,
       }),
-    });
+    }, signal);
 
-    if (!response.ok) {
-      throw new Error(await this.apiError(response, "Anthropic request failed"));
-    }
+    try {
+      if (!response.ok) {
+        throw new Error(await this.apiError(response, "Anthropic request failed"));
+      }
 
-    const data = (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as Record<string, unknown>;
     const blocks = Array.isArray(data.content) ? data.content as AnthropicContentBlock[] : [];
     const toolCalls: ToolCall[] = blocks
       .filter((block) => block.type === "tool_use" && typeof block.name === "string")
@@ -93,7 +94,16 @@ export class AnthropicProvider extends Provider {
       .map((block) => block.text || "")
       .join("") || null;
 
-    return { text, tool_calls: toolCalls, raw: blocks };
+      return { text, tool_calls: toolCalls, raw: blocks };
+    } catch (exc) {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Anthropic request cancelled."), { code: "ABORT_ERR" });
+        }
+        throw new Error("Anthropic request timed out.");
+      }
+      throw exc;
+    }
   }
 
   appendModelTurn(contents: unknown[], response: ProviderResponse): unknown[] {
@@ -195,9 +205,15 @@ export class AnthropicProvider extends Provider {
     if (!this.apiKey) throw new Error("Anthropic API key is not configured (ANTHROPIC_API_KEY).");
   }
 
-  private async request(method: string, url: string, options: RequestInit = {}): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+  private async request(method: string, url: string, options: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
+    // Keep cancellation and timeout attached to the response body. Fetch
+    // resolves when headers arrive, so cleaning up here would leave
+    // response.json()/response.text() running after cancellation.
+    const timeoutSignal = AbortSignal.timeout(this.timeout * 1000);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+
     try {
       const hostname = new URL(url).hostname;
       return await safeFetch(
@@ -211,17 +227,18 @@ export class AnthropicProvider extends Provider {
             "anthropic-version": "2023-06-01",
             ...(options.headers as Record<string, string> | undefined),
           },
-          signal: controller.signal,
+          signal: requestSignal,
         },
         { originalHostname: hostname },
       );
     } catch (exc) {
-      if (exc instanceof Error && exc.name === "AbortError") {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Anthropic request cancelled."), { code: "ABORT_ERR" });
+        }
         throw new Error("Anthropic request timed out.");
       }
       throw new Error(`Could not reach Anthropic: ${exc}`);
-    } finally {
-      clearTimeout(timer);
     }
   }
 

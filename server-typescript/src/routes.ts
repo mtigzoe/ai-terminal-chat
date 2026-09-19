@@ -22,7 +22,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { listFiles, readFile, searchFiles } from "./filesystem.ts";
-import { gitCommittedFileCount, gitDiff, gitLog, gitBranch, gitFetch, gitPull, gitRestore, gitCommit, gitPush } from "./git.ts";
+import { gitCommittedFileCount, gitDiff, gitLog, gitBranch, gitFetch, gitPull, gitRestore, gitCommit, gitPush, gitAdd } from "./git.ts";
 import { gitStatusSummary } from "./git-status-summary.ts";
 import {
   getAllowedCommands,
@@ -30,8 +30,8 @@ import {
   removeAllowedCommand,
   runCommand,
 } from "./terminal.ts";
-import { createPending, getPending, popPending } from "./pending.ts";
-import { cancel, release, register } from "./cancellation.ts";
+import { createPending, getPending, popPending, restorePending } from "./pending.ts";
+import { bindRequestCancellation, cancel, release, register } from "./cancellation.ts";
 import {
   runAgentLoop,
   resumeAgentLoop,
@@ -530,7 +530,7 @@ app.post("/terminal/run", async (c) => {
   // toolFunctions with confirm driven by the pending-confirmation flow.
   const confirm =
     data.confirm === undefined ? true : Boolean(data.confirm);
-  const result = await runCommand(command, confirm);
+  const result = await runCommand(command, confirm, c.req.raw.signal);
   if (result && typeof result === "object" && "error" in result) {
     return c.json(result, 400 as any);
   }
@@ -579,6 +579,7 @@ app.post("/chat", async (c) => {
   let errorMessage: string | null = null;
   let cancelled = false;
   const cancelSignal = register(requestId);
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
 
   try {
     await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
@@ -618,7 +619,8 @@ app.post("/chat", async (c) => {
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
-    release(requestId);
+    cleanupRequestCancellation();
+    release(requestId, cancelSignal);
   }
 
   if (cancelled) {
@@ -674,6 +676,7 @@ app.post("/stream", async (c) => {
   }
 
   const cancelSignal = register(requestId);
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
   const wantsNdjson = c.req.header("Accept")?.includes("application/x-ndjson") ?? false;
   const stream = new ReadableStream({
     start(controller) {
@@ -704,7 +707,8 @@ app.post("/stream", async (c) => {
             wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
           ));
         } finally {
-          release(requestId);
+          cleanupRequestCancellation();
+          release(requestId, cancelSignal);
           controller.close();
         }
       })();
@@ -750,7 +754,8 @@ const CONFIRMABLE_TOOL_NAMES = new Set([
 async function confirmLegacy(
   action: PendingAction,
   actionId: string,
-  confirmed: boolean
+  confirmed: boolean,
+  cancelSignal?: AbortSignal
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   if (action.tool_name === "read_file_permission") {
     const readPath = action.args.path;
@@ -800,14 +805,34 @@ async function confirmLegacy(
 
   const confirmedArgs = { ...action.args, confirm: true };
   const timeoutSeconds = 60;
+  let timedOut = false;
 
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort();
+  if (cancelSignal?.aborted) controller.abort();
+  else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(new Error("timeout"));
+      }, timeoutSeconds * 1000);
+    });
     const result = await Promise.race([
-      Promise.resolve(fn(confirmedArgs)),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), timeoutSeconds * 1000)
-      ),
+      Promise.resolve(fn(confirmedArgs, controller.signal)),
+      timeoutPromise,
     ]);
+
+    if (timedOut) {
+      return {
+        status: 500,
+        body: {
+          error: `Tool ${action.tool_name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`,
+        },
+      };
+    }
 
     if (result && typeof result === "object" && "error" in result && result.error) {
       return {
@@ -821,10 +846,27 @@ async function confirmLegacy(
       body: { confirmed: true, action_id: actionId, tool: action.tool_name, result },
     };
   } catch (exc) {
+    if (timedOut) {
+      return {
+        status: 500,
+        body: {
+          error: `Tool ${action.tool_name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`,
+        },
+      };
+    }
+    if (cancelSignal?.aborted) {
+      return {
+        status: 200,
+        body: { confirmed: true, action_id: actionId, tool: action.tool_name, cancelled: true },
+      };
+    }
     return {
       status: 500,
       body: { error: `Tool ${action.tool_name} failed: ${exc}` },
     };
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    cancelSignal?.removeEventListener("abort", onParentAbort);
   }
 }
 
@@ -844,12 +886,24 @@ app.post("/confirm", async (c) => {
     return c.json({ error: "action_id is required." }, 400 as any);
   }
 
+  let cancelSignal: AbortSignal;
+  try {
+    cancelSignal = register(requestId);
+  } catch (error) {
+    return c.json({ error: String(error) }, 409 as any);
+  }
+  const cleanupRequestCancellation = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
+
   const action = popPending(actionId);
   if (!action) {
+    cleanupRequestCancellation();
+    release(requestId, cancelSignal);
     return c.json({ error: "Pending action not found or already resolved." }, 404 as any);
   }
 
   if (!CONFIRMABLE_TOOL_NAMES.has(action.tool_name)) {
+    cleanupRequestCancellation();
+    release(requestId, cancelSignal);
     return c.json({ error: "Only pending write actions can be confirmed." }, 400 as any);
   }
 
@@ -859,8 +913,18 @@ app.post("/confirm", async (c) => {
     action.resume.provider_fingerprint === providerFingerprint(provider);
 
   if (!canResume) {
-    const { status, body } = await confirmLegacy(action, actionId, confirmed);
-    return c.json(body, status as any);
+    try {
+      const { status, body } = await confirmLegacy(action, actionId, confirmed, cancelSignal);
+      if (body.cancelled === true && cancelSignal.aborted) {
+        // The action was popped before execution. If cancellation prevented
+        // the confirmed tool from running, keep it available for retry.
+        restorePending(action);
+      }
+      return c.json(body, status as any);
+    } finally {
+      cleanupRequestCancellation();
+      release(requestId, cancelSignal);
+    }
   }
 
   const baseResponse: Record<string, unknown> = {
@@ -879,7 +943,6 @@ app.post("/confirm", async (c) => {
   let cancelled = false;
   let nextPending: PendingConfirmationEvent | null = null;
   let resultCaptured = false;
-  const cancelSignal = register(requestId);
 
   let allowedPaths = extractAllowedPaths(data);
   if (
@@ -928,9 +991,18 @@ app.post("/confirm", async (c) => {
     });
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
-  } finally {
-    release(requestId);
   }
+
+  // popPending() is intentionally done before execution so competing
+  // confirmations cannot resolve the same action. If cancellation arrived
+  // before resumeAgentLoop() started the tool, no side effect occurred and
+  // the action can safely be made available for a retry.
+  if (cancelled && cancelSignal.aborted && !resultCaptured) {
+    restorePending(action);
+  }
+
+  cleanupRequestCancellation();
+  release(requestId, cancelSignal);
 
   baseResponse.tool_activity = toolActivity;
   baseResponse.text = finalText;
@@ -951,33 +1023,33 @@ app.post("/confirm", async (c) => {
   return c.json(baseResponse);
 });
 
-function getToolFunctions(): Record<string, (args: Record<string, unknown>) => unknown> {
+function getToolFunctions(): Record<string, (args: Record<string, unknown>, signal?: AbortSignal) => unknown> {
   return {
     list_files: (args) => listFiles(String(args.path || ".")),
     read_file: (args) => readFile(String(args.path || "")),
     search_files: (args) =>
       searchFiles(String(args.query || ""), String(args.path || ".")),
-    run_command: (args) => runCommand(String(args.command || ""), Boolean(args.confirm)),
-    git_status: () => gitStatusSummary(),
-    git_committed_file_count: () => gitCommittedFileCount(),
-    git_diff: (args) =>
-      gitDiff(String(args.path || ""), Boolean(args.staged)),
-    git_log: (args) => gitLog(Number(args.max_count || 10)),
-    git_branch: () => gitBranch(),
-    git_fetch: (args) => gitFetch(String(args.remote || "")),
-    git_pull: (args) =>
-      gitPull(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm)),
-    git_restore: (args) =>
-      gitRestore(String(args.path || ""), Boolean(args.staged), Boolean(args.confirm)),
-    git_commit: (args) =>
-      gitCommit(String(args.message || ""), Boolean(args.confirm)),
-    git_push: (args) =>
-      gitPush(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm)),
+    run_command: (args, signal) => runCommand(String(args.command || ""), Boolean(args.confirm), signal),
+    git_status: (_args, signal) => gitStatusSummary(signal),
+    git_committed_file_count: (_args, signal) => gitCommittedFileCount(signal),
+    git_diff: (args, signal) =>
+      gitDiff(String(args.path || ""), Boolean(args.staged), signal),
+    git_log: (args, signal) => gitLog(Number(args.max_count || 10), signal),
+    git_branch: (_args, signal) => gitBranch(signal),
+    git_fetch: (args, signal) => gitFetch(String(args.remote || ""), signal),
+    git_pull: (args, signal) =>
+      gitPull(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm), signal),
+    git_restore: (args, signal) =>
+      gitRestore(String(args.path || ""), Boolean(args.staged), Boolean(args.confirm), signal),
+    git_commit: (args, signal) =>
+      gitCommit(String(args.message || ""), Boolean(args.confirm), signal),
+    git_push: (args, signal) =>
+      gitPush(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm), signal),
     create_file: (args) => create_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     write_file: (args) => write_file(String(args.path || ""), String(args.contents || ""), Boolean(args.confirm)),
     apply_patch: (args) => apply_patch(String(args.patch || ""), Boolean(args.confirm)),
     delete_file: (args) => delete_file(String(args.path || ""), Boolean(args.confirm)),
-    git_add: (args) => git_add(String(args.path || ""), Boolean(args.confirm)),
+    git_add: (args, signal) => gitAdd(String(args.path || ""), Boolean(args.confirm), signal),
   };
 }
 

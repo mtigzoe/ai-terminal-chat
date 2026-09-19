@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { clear, createPending, getPending, popPending } from "../src/pending.ts";
+import { clear, createPending, getPending, popPending, restorePending } from "../src/pending.ts";
 
 describe("pending", () => {
   beforeEach(() => {
@@ -19,6 +19,22 @@ describe("pending", () => {
     expect(consumed!.action_id).toBe(action.action_id);
     expect(getPending(action.action_id)).toBeUndefined();
     expect(popPending(action.action_id)).toBeUndefined();
+  });
+
+  it("restores a consumed action for a cancellation that happened before execution", () => {
+    const action = createPending(
+      "tool-restore",
+      { path: "__pending_restore__.txt" },
+      { requires_confirmation: true },
+    );
+
+    expect(popPending(action.action_id)?.action_id).toBe(action.action_id);
+    expect(getPending(action.action_id)).toBeUndefined();
+
+    expect(restorePending(action)).toBe(true);
+    expect(getPending(action.action_id)?.action_id).toBe(action.action_id);
+
+    expect(restorePending(action)).toBe(false);
   });
 
   it("getPending returns undefined for unknown id", () => {

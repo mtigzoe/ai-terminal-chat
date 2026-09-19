@@ -82,21 +82,22 @@ export class OpenAICompatibleProvider extends Provider {
     method: string,
     url: string,
     options: RequestInit = {},
-    timeoutSeconds?: number
+    timeoutSeconds?: number,
+    signal?: AbortSignal,
   ): Promise<Response> {
-    const controller = new AbortController();
-    // Probes/list use a short timeout; chat completions use the full
-    // configured timeout (Ollama cold starts often exceed 10s).
+    // Keep cancellation and timeout attached to the response body. Fetch
+    // resolves when headers arrive, so cleaning up here would leave
+    // response.json()/response.text() running after cancellation.
     const seconds = timeoutSeconds ?? Math.min(this.timeout, 10);
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      seconds * 1000
-    );
+    const timeoutSignal = AbortSignal.timeout(seconds * 1000);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
 
     // DNS-pinning fetch: resolve + validate addresses, then connect only to
     // the pinned IP (prevents DNS rebinding between check and connect).
     try {
-      const response = await safeFetch(
+      return await safeFetch(
         url,
         {
           method,
@@ -105,19 +106,18 @@ export class OpenAICompatibleProvider extends Provider {
             ...(options.headers as Record<string, string>),
           },
           body: options.body,
-          signal: controller.signal,
+          signal: requestSignal,
         },
         { originalHostname: this.originalHostname },
       );
-
-      return response;
     } catch (exc) {
-      if (exc instanceof Error && exc.name === "AbortError") {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error(`Request to ${this.displayName} cancelled.`), { code: "ABORT_ERR" });
+        }
         throw new Error(`Request to ${this.displayName} timed out.`);
       }
       throw new Error(this.unreachableMessage(exc));
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 
@@ -200,7 +200,8 @@ export class OpenAICompatibleProvider extends Provider {
 
   private async complete(
     contents: unknown[],
-    useTools: boolean
+    useTools: boolean,
+    signal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -216,17 +217,19 @@ export class OpenAICompatibleProvider extends Provider {
       {
         body: JSON.stringify(body),
       },
-      this.timeout
+      this.timeout,
+      signal,
     );
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `${this.displayName} request failed (HTTP ${response.status}): ${text}`
-      );
-    }
+    try {
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(
+          `${this.displayName} request failed (HTTP ${response.status}): ${text}`
+        );
+      }
 
-    const data = (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as Record<string, unknown>;
     try {
       const choice = (data.choices as unknown[])[0] as Record<string, unknown>;
       const message = choice.message as Record<string, unknown>;
@@ -259,15 +262,28 @@ export class OpenAICompatibleProvider extends Provider {
         raw: message,
       };
     } catch (exc) {
-      throw new Error(`Unexpected response shape: ${data}`);
+        throw new Error(`Unexpected response shape: ${data}`);
+      }
+    } catch (exc) {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error(`Request to ${this.displayName} cancelled.`), { code: "ABORT_ERR" });
+        }
+        throw new Error(`Request to ${this.displayName} timed out.`);
+      }
+      throw exc;
     }
   }
 
-  async generate(contents: unknown[]): Promise<ProviderResponse> {
+  async generate(contents: unknown[], signal?: AbortSignal): Promise<ProviderResponse> {
     const useTools = this._capabilities.tools;
     try {
-      return await this.complete(contents, useTools);
+      return await this.complete(contents, useTools, signal);
     } catch (exc) {
+      // A cancelled request must never trigger the tool-disabled fallback.
+      // Otherwise a cancellation error that happens to match the provider's
+      // unsupported-tools markers could start a second network request.
+      if (signal?.aborted) throw exc;
       if (useTools && this._looksLikeToolsUnsupported(exc)) {
         this._capabilities = {
           ...this._capabilities,
@@ -275,7 +291,7 @@ export class OpenAICompatibleProvider extends Provider {
           notes:
             "This model or server rejected tool calling. Continuing in chat-only mode.",
         };
-        return await this.complete(contents, false);
+        return await this.complete(contents, false, signal);
       }
       throw exc;
     }

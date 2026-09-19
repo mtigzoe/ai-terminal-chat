@@ -162,7 +162,7 @@ const DEFAULT_TOOL_TIMEOUT = 15;
 export interface AgentLoopOptions {
   provider: Provider;
   contents: unknown[];
-  toolFunctions: Record<string, (args: Record<string, unknown>) => unknown>;
+  toolFunctions: Record<string, (args: Record<string, unknown>, signal?: AbortSignal) => unknown>;
   cancelSignal?: AbortSignal;
   createPending: (
     toolName: string,
@@ -617,8 +617,19 @@ async function* agentLoopCore(
             directResponse = directGitCommand(currentContents);
           }
         }
-        response = directResponse ?? (await provider.generate(currentContents));
+        response = directResponse ?? (await provider.generate(currentContents, cancelSignal));
       } catch (exc) {
+        if (cancelSignal?.aborted) {
+          yield {
+            type: "progress",
+            phase: "cancelled",
+            message: "Stopped: cancelled by user",
+            round: roundNumber,
+            max_rounds: MAX_TOOL_ROUNDS,
+          };
+          yield { type: "cancelled" };
+          return;
+        }
         yield {
           type: "progress",
           phase: "error",
@@ -630,6 +641,22 @@ async function* agentLoopCore(
           type: "error",
           message: `${provider.constructor.name} error: ${exc}`,
         };
+        return;
+      }
+
+      // A provider may return normally even after cancellation (for example,
+      // a custom provider that does not honor AbortSignal). Do not allow a
+      // late response to complete or execute tools after the request was
+      // cancelled.
+      if (cancelSignal?.aborted) {
+        yield {
+          type: "progress",
+          phase: "cancelled",
+          message: "Stopped: cancelled by user",
+          round: roundNumber,
+          max_rounds: MAX_TOOL_ROUNDS,
+        };
+        yield { type: "cancelled" };
         return;
       }
 
@@ -783,7 +810,8 @@ async function* agentLoopCore(
           toolFn,
           previewArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
 
         if (
@@ -803,6 +831,18 @@ async function* agentLoopCore(
             consecutive_repeat_count: consecutiveRepeatCount,
             consecutive_error_count: consecutiveErrorCount,
           };
+          if (cancelSignal?.aborted) {
+            yield {
+              type: "progress",
+              phase: "cancelled",
+              message: "Stopped: cancelled by user",
+              round: roundNumber,
+              max_rounds: MAX_TOOL_ROUNDS,
+            };
+            yield { type: "cancelled" };
+            return;
+          }
+
           const action = createPending(
             functionName,
             functionArgs,
@@ -860,8 +900,21 @@ async function* agentLoopCore(
           toolFn,
           functionArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
+      }
+
+      if (cancelSignal?.aborted) {
+        yield {
+          type: "progress",
+          phase: "cancelled",
+          message: "Stopped: cancelled by user",
+          round: roundNumber,
+          max_rounds: MAX_TOOL_ROUNDS,
+        };
+        yield { type: "cancelled" };
+        return;
       }
 
       // Reading a file outside the user's current Project-page selection is
@@ -891,6 +944,18 @@ async function* agentLoopCore(
             message: `The assistant wants to read '${readPath}'. Allowing this will add the file to your Project-page agent selection.`,
             permission_request: true,
           };
+          if (cancelSignal?.aborted) {
+            yield {
+              type: "progress",
+              phase: "cancelled",
+              message: "Stopped: cancelled by user",
+              round: roundNumber,
+              max_rounds: MAX_TOOL_ROUNDS,
+            };
+            yield { type: "cancelled" };
+            return;
+          }
+
           const action = createPending(
             "read_file_permission",
             { path: readPath },
@@ -1066,6 +1131,15 @@ export async function* resumeAgentLoop(
     );
   }
 
+  // A disconnect/cancel can arrive after the pending action has been
+  // removed from the store but before the confirmation actually starts.
+  // Do not consume/execute the saved tool call in that case; the caller can
+  // safely restore the still-unexecuted pending action.
+  if (cancelSignal?.aborted) {
+    yield { type: "cancelled" };
+    return;
+  }
+
   const remainingCalls = [...resume.remaining_calls];
   const call = remainingCalls.shift();
   if (!call) {
@@ -1090,7 +1164,8 @@ export async function* resumeAgentLoop(
           toolFn,
           functionArgs,
           "read_file",
-          TOOL_TIMEOUTS["read_file"] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS["read_file"] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
       }
     } else {
@@ -1106,7 +1181,8 @@ export async function* resumeAgentLoop(
         toolFn,
         confirmArgs,
         functionName,
-        TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+        TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+        cancelSignal
       );
     }
   } else {
@@ -1133,27 +1209,53 @@ export async function* resumeAgentLoop(
 }
 
 async function executeTool(
-  fn: (args: Record<string, unknown>) => unknown,
+  fn: (args: Record<string, unknown>, signal?: AbortSignal) => unknown,
   args: Record<string, unknown>,
   name: string,
-  timeoutSeconds: number
+  timeoutSeconds: number,
+  cancelSignal?: AbortSignal
 ): Promise<unknown> {
+  // Never invoke a tool after its parent request has already been cancelled.
+  // Passing an aborted signal is not sufficient because legacy/custom tools
+  // may ignore AbortSignal and perform side effects anyway.
+  if (cancelSignal?.aborted) {
+    return { error: `Tool ${name} cancelled.` };
+  }
+
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort();
+  if (cancelSignal?.aborted) controller.abort();
+  else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const timeoutMessage =
+    `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error(timeoutMessage));
+    }, timeoutSeconds * 1000);
+  });
   try {
-    return await Promise.race([
-      Promise.resolve(fn(args)),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
-              )
-            ),
-          timeoutSeconds * 1000
-        )
-      ),
+    const result = await Promise.race([
+      Promise.resolve(fn(args, controller.signal)),
+      timeoutPromise,
     ]);
+    // Abort handlers can resolve a tool promise synchronously when the
+    // timeout fires. The timeout must still win even if that resolution
+    // reaches Promise.race before the timeout rejection.
+    if (timedOut) {
+      return { error: timeoutMessage };
+    }
+    return result;
   } catch (exc) {
+    if (timedOut) {
+      return { error: timeoutMessage };
+    }
+    if (cancelSignal?.aborted) {
+      return { error: `Tool ${name} cancelled.` };
+    }
     if (
       exc instanceof Error &&
       exc.message.includes("exceeded its") &&
@@ -1165,6 +1267,9 @@ async function executeTool(
       return { error: `Malformed arguments for ${name}: ${exc}` };
     }
     return { error: `Tool ${name} failed: ${exc}` };
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    cancelSignal?.removeEventListener("abort", onParentAbort);
   }
 }
 
