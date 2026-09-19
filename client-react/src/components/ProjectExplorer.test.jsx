@@ -637,3 +637,24 @@ test('collapsing a folder while its load is pending does not re-expand when the 
   });
   expect(screen.queryByRole('treeitem', { name: /late\.js/i })).not.toBeInTheDocument();
 });
+
+
+test('keeps project selections in session storage when persistent memory is disabled', async () => {
+  const user = userEvent.setup();
+  localStorage.setItem('ai-terminal-chat:memory-enabled', 'false');
+  localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['persisted.txt']));
+  localStorage.setItem(`project-explorer:${host}:selected`, JSON.stringify(['persisted.txt']));
+  sessionStorage.setItem(`project-explorer:${host}:selected`, JSON.stringify(['session.txt']));
+  sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['session.txt']));
+
+  axios.get.mockResolvedValueOnce({
+    data: { path: '.', entries: [{ name: 'session.txt', type: 'file' }, { name: 'persisted.txt', type: 'file' }] },
+  });
+
+  render(<ProjectExplorer host={host} />);
+
+  expect(await screen.findByRole('checkbox', { name: /select session\.txt for the agent/i })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /select persisted\.txt for the agent/i })).not.toBeChecked();
+  expect(localStorage.getItem('ai-terminal-chat:allowed-paths')).toBeNull();
+  expect(localStorage.getItem(`project-explorer:${host}:selected`)).toBeNull();
+});

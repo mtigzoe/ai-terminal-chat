@@ -21,8 +21,10 @@ const statusPriority = ['conflict', 'untracked', 'staged', 'added', 'modified', 
 
 export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, onUseSelectedFiles, onInsertPathIntoTerminal }) {
   const storageKey = `project-explorer:${projectRoot || host || 'default'}`;
-  const readStored = (key, fallback) => { try { const raw = localStorage.getItem(`${storageKey}:${key}`) ?? sessionStorage.getItem(`${storageKey}:${key}`); if (!raw) return fallback; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : fallback; } catch { return fallback; } };
-  const readGrantedPaths = () => { try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : []; } catch { return []; } };
+  const readStored = (key, fallback) => { try { const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false'; const persistent = localStorage.getItem(`${storageKey}:${key}`); if (!memoryEnabled && persistent != null) localStorage.removeItem(`${storageKey}:${key}`); const raw = memoryEnabled ? (persistent ?? sessionStorage.getItem(`${storageKey}:${key}`)) : sessionStorage.getItem(`${storageKey}:${key}`); if (!raw) return fallback; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : fallback; } catch { return fallback; } };
+  const readGrantedPaths = () => { try { const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false'; if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths'); const raw = memoryEnabled
+        ? (localStorage.getItem('ai-terminal-chat:allowed-paths') ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths'))
+        : sessionStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : []; } catch { return []; } };
   const [rootEntries, setRootEntries] = useState([]); const [children, setChildren] = useState({}); const [expanded, setExpanded] = useState(() => new Set(readStored('expanded', []))); const [selectedFiles, setSelectedFiles] = useState(() => new Set([...readStored('selected', []), ...readGrantedPaths()])); const [openedFile, setOpenedFile] = useState(null); const [activePath, setActivePath] = useState(null); const [status, setStatus] = useState('Loading project.'); const [error, setError] = useState(''); const [showShortcuts, setShowShortcuts] = useState(false); const [filterQuery, setFilterQuery] = useState(''); const [lastSelectedPath, setLastSelectedPath] = useState(null); const [scrollTop, setScrollTop] = useState(0); const [selectingAllFiles, setSelectingAllFiles] = useState(false); const [sortColumn, setSortColumn] = useState('name'); const [sortDirection, setSortDirection] = useState('asc'); const [gitStatuses, setGitStatuses] = useState({}); const [gitStatusError, setGitStatusError] = useState(''); const gitStatusRefreshing = useRef(false); const treeRef = useRef(null); const previewDialogRef = useRef(null); const previewCloseRef = useRef(null); const previewReturnRef = useRef(null); const filterRef = useRef(null); const treeHasFocusRef = useRef(false); const childrenRef = useRef({}); const loadGens = useRef(new Map()); const explorerEpoch = useRef(0); const pendingExpand = useRef(new Set()); const skipNextPersist = useRef(false);
 
   const entryName = (entry) => entry?.name || entry?.path || ''; const isDirectory = (entry) => entry?.type === 'directory' || entry?.is_dir; const entryPath = (entry, parentPath = '.') => { const name = entryName(entry); if (!name) return ''; if (entry?.path) return entry.path; if (!parentPath || parentPath === '.') return name; return `${parentPath.replace(/[\\/]$/, '')}/${name}`; };
@@ -141,7 +143,9 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
       // scheduling it. A grant sync can otherwise be queued during mount and
       // run after Clear selection, re-adding paths that the user just revoked.
       try {
-        const raw = localStorage.getItem('ai-terminal-chat:allowed-paths');
+        const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+        if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths');
+        const raw = (memoryEnabled ? localStorage : sessionStorage).getItem('ai-terminal-chat:allowed-paths');
         if (!raw) return;
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed) || parsed.length === 0) return;
@@ -150,7 +154,8 @@ export default function ProjectExplorer({ host, projectRoot = '', onFileOpened, 
         setSelectedFiles((current) => {
           let currentPaths = paths;
           try {
-            const latestRaw = localStorage.getItem('ai-terminal-chat:allowed-paths');
+            const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+            const latestRaw = (memoryEnabled ? localStorage : sessionStorage).getItem('ai-terminal-chat:allowed-paths');
             const latest = latestRaw ? JSON.parse(latestRaw) : [];
             currentPaths = Array.isArray(latest)
               ? latest.filter((p) => typeof p === 'string' && p.trim())
@@ -225,10 +230,15 @@ useLayoutEffect(() => {
   useEffect(() => {
     if (skipNextPersist.current) { skipNextPersist.current = false; return; }
     try {
-      localStorage.setItem(`${storageKey}:expanded`, JSON.stringify(Array.from(expanded)));
-      localStorage.setItem(`${storageKey}:selected`, JSON.stringify(Array.from(selectedFiles)));
+      const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+      const storage = memoryEnabled ? localStorage : sessionStorage;
+      const otherStorage = memoryEnabled ? sessionStorage : localStorage;
+      storage.setItem(`${storageKey}:expanded`, JSON.stringify(Array.from(expanded)));
+      storage.setItem(`${storageKey}:selected`, JSON.stringify(Array.from(selectedFiles)));
       // selectedFiles is the source of truth so individual unchecks can revoke a path.
-      localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(Array.from(selectedFiles)));
+      storage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(Array.from(selectedFiles)));
+      otherStorage.removeItem(`${storageKey}:selected`);
+      otherStorage.removeItem('ai-terminal-chat:allowed-paths');
     } catch {}
   }, [expanded, selectedFiles, storageKey]);
 

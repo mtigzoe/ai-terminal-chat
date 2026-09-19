@@ -133,7 +133,15 @@ function App() {
   });
   const [newChatAvailable, setNewChatAvailable] = useState(false);
   const [allowedPaths, setAllowedPaths] = useState(() => {
-    try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths') ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+    try {
+      const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+      if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths');
+      const storage = memoryEnabled ? localStorage : sessionStorage;
+      const raw = storage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
   });
   const is_stream = toggled;
 
@@ -146,7 +154,15 @@ function App() {
   }, [toggled]);
 
   const resolveAllowedPaths = () => {
-    try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths') ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : []; } catch { return []; }
+    try {
+      const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+      if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths');
+      const storage = memoryEnabled ? localStorage : sessionStorage;
+      const raw = storage.getItem('ai-terminal-chat:allowed-paths');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string' && p.trim()) : [];
+    } catch { return []; }
   };
   const resolveUserInstructions = () => {
     try {
@@ -183,7 +199,7 @@ function App() {
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
   useEffect(() => { if (data.length === 0) { setNewChatAvailable(false); return; } const timer = window.setTimeout(() => saveCurrentChat(data), 300); return () => window.clearTimeout(timer); }, [data, chatId]);
-  useEffect(() => { const sync = () => { try { const raw = localStorage.getItem('ai-terminal-chat:allowed-paths') ?? sessionStorage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) { setAllowedPaths([]); return; } const parsed = JSON.parse(raw); setAllowedPaths(Array.isArray(parsed) ? parsed : []); } catch { setAllowedPaths([]); } }; const onVisible = () => { if (document.visibilityState === 'visible') sync(); }; window.addEventListener('focus', sync); document.addEventListener('visibilitychange', onVisible); const onStorage = (event) => { if (event.key === 'ai-terminal-chat:allowed-paths') sync(); }; window.addEventListener('storage', onStorage); return () => { window.removeEventListener('focus', sync); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('storage', onStorage); }; }, []);
+  useEffect(() => { const sync = () => { try { const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false'; if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths'); const storage = memoryEnabled ? localStorage : sessionStorage; const raw = storage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) { setAllowedPaths([]); return; } const parsed = JSON.parse(raw); setAllowedPaths(Array.isArray(parsed) ? parsed : []); } catch { setAllowedPaths([]); } }; const onVisible = () => { if (document.visibilityState === 'visible') sync(); }; window.addEventListener('focus', sync); document.addEventListener('visibilitychange', onVisible); const onStorage = (event) => { if (event.key === 'ai-terminal-chat:allowed-paths' || event.key === 'ai-terminal-chat:memory-enabled') sync(); }; window.addEventListener('storage', onStorage); return () => { window.removeEventListener('focus', sync); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('storage', onStorage); }; }, []);
   useEffect(() => { const regions = ['chat', 'terminal']; const focusRegion = (id) => { if (id === 'chat') { inputRef.current?.focus(); return; } if (id === 'terminal') window.setTimeout(() => document.querySelector('[data-focus-target="terminal-input"]')?.focus?.(), 0); }; const onKeyDown = (event) => { if (event.key !== 'F6') return; event.preventDefault(); const active = document.activeElement; let current = 'chat'; if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') current = 'terminal'; else if (active === inputRef.current || active?.closest?.('.chat-app')) current = 'chat'; const index = regions.indexOf(current); const nextIndex = event.shiftKey ? (index - 1 + regions.length) % regions.length : (index + 1) % regions.length; focusRegion(regions[nextIndex]); }; window.addEventListener('keydown', onKeyDown); return () => window.removeEventListener('keydown', onKeyDown); }, []);
 
   function executeScroll() { const element = document.getElementById('checkpoint'); if (element) element.scrollIntoView({ behavior: 'smooth' }); }
@@ -207,7 +223,13 @@ function App() {
         if (typeof path === 'string' && path.trim()) {
           const paths = Array.from(new Set([...resolveAllowedPaths(), path.trim()]));
           setAllowedPaths(paths);
-          try { localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths)); } catch {}
+          try {
+            const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+            const storage = memoryEnabled ? localStorage : sessionStorage;
+            const otherStorage = memoryEnabled ? sessionStorage : localStorage;
+            storage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
+            otherStorage.removeItem('ai-terminal-chat:allowed-paths');
+          } catch {}
           window.dispatchEvent(new CustomEvent('ai-terminal-chat:allowed-paths-changed', { detail: { paths } }));
         }
       }
