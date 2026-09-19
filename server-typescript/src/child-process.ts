@@ -169,6 +169,17 @@ export function runChildProcess(
         return;
       }
 
+      if (signal) {
+        const error = new Error("The process terminated with signal " + signal + ".") as ChildProcessFailure;
+        error.signal = signal;
+        error.code = signal;
+        error.killed = true;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+
       resolve({ stdout, stderr, code: typeof code === "number" ? code : 0 });
     });
 
