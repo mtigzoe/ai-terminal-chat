@@ -704,14 +704,24 @@ app.post("/stream", async (c) => {
             }
           });
         } catch (exc) {
-          const event: AgentEvent = { type: "error", message: String(exc) };
-          controller.enqueue(encoder.encode(
-            wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
-          ));
+          if (!cancelSignal.aborted) {
+            const event: AgentEvent = { type: "error", message: String(exc) };
+            try {
+              controller.enqueue(encoder.encode(
+                wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
+              ));
+            } catch {
+              // The client may have disconnected between the abort check and enqueue.
+            }
+          }
         } finally {
           c.req.raw.signal.removeEventListener("abort", onRequestAbort);
           release(requestId);
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // The response stream may already be closed by the client.
+          }
         }
       })();
     },
