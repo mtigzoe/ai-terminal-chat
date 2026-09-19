@@ -323,9 +323,16 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     // or filter.*.{clean,smudge,process}. Sanitize repository config when such keys
     // are present instead of appending an empty command-line value.
     if (!options.skipDynamicOverrides && dynamic.length > 0) {
-      return await withSanitizedGitConfigUnlocked(() =>
-        runIsolatedGit(args, { ...options, skipDynamicOverrides: true, dynamicOverrides: dynamic, holdLock: true }),
-      , options.signal);
+      return await withSanitizedGitConfigUnlocked(
+        () =>
+          runIsolatedGit(args, {
+            ...options,
+            skipDynamicOverrides: true,
+            dynamicOverrides: dynamic,
+            holdLock: true,
+          }),
+        options.signal,
+      );
     }
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
