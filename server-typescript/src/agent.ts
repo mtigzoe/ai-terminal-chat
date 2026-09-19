@@ -783,7 +783,8 @@ async function* agentLoopCore(
           toolFn,
           previewArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
 
         if (
@@ -860,8 +861,21 @@ async function* agentLoopCore(
           toolFn,
           functionArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          cancelSignal
         );
+      }
+
+      if (cancelSignal?.aborted) {
+        yield {
+          type: "progress",
+          phase: "cancelled",
+          message: "Stopped: cancelled by user",
+          round: roundNumber,
+          max_rounds: MAX_TOOL_ROUNDS,
+        };
+        yield { type: "cancelled" };
+        return;
       }
 
       // Reading a file outside the user's current Project-page selection is
