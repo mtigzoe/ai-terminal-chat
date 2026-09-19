@@ -1,4 +1,5 @@
 import { isExecutionRiskCommand } from "./terminal.ts";
+import { getProjectRoot } from "./security.ts";
 import { Provider, ProviderResponse, ToolCall } from "./providers/base.ts";
 import type { PendingAction, ResumeState } from "./pending.ts";
 
@@ -1081,6 +1082,12 @@ export async function* resumeAgentLoop(
   if (!resume) {
     throw new Error(
       `Pending action ${action.action_id} has no saved loop state to resume.`
+    );
+  }
+
+  if (resume.project_root && resume.project_root !== getProjectRoot()) {
+    throw new Error(
+      "Cannot resume this action because the active project folder differs from the folder where the action was created."
     );
   }
 

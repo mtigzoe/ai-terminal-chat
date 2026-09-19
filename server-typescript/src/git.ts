@@ -165,6 +165,7 @@ class GitOperationMutex {
 const gitOperationMutex = new GitOperationMutex();
 export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T> { return gitOperationMutex.runExclusive(fn); }
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
+export function withSanitizedGitConfigForTests<T>(fn: () => Promise<T>): Promise<T> { return withSanitizedGitConfig(fn); }
 
 const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$/i;
 
@@ -288,7 +289,7 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
     const configPaths = [join(commonDir, "config")];
     const worktreeConfig = join(gitDir, "config.worktree");
     if (existsSync(worktreeConfig) && worktreeConfig !== configPaths[0]) configPaths.push(worktreeConfig);
-    const originals: Array<{ path: string; content: string; sanitized: string }> = [];
+    const originals: Array<{ path: string; content: string; sanitized: string; resolved: string }> = [];
     for (const configPath of configPaths) {
       const stat = lstatSync(configPath);
       if (stat.isSymbolicLink()) throw new Error(`Git config path must not be a symlink: ${configPath}`);
@@ -296,13 +297,32 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
       const resolved = realpathSync(configPath);
       if (resolved !== configPath && resolved.toLowerCase() !== configPath.toLowerCase()) throw new Error(`Git config path must resolve to itself: ${configPath}`);
       const original = readFileSync(configPath, "utf8");
-      originals.push({ path: configPath, content: original, sanitized: stripDangerousGitConfig(original) });
+      originals.push({ path: configPath, content: original, sanitized: stripDangerousGitConfig(original), resolved });
     }
     const changed = originals.filter((entry) => entry.sanitized !== entry.content);
     if (changed.length === 0) return fn();
     for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
     try { return await fn(); }
-    finally { for (const entry of changed) { try { writeFileSync(entry.path, entry.content, "utf8"); } catch { } } }
+    finally {
+      for (const entry of changed) {
+        try {
+          // Do not overwrite a config change made by another process while
+          // the temporary sanitization was active. Also refuse to follow a
+          // path that was replaced by a symlink or another file.
+          const stat = lstatSync(entry.path);
+          if (stat.isSymbolicLink() || !stat.isFile()) continue;
+          const currentResolved = realpathSync(entry.path);
+          if (currentResolved !== entry.resolved && currentResolved.toLowerCase() !== entry.resolved.toLowerCase()) {
+            continue;
+          }
+          const current = readFileSync(entry.path, "utf8");
+          if (current !== entry.sanitized) continue;
+          writeFileSync(entry.path, entry.content, "utf8");
+        } catch {
+          // Preserve the current file if it cannot be safely restored.
+        }
+      }
+    }
 }
 
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
