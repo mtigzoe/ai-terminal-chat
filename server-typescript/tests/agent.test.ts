@@ -279,6 +279,30 @@ describe("runAgentLoop", () => {
     expect(events.some((e) => e.type === "progress" && (e as { phase: string }).phase === "cancelled")).toBe(true);
   });
 
+  it("ignores a provider response that arrives after cancellation", async () => {
+    const controller = new AbortController();
+    const provider = new FakeProvider([]);
+    provider.generate = vi.fn(
+      async () => {
+        controller.abort();
+        return { text: "late response", tool_calls: [], raw: null };
+      },
+    );
+
+    const events = await collectEvents(
+      runAgentLoop({
+        provider,
+        contents: [],
+        toolFunctions: {},
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    expect(events[events.length - 1]).toEqual({ type: "cancelled" });
+    expect(events.some((event) => event.type === "final")).toBe(false);
+  });
+
   it("stops between rounds when cancelled mid-loop", async () => {
     const toolFunctions = {
       fake_read: (_args: Record<string, unknown>) => ({ value: "ok" }),
