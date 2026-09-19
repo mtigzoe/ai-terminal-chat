@@ -417,6 +417,12 @@ const SettingsPage = ({ host }) => {
       localStorage.setItem('ai-terminal-chat:memory-enabled', next ? 'true' : 'false');
       if (!next) {
         localStorage.removeItem('ai-terminal-chat:allowed-paths');
+        for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+          const key = localStorage.key(index);
+          if (key?.startsWith('project-explorer:')) {
+            localStorage.removeItem(key);
+          }
+        }
       }
       setMemoryStatus(next ? 'Memory persistence enabled.' : 'Memory persistence disabled.');
     } catch {
