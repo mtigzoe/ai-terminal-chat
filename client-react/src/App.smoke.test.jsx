@@ -228,7 +228,13 @@ describe('client-react smoke tests', () => {
         .mockResolvedValueOnce({
           data: {
             text: '',
-            tool_activity: [],
+            tool_activity: [{
+              type: 'pending_confirmation',
+              name: 'write_file',
+              action_id: 'action-1',
+              args: { path: 'src/App.jsx', contents: 'updated' },
+              preview: { description: 'Write src/App.jsx' },
+            }],
             request_id: 'r-confirm',
             pending_confirmation: {
               type: 'pending_confirmation',
