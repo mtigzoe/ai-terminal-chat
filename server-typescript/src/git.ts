@@ -343,13 +343,46 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });
         const onAbort = () => child.kill();
+        let timedOut = false;
+        let settled = false;
+        let out = "";
+        let err = "";
+        const timer = setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, timeout);
+        const cleanup = () => {
+          clearTimeout(timer);
+          options.signal?.removeEventListener("abort", onAbort);
+        };
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          fn();
+        };
         if (options.signal?.aborted) onAbort();
         else options.signal?.addEventListener("abort", onAbort, { once: true });
-        let out = ""; let err = "";
-        const timer = setTimeout(() => { child.kill("SIGKILL"); reject(Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" })); }, timeout);
-        child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); }); child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8"); });
-        child.on("error", (e) => { clearTimeout(timer); options.signal?.removeEventListener("abort", onAbort); reject(e); }); child.on("close", (code) => { clearTimeout(timer); options.signal?.removeEventListener("abort", onAbort); if (options.signal?.aborted) { reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" })); return; } if (code === 0) resolve(out); else reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })); });
-        child.stdin.write(options.input!); child.stdin.end();
+        child.stdout.on("data", (d: Buffer) => { out += d.toString("utf8"); });
+        child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8"); });
+        child.on("error", (e) => {
+          cleanup();
+          finish(() => reject(e));
+        });
+        child.on("close", (code) => {
+          cleanup();
+          if (options.signal?.aborted) {
+            finish(() => reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" })));
+            return;
+          }
+          if (timedOut) {
+            finish(() => reject(Object.assign(new Error(`Git command timed out after ${timeout / 1000} seconds.`), { code: "ETIMEDOUT" })));
+            return;
+          }
+          if (code === 0) finish(() => resolve(out));
+          else finish(() => reject(Object.assign(new Error(err || `git exited ${code}`), { code: code ?? 1, stdout: out, stderr: err })));
+        });
+        child.stdin.write(options.input!);
+        child.stdin.end();
       });
       return { code: 0, stdout: isRemoteCommand ? sanitizeGitRemoteOutput(stdout) : stdout, stderr: "" };
     }
