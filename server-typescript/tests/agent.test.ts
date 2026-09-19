@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { runAgentLoop, MAX_TOOL_ROUNDS, MAX_CONSECUTIVE_IDENTICAL_CALLS, HARD_ABORT_CONSECUTIVE_CALLS, MAX_CONSECUTIVE_ERRORS } from "../src/agent.ts";
+import { runAgentLoop, resumeAgentLoop, MAX_TOOL_ROUNDS, MAX_CONSECUTIVE_IDENTICAL_CALLS, HARD_ABORT_CONSECUTIVE_CALLS, MAX_CONSECUTIVE_ERRORS } from "../src/agent.ts";
 import { Provider, ProviderResponse } from "../src/providers/base.ts";
 import { clear, createPending, getPending, popPending } from "../src/pending.ts";
 
@@ -114,6 +114,64 @@ describe("runAgentLoop", () => {
     const events = await eventsPromise;
     expect(events.some((event) => event.type === "cancelled")).toBe(true);
     expect(events.some((event) => event.type === "final")).toBe(false);
+  });
+
+  it("propagates cancellation into a resumed confirmed tool", async () => {
+    const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+
+    const toolFunctions = {
+      fake_write: (
+        _args: Record<string, unknown>,
+        signal?: AbortSignal,
+      ) =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolveStarted();
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ error: "aborted" }),
+            { once: true },
+          );
+        }),
+    };
+
+    const provider = new FakeProvider([]);
+    const action = {
+      action_id: "action-resume-cancel",
+      tool_name: "fake_write",
+      args: {},
+      preview: {},
+      resume: {
+        provider_fingerprint: "fake:fake-model",
+        contents: [],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [{ name: "fake_write", args: {}, id: undefined }],
+        last_call_signature: null,
+        consecutive_repeat_count: 0,
+        consecutive_error_count: 0,
+      },
+    };
+
+    const eventsPromise = collectEvents(
+      resumeAgentLoop({
+        provider,
+        action,
+        confirmed: true,
+        toolFunctions,
+        cancelSignal: controller.signal,
+        createPending: () => ({ action_id: "" }),
+      }),
+    );
+
+    await started;
+    controller.abort();
+
+    const events = await eventsPromise;
+    expect(events.some((event) => event.type === "cancelled")).toBe(true);
   });
 
   it("executes a read-only tool and continues", async () => {
