@@ -256,12 +256,16 @@ export function stripDangerousGitConfig(content: string): string {
   return out2.join("\n");
 }
 
-async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
-  return gitOperationMutex.runExclusive(() => withSanitizedGitConfigUnlocked(fn));
+async function withSanitizedGitConfig<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return gitOperationMutex.runExclusive(() => {
+    if (signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
+    return withSanitizedGitConfigUnlocked(fn, signal);
+  });
 }
 
-async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<T> {
+async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const { readFileSync, writeFileSync, existsSync, lstatSync, realpathSync } = await import("node:fs");
+    if (signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
     const root = getProjectRoot();
     const gitEntry = join(root, ".git");
     let gitDir: string;
@@ -301,12 +305,12 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
     const changed = originals.filter((entry) => entry.sanitized !== entry.content);
     if (changed.length === 0) return fn();
     for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
-    try { return await fn(); }
+    try { if (signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }); return await fn(); }
     finally { for (const entry of changed) { try { writeFileSync(entry.path, entry.content, "utf8"); } catch { } } }
 }
 
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
-  if (!options.holdLock) return gitOperationMutex.runExclusive(() => runIsolatedGit(args, { ...options, holdLock: true }));
+  if (!options.holdLock) return gitOperationMutex.runExclusive(() => { if (options.signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }); return runIsolatedGit(args, { ...options, holdLock: true }); });
   const timeout = options.timeout ?? 15_000;
   const maxBuffer = options.maxBuffer ?? Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000);
   const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
@@ -321,7 +325,7 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     if (!options.skipDynamicOverrides && dynamic.length > 0) {
       return await withSanitizedGitConfigUnlocked(() =>
         runIsolatedGit(args, { ...options, skipDynamicOverrides: true, dynamicOverrides: dynamic, holdLock: true }),
-      );
+      , options.signal);
     }
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
