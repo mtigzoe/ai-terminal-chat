@@ -51,13 +51,28 @@ function ProjectPage() {
     previousRootRef.current = projectRoot;
   }, [projectRoot]);
 
+  const isMemoryEnabled = () => {
+    try {
+      const raw = localStorage.getItem('ai-terminal-chat:memory-enabled');
+      return raw ? raw !== 'false' : true;
+    } catch {
+      return true;
+    }
+  };
+
   const handleUseSelectedFiles = (files) => {
     if (!Array.isArray(files)) return;
+    const storage = isMemoryEnabled() ? localStorage : sessionStorage;
     try {
-      localStorage.setItem(
+      storage.setItem(
         'ai-terminal-chat:pending-files',
         JSON.stringify(files)
       );
+      // Remove a stale value from the other storage area so a later launch
+      // cannot consume file contents under a different memory setting.
+      (storage === localStorage ? sessionStorage : localStorage)
+        .removeItem('ai-terminal-chat:pending-files');
+
       const paths = files.map((f) => f.path).filter(Boolean);
       localStorage.setItem(
         'ai-terminal-chat:allowed-paths',
@@ -70,8 +85,11 @@ function ProjectPage() {
   };
 
   const handleInsertPathIntoTerminal = (path) => {
+    const storage = isMemoryEnabled() ? localStorage : sessionStorage;
     try {
-      localStorage.setItem('ai-terminal-chat:pending-terminal-path', path);
+      storage.setItem('ai-terminal-chat:pending-terminal-path', path);
+      (storage === localStorage ? sessionStorage : localStorage)
+        .removeItem('ai-terminal-chat:pending-terminal-path');
     } catch {
       // ignore
     }

@@ -522,4 +522,26 @@ describe('NVIDIA NIM provider', () => {
       modelSelect.compareDocumentPosition(apiKeyInput) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
+  
+  test('clears pending project context when persistent memory is disabled', async () => {
+    mockProvidersLoad({ currentProvider: 'gemini', models: [] });
+    localStorage.setItem('ai-terminal-chat:memory-enabled', 'true');
+    localStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([{ path: 'secret.txt', content: 'secret' }]));
+    localStorage.setItem('ai-terminal-chat:pending-terminal-path', 'secret.txt');
+    sessionStorage.setItem('ai-terminal-chat:pending-files', JSON.stringify([{ path: 'old.txt', content: 'old' }]));
+    sessionStorage.setItem('ai-terminal-chat:pending-terminal-path', 'old.txt');
+
+    render(<SettingsPage host={HOST} />);
+    await waitFor(() => expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument());
+
+    const toggle = screen.getByRole('switch', { name: /persistent memory/i });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+
+    expect(localStorage.getItem('ai-terminal-chat:memory-enabled')).toBe('false');
+    expect(localStorage.getItem('ai-terminal-chat:pending-files')).toBeNull();
+    expect(localStorage.getItem('ai-terminal-chat:pending-terminal-path')).toBeNull();
+    expect(sessionStorage.getItem('ai-terminal-chat:pending-files')).toBeNull();
+    expect(sessionStorage.getItem('ai-terminal-chat:pending-terminal-path')).toBeNull();
+  });
 });

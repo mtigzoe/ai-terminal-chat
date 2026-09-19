@@ -29,8 +29,9 @@ afterEach(() => {
   }
   try {
     localStorage.clear();
+    sessionStorage.clear();
   } catch {
-    // ignore unavailable localStorage
+    // ignore unavailable storage
   }
 });
 
@@ -210,6 +211,54 @@ describe('client-react smoke tests', () => {
           expect.any(Object)
         );
       });
+    });
+
+    test('memory-disabled file selection stays in session storage and is consumed', async () => {
+      mockAxiosGet({ path: '/tmp/project' });
+      mockAxiosPost({ text: 'ack', tool_activity: [], request_id: 'r1' });
+      defaultFetch();
+      localStorage.setItem('ai-terminal-chat:memory-enabled', 'false');
+      sessionStorage.setItem(
+        'ai-terminal-chat:pending-files',
+        JSON.stringify([{ path: 'README.md', content: '# Session only' }])
+      );
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(axios.post).toHaveBeenCalledWith(
+          expect.stringContaining('/chat'),
+          expect.objectContaining({
+            chat: expect.stringContaining('# Session only'),
+            allowed_paths: ['README.md'],
+          }),
+          expect.any(Object)
+        );
+      });
+      expect(sessionStorage.getItem('ai-terminal-chat:pending-files')).toBeNull();
+      expect(localStorage.getItem('ai-terminal-chat:pending-files')).toBeNull();
+    });
+
+    test('memory-disabled launch ignores and clears stale persistent file contents', async () => {
+      mockAxiosGet({ path: '/tmp/project' });
+      mockAxiosPost({ text: 'ack', tool_activity: [], request_id: 'r1' });
+      defaultFetch();
+      localStorage.setItem('ai-terminal-chat:memory-enabled', 'false');
+      localStorage.setItem(
+        'ai-terminal-chat:pending-files',
+        JSON.stringify([{ path: 'secret.txt', content: 'must not be injected' }])
+      );
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(localStorage.getItem('ai-terminal-chat:pending-files')).toBeNull();
+      });
+      expect(axios.post).not.toHaveBeenCalledWith(
+        expect.stringContaining('/chat'),
+        expect.anything(),
+        expect.anything()
+      );
     });
   });
 });
