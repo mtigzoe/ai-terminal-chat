@@ -11,6 +11,7 @@ import {
   loadProviderSelection,
   persistProviderSelection,
   runWithAllowedReadPaths,
+  runWithProjectRoot,
   withConfigLock,
 } from "./security.ts";
 import { isOllamaCliInstalled, launchOllamaRun } from "./ollama-cli.ts";
@@ -582,7 +583,8 @@ app.post("/chat", async (c) => {
   const cancelSignal = register(requestId);
 
   try {
-    await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
+    await runWithProjectRoot(getProjectRoot(), () =>
+      runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
       for await (const event of runAgentLoop({
         provider,
         contents,
@@ -615,7 +617,8 @@ app.post("/chat", async (c) => {
           cancelled = true;
         }
       }
-    });
+      })
+    );
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
@@ -682,7 +685,8 @@ app.post("/stream", async (c) => {
       const encoder = new TextEncoder();
       (async () => {
         try {
-          await runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
+          await runWithProjectRoot(getProjectRoot(), () =>
+            runWithAllowedReadPaths(extractAllowedPaths(data), async () => {
             for await (const event of runAgentLoop({
               provider,
               contents,
@@ -699,7 +703,8 @@ app.post("/stream", async (c) => {
                 : formatPlainStreamEvent(event);
               controller.enqueue(encoder.encode(line));
             }
-          });
+            })
+          );
         } catch (exc) {
           const event: AgentEvent = { type: "error", message: String(exc) };
           controller.enqueue(encoder.encode(
@@ -893,7 +898,8 @@ app.post("/confirm", async (c) => {
   }
 
   try {
-    await runWithAllowedReadPaths(allowedPaths, async () => {
+    await runWithProjectRoot(getProjectRoot(), () =>
+      runWithAllowedReadPaths(allowedPaths, async () => {
       for await (const event of resumeAgentLoop({
         provider,
         action,
@@ -927,7 +933,8 @@ app.post("/confirm", async (c) => {
           cancelled = true;
         }
       }
-    });
+      })
+    );
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
