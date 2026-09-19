@@ -6,6 +6,8 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 
 const gitStatusMock = vi.hoisted(() => vi.fn());
+const gitAddMock = vi.hoisted(() => vi.fn());
+const gitCommitMock = vi.hoisted(() => vi.fn());
 const ollamaCliInstalledMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/providers/factory.ts", () => {
@@ -41,6 +43,8 @@ vi.mock("../src/providers/factory.ts", () => {
 
 vi.mock("../src/git.ts", () => ({
   gitStatus: gitStatusMock,
+  gitAdd: gitAddMock,
+  gitCommit: gitCommitMock,
   gitDiff: vi.fn(),
   gitLog: vi.fn(),
   gitBranch: vi.fn(),
@@ -773,28 +777,45 @@ describe("POST /confirm", () => {
     expect(data.error).toBeDefined();
   });
 
-  it("keeps a pending confirmation when the confirm request is already cancelled", async () => {
+  it("keeps a pending confirmation when the confirmed tool is cancelled", async () => {
     const action = createPending(
-      "run_command",
-      { command: "pwd" },
+      "git_commit",
+      { message: "cancel me" },
       { requires_confirmation: true },
       undefined,
     );
 
-    const controller = new AbortController();
-    controller.abort();
+    gitCommitMock.mockImplementationOnce(
+      async (_message: string, _confirmed: boolean, signal?: AbortSignal) =>
+        await new Promise((resolve) => {
+          if (signal?.aborted) {
+            resolve({ cancelled: true });
+            return;
+          }
+          signal?.addEventListener("abort", () => resolve({ cancelled: true }), { once: true });
+        }),
+    );
 
-    const res = await createTestApp().request("http://localhost/confirm", {
+    const requestId = "cancelled-confirm-request";
+    const confirmPromise = createTestApp().request("http://localhost/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action_id: action.action_id,
         confirmed: true,
-        request_id: "cancelled-confirm-request",
+        request_id: requestId,
       }),
-      signal: controller.signal,
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const cancelRes = await createTestApp().request(
+      `http://localhost/cancel/${requestId}`,
+      { method: "POST" },
+    );
+    expect(cancelRes.status).toBe(200);
+    expect((await cancelRes.json()).cancelled).toBe(true);
+
+    const res = await confirmPromise;
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.cancelled).toBe(true);
@@ -816,6 +837,16 @@ describe("POST /confirm", () => {
     execSync('git config user.name "Test"', { cwd: root, stdio: "ignore" });
     fs.writeFileSync(path.join(root, "hello.txt"), "hi");
     setProjectRoot(root);
+
+    gitAddMock.mockImplementation(async (target: string, confirm: boolean) =>
+      confirm
+        ? { staged: true, path: target }
+        : {
+            requires_confirmation: true,
+            path: target,
+            action: "stage",
+          },
+    );
 
     try {
       const chatRes = await createTestApp().request("http://localhost/chat", {
