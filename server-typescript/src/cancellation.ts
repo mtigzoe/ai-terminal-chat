@@ -1,5 +1,9 @@
 const MAX_TRACKED_REQUESTS = 200;
 const _EVENTS = new Map<string, AbortController>();
+// A cancel request can arrive before the request handler has registered its
+// request ID. Keep a bounded cancellation intent so that race is still
+// observed when register() runs.
+const _PENDING_CANCELLATIONS = new Set<string>();
 
 export function register(requestId: string): AbortSignal {
   if (_EVENTS.has(requestId)) {
@@ -7,6 +11,7 @@ export function register(requestId: string): AbortSignal {
   }
 
   const controller = new AbortController();
+  if (_PENDING_CANCELLATIONS.delete(requestId)) controller.abort();
   if (_EVENTS.size >= MAX_TRACKED_REQUESTS) {
     const oldestId = _EVENTS.keys().next().value!;
     const oldestController = _EVENTS.get(oldestId);
@@ -19,7 +24,14 @@ export function register(requestId: string): AbortSignal {
 
 export function cancel(requestId: string): boolean {
   const controller = _EVENTS.get(requestId);
-  if (!controller) return false;
+  if (!controller) {
+    if (_PENDING_CANCELLATIONS.size >= MAX_TRACKED_REQUESTS) {
+      const oldest = _PENDING_CANCELLATIONS.values().next().value;
+      if (oldest) _PENDING_CANCELLATIONS.delete(oldest);
+    }
+    _PENDING_CANCELLATIONS.add(requestId);
+    return true;
+  }
   controller.abort();
   return true;
 }
@@ -72,4 +84,5 @@ export function clear(): void {
     controller.abort();
   }
   _EVENTS.clear();
+  _PENDING_CANCELLATIONS.clear();
 }
