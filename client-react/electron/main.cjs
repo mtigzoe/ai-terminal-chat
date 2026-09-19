@@ -259,7 +259,10 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
   const selectedPath = fs.realpathSync.native(result.filePaths[0]);
   authorizedProjectRoots.add(selectedPath);
   saveAuthorizedProjectRoots(app.getPath('userData'), authorizedProjectRoots);
-  projectRoot = selectedPath; // Store for path validation
+  // Authorization is recorded here, but the active root is changed only after
+  // the renderer successfully persists the same root with the backend. This
+  // keeps a failed Apply operation from leaving Electron and the backend out
+  // of sync.
   return selectedPath;
 });
 
