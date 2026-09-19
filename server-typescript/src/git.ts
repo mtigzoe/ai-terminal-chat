@@ -116,13 +116,13 @@ function errorText(error: unknown): string {
   return value.message ?? String(error);
 }
 
-async function readGitIdentityValue(scope: "--local" | "--global", key: "user.name" | "user.email"): Promise<string | undefined> {
+async function readGitIdentityValue(scope: "--local" | "--global", key: "user.name" | "user.email", signal?: AbortSignal): Promise<string | undefined> {
   const env = { ...process.env };
   delete env.GIT_CONFIG; delete env.GIT_CONFIG_GLOBAL; delete env.GIT_CONFIG_SYSTEM; delete env.GIT_CONFIG_NOSYSTEM;
   try {
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
     const result = await execFileAsync(gitExecutable, [scope, "--no-includes", "--get", key], {
-      cwd: getProjectRoot(), shell: false, timeout: 5_000, windowsHide: true, maxBuffer: 8_192, encoding: "utf8", env,
+      cwd: getProjectRoot(), shell: false, timeout: 5_000, signal, windowsHide: true, maxBuffer: 8_192, encoding: "utf8", env,
     });
     const value = String(result.stdout ?? "").trim();
     if (!value || value.length > 256 || /[\u0000\r\n]/.test(value)) return undefined;
@@ -130,9 +130,9 @@ async function readGitIdentityValue(scope: "--local" | "--global", key: "user.na
   } catch { return undefined; }
 }
 
-async function getSafeCommitIdentity(): Promise<{ name?: string; email?: string }> {
-  const name = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME ?? await readGitIdentityValue("--local", "user.name") ?? await readGitIdentityValue("--global", "user.name");
-  const email = process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL ?? await readGitIdentityValue("--local", "user.email") ?? await readGitIdentityValue("--global", "user.email");
+async function getSafeCommitIdentity(signal?: AbortSignal): Promise<{ name?: string; email?: string }> {
+  const name = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME ?? await readGitIdentityValue("--local", "user.name", signal) ?? await readGitIdentityValue("--global", "user.name", signal);
+  const email = process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL ?? await readGitIdentityValue("--local", "user.email", signal) ?? await readGitIdentityValue("--global", "user.email", signal);
   return { name, email };
 }
 
@@ -355,29 +355,29 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
 
 async function runGit(args: string[], timeout: number, holdLock = false, signal?: AbortSignal): Promise<{ code: number; stdout: string; stderr: string }> { return runIsolatedGit(args, { timeout, holdLock, signal }); }
 
-export async function gitStatus(): Promise<Record<string, unknown>> {
-  try { const result = await runGit(["status", "--short", "--branch"], GIT_STATUS_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." }; const status = cap(result.stdout, GIT_STATUS_MAX_CHARS); return { status: status.value, truncated: status.truncated, ...(status.truncated ? { truncation_note: `Status output was truncated to ${GIT_STATUS_MAX_CHARS} characters.` } : {}) }; }
+export async function gitStatus(signal?: AbortSignal): Promise<Record<string, unknown>> {
+  try { const result = await runGit(["status", "--short", "--branch"], GIT_STATUS_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git status failed." }; const status = cap(result.stdout, GIT_STATUS_MAX_CHARS); return { status: status.value, truncated: status.truncated, ...(status.truncated ? { truncation_note: `Status output was truncated to ${GIT_STATUS_MAX_CHARS} characters.` } : {}) }; }
   catch (error) { return { error: errorText(error) }; }
 }
 
-export async function gitCommittedFileCount(): Promise<Record<string, unknown>> {
-  try { const result = await runGit(["ls-tree", "-r", "--name-only", "HEAD"], GIT_STATUS_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "Could not count files in the current commit. The repository may not have a commit yet." }; return { committed_files: result.stdout.split(/\r?\n/).filter(Boolean).length }; }
+export async function gitCommittedFileCount(signal?: AbortSignal): Promise<Record<string, unknown>> {
+  try { const result = await runGit(["ls-tree", "-r", "--name-only", "HEAD"], GIT_STATUS_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "Could not count files in the current commit. The repository may not have a commit yet." }; return { committed_files: result.stdout.split(/\r?\n/).filter(Boolean).length }; }
   catch (error) { return { error: errorText(error) }; }
 }
 
-export async function gitDiff(path = "", staged = false): Promise<Record<string, unknown>> {
+export async function gitDiff(path = "", staged = false, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const args = ["diff", "--no-ext-diff", "--no-textconv"]; if (staged) args.push("--staged");
   const allowed = getAllowedReadPaths();
   if (allowed !== undefined) {
     if (path) { try { const filePath = safePath(path); if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` }; if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` }; const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, "")); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; } }
     else { const selected = [...allowed]; if (selected.length === 0) return { diff: "", truncated: false }; args.push("--", ...selected); }
   } else if (path) { let filePath: string; try { filePath = safePath(path); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; } if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` }; const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, "")); }
-  try { const result = await runGit(args, GIT_DIFF_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." }; const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS); return { diff: diff.value, truncated: diff.truncated, ...(diff.truncated ? { truncation_note: `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.` } : {}) }; }
+  try { const result = await runGit(args, GIT_DIFF_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." }; const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS); return { diff: diff.value, truncated: diff.truncated, ...(diff.truncated ? { truncation_note: `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.` } : {}) }; }
   catch (error) { return { error: errorText(error) }; }
 }
 
-export async function gitLog(maxCount = 10): Promise<Record<string, unknown>> { const numeric = Number(maxCount); if (!Number.isInteger(numeric)) return { error: "max_count must be a whole number." }; const count = Math.max(1, Math.min(numeric, 100)); try { const result = await runGit(["log", `-${count}`, "--oneline", "--decorate"], GIT_LOG_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." }; const log = cap(result.stdout, GIT_LOG_MAX_CHARS); return { log: log.value, truncated: log.truncated, ...(log.truncated ? { truncation_note: `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; } }
-export async function gitBranch(): Promise<Record<string, unknown>> { try { const result = await runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." }; const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS); return { branches: branches.value, truncated: branches.truncated, ...(branches.truncated ? { truncation_note: `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; }
+export async function gitLog(maxCount = 10, signal?: AbortSignal): Promise<Record<string, unknown>> { const numeric = Number(maxCount); if (!Number.isInteger(numeric)) return { error: "max_count must be a whole number." }; const count = Math.max(1, Math.min(numeric, 100)); try { const result = await runGit(["log", `-${count}`, "--oneline", "--decorate"], GIT_LOG_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." }; const log = cap(result.stdout, GIT_LOG_MAX_CHARS); return { log: log.value, truncated: log.truncated, ...(log.truncated ? { truncation_note: `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; } }
+export async function gitBranch(signal?: AbortSignal): Promise<Record<string, unknown>> { try { const result = await runGit(["branch", "--list"], GIT_BRANCH_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git branch failed." }; const branches = cap(result.stdout, GIT_BRANCH_MAX_CHARS); return { branches: branches.value, truncated: branches.truncated, ...(branches.truncated ? { truncation_note: `Branch list was truncated to ${GIT_BRANCH_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; }
 }
 
 async function stageFileWithoutFilters(relativePath: string, absolutePath: string, lexicalPath: string, signal?: AbortSignal): Promise<void> {
@@ -392,7 +392,7 @@ async function restoreWorktreeWithoutFilters(relativePath: string, signal?: Abor
 export async function gitAdd(path: string, confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> {
   let filePath: string; try { filePath = safePath(path); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
   if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` }; if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${path}` };
-  try { const repository = await runGit(["rev-parse", "--show-toplevel"], GIT_ADD_TIMEOUT_MS); if (repository.code !== 0) return { error: "git_add requires the project to be inside a git repository." }; } catch (error) { return { error: errorText(error) }; }
+  try { const repository = await runGit(["rev-parse", "--show-toplevel"], GIT_ADD_TIMEOUT_MS, false, signal); if (repository.code !== 0) return { error: "git_add requires the project to be inside a git repository." }; } catch (error) { return { error: errorText(error) }; }
   const { lstatSync } = await import("node:fs"); try { const lexicalStat = lstatSync(resolve(getProjectRoot(), path.trim())); if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) return { error: "git_add can only stage a single file, not a directory." }; } catch { return { error: `File does not exist: ${path}` }; }
   const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); const relativePath = lexicalPath.slice(root.length).replace(/^[/\\]+/, "");
   if (!confirm) return { requires_confirmation: true, path: relativePath, message: `'${relativePath}' was NOT staged. Ask the user to explicitly confirm it, then call git_add again with confirm=true.` };
@@ -429,10 +429,10 @@ export async function gitRestore(path: string, staged = false, confirm = false, 
   } catch (exc) { return { error: errorText(exc) }; }
 }
 
-async function validateCommitScope(): Promise<Record<string, unknown> | null> {
+async function validateCommitScope(signal?: AbortSignal): Promise<Record<string, unknown> | null> {
   const allowed = getAllowedReadPaths();
   if (allowed === undefined) return null;
-  const result = await runGit(["diff", "--cached", "--name-only", "-z"], GIT_COMMIT_TIMEOUT_MS);
+  const result = await runGit(["diff", "--cached", "--name-only", "-z"], GIT_COMMIT_TIMEOUT_MS, false, signal);
   if (result.code !== 0) return { error: result.stderr.trim() || "Could not inspect staged files." };
   const staged = result.stdout.split("\0").filter(Boolean);
   for (const stagedPath of staged) {
@@ -442,6 +442,6 @@ async function validateCommitScope(): Promise<Record<string, unknown> | null> {
   return null;
 }
 
-export async function gitCommit(message: string, confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> { if (!message || !message.trim()) return { error: "A commit message is required." }; const trimmedMessage = message.trim(); const scopeError = await validateCommitScope(); if (scopeError) return scopeError; if (!confirm) { const diffResult = await gitDiff("", true); let diffText = ""; if (diffResult && typeof diffResult === "object" && "diff" in diffResult) diffText = String(diffResult.diff ?? ""); if (!diffText) return { error: "No staged changes to commit." }; const preview = diffText.slice(0, PREVIEW_CHAR_LIMIT); const previewTruncated = diffText.length > PREVIEW_CHAR_LIMIT; return { requires_confirmation: true, commit_message: trimmedMessage, preview, preview_truncated: previewTruncated, message: `About to commit with message: '${trimmedMessage}'. This creates a new commit in the repository. Confirm to proceed.` }; } try { const identity = await getSafeCommitIdentity(); const identityArgs: string[] = []; if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`); if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`); const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." }; return { output: (result.stdout || "").slice(0, GIT_COMMIT_MAX_CHARS), commit_message: trimmedMessage, committed: true }; } catch (exc) { return { error: errorText(exc) }; } }
+export async function gitCommit(message: string, confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> { if (!message || !message.trim()) return { error: "A commit message is required." }; const trimmedMessage = message.trim(); const scopeError = await validateCommitScope(signal); if (scopeError) return scopeError; if (!confirm) { const diffResult = await gitDiff("", true, signal); let diffText = ""; if (diffResult && typeof diffResult === "object" && "diff" in diffResult) diffText = String(diffResult.diff ?? ""); if (!diffText) return { error: "No staged changes to commit." }; const preview = diffText.slice(0, PREVIEW_CHAR_LIMIT); const previewTruncated = diffText.length > PREVIEW_CHAR_LIMIT; return { requires_confirmation: true, commit_message: trimmedMessage, preview, preview_truncated: previewTruncated, message: `About to commit with message: '${trimmedMessage}'. This creates a new commit in the repository. Confirm to proceed.` }; } try { const identity = await getSafeCommitIdentity(signal); const identityArgs: string[] = []; if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`); if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`); const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS, false, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." }; return { output: (result.stdout || "").slice(0, GIT_COMMIT_MAX_CHARS), commit_message: trimmedMessage, committed: true }; } catch (exc) { return { error: errorText(exc) }; } }
 
 export async function gitPush(remote = "", branch = "", confirm = false, signal?: AbortSignal): Promise<Record<string, unknown>> { if (!confirm) return { requires_confirmation: true, remote: remote || "default", branch: branch || "current", message: `This will push commits to '${remote || "default"}' on branch '${branch || "current branch"}'. This updates the remote repository. Confirm to proceed.` }; const args = ["push", "--no-recurse-submodules", "--receive-pack=git-receive-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } if (branch) { const validation = safeValidate(validateGitBranch, branch); if ("error" in validation) return validation; args.push(validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_PUSH_TIMEOUT_MS, true, signal); if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." }; return { output: (result.stdout || "").slice(0, GIT_PUSH_MAX_CHARS), remote: remote || "default", branch: branch || "current", pushed: true }; }); } catch (exc) { return { error: errorText(exc) }; } }
