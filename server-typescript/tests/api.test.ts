@@ -460,6 +460,22 @@ describe("POST /terminal/run", () => {
     expect(data.command).toBe("pwd");
     expect(typeof data.returncode).toBe("number");
   });
+
+  it("cancels terminal execution when the HTTP request is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const res = await createTestApp().request("http://localhost/terminal/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: "pwd" }),
+      signal: controller.signal,
+    });
+
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toBe("Command cancelled.");
+  });
 });
 
 describe("POST /chat", () => {
