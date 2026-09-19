@@ -75,11 +75,12 @@ export class AnthropicProvider extends Provider {
       }),
     }, signal);
 
-    if (!response.ok) {
-      throw new Error(await this.apiError(response, "Anthropic request failed"));
-    }
+    try {
+      if (!response.ok) {
+        throw new Error(await this.apiError(response, "Anthropic request failed"));
+      }
 
-    const data = (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as Record<string, unknown>;
     const blocks = Array.isArray(data.content) ? data.content as AnthropicContentBlock[] : [];
     const toolCalls: ToolCall[] = blocks
       .filter((block) => block.type === "tool_use" && typeof block.name === "string")
@@ -93,7 +94,16 @@ export class AnthropicProvider extends Provider {
       .map((block) => block.text || "")
       .join("") || null;
 
-    return { text, tool_calls: toolCalls, raw: blocks };
+      return { text, tool_calls: toolCalls, raw: blocks };
+    } catch (exc) {
+      if (exc instanceof Error && (exc.name === "AbortError" || exc.name === "TimeoutError")) {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Anthropic request cancelled."), { code: "ABORT_ERR" });
+        }
+        throw new Error("Anthropic request timed out.");
+      }
+      throw exc;
+    }
   }
 
   appendModelTurn(contents: unknown[], response: ProviderResponse): unknown[] {
