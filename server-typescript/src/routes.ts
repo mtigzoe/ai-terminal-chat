@@ -11,6 +11,7 @@ import {
   loadProviderSelection,
   persistProviderSelection,
   runWithAllowedReadPaths,
+  runWithProjectRoot,
   withConfigLock,
 } from "./security.ts";
 import { isOllamaCliInstalled, launchOllamaRun } from "./ollama-cli.ts";
