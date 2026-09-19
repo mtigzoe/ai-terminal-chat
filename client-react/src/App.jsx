@@ -225,7 +225,13 @@ function App() {
         if (typeof path === 'string' && path.trim()) {
           const paths = Array.from(new Set([...resolveAllowedPaths(), path.trim()]));
           setAllowedPaths(paths);
-          try { localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths)); } catch {}
+          try {
+            const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false';
+            const storage = memoryEnabled ? localStorage : sessionStorage;
+            const otherStorage = memoryEnabled ? sessionStorage : localStorage;
+            storage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(paths));
+            otherStorage.removeItem('ai-terminal-chat:allowed-paths');
+          } catch {}
           window.dispatchEvent(new CustomEvent('ai-terminal-chat:allowed-paths-changed', { detail: { paths } }));
         }
       }
