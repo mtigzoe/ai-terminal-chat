@@ -5,7 +5,7 @@ describe("cancellation", () => {
   beforeEach(() => {
     clear();
   });
-});
+
   it("register returns a fresh unset signal", () => {
     const signal = register("req-1");
     expect(signal.aborted).toBe(false);
