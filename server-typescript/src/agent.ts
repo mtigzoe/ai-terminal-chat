@@ -1158,26 +1158,21 @@ async function executeTool(
   const onParentAbort = () => controller.abort();
   if (cancelSignal?.aborted) controller.abort();
   else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
-  const timeoutHandle = setTimeout(
-    () => {
+  let timeoutHandle: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
       controller.abort();
-    },
-    timeoutSeconds * 1000
-  );
+      reject(
+        new Error(
+          `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
+        )
+      );
+    }, timeoutSeconds * 1000);
+  });
   try {
     return await Promise.race([
       Promise.resolve(fn(args, controller.signal)),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(
-              new Error(
-                `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
-              )
-            );
-          },
-          timeoutSeconds * 1000
-        )
-      ),
+      timeoutPromise,
     ]);
   } catch (exc) {
     if (cancelSignal?.aborted) {
