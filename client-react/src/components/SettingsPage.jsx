@@ -415,6 +415,9 @@ const SettingsPage = ({ host }) => {
     setMemoryStatus('');
     try {
       localStorage.setItem('ai-terminal-chat:memory-enabled', next ? 'true' : 'false');
+      if (!next) {
+        localStorage.removeItem('ai-terminal-chat:allowed-paths');
+      }
       setMemoryStatus(next ? 'Memory persistence enabled.' : 'Memory persistence disabled.');
     } catch {
       setMemoryStatus('Could not save memory setting.');
