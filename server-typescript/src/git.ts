@@ -154,16 +154,71 @@ export interface IsolatedGitOptions {
 class GitOperationMutex {
   private chain: Promise<unknown> = Promise.resolve();
   private depth = 0;
-  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.chain.then(async () => { this.depth++; try { return await fn(); } finally { this.depth--; } }, async () => { this.depth++; try { return await fn(); } finally { this.depth--; } });
+  runExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) {
+      return Promise.reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }));
+    }
+
+    const run = this.chain.then(
+      async () => {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
+        }
+        this.depth++;
+        try {
+          return await fn();
+        } finally {
+          this.depth--;
+        }
+      },
+      async () => {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" });
+        }
+        this.depth++;
+        try {
+          return await fn();
+        } finally {
+          this.depth--;
+        }
+      },
+    );
     this.chain = run.then(() => undefined, () => undefined);
-    return run;
+
+    if (!signal) return run;
+
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }));
+      };
+
+      signal.addEventListener("abort", onAbort, { once: true });
+      run.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(value);
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        },
+      );
+    });
   }
   get isHeld(): boolean { return this.depth > 0; }
 }
 
 const gitOperationMutex = new GitOperationMutex();
-export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T> { return gitOperationMutex.runExclusive(fn); }
+export function withGitOperationLockForTests<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> { return gitOperationMutex.runExclusive(fn, signal); }
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
 
 const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$/i;
@@ -310,7 +365,7 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>, signal?: 
 }
 
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
-  if (!options.holdLock) return gitOperationMutex.runExclusive(() => { if (options.signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }); return runIsolatedGit(args, { ...options, holdLock: true }); });
+  if (!options.holdLock) return gitOperationMutex.runExclusive(() => { if (options.signal?.aborted) throw Object.assign(new Error("Git command cancelled."), { code: "ABORT_ERR" }); return runIsolatedGit(args, { ...options, holdLock: true }); }, options.signal);
   const timeout = options.timeout ?? 15_000;
   const maxBuffer = options.maxBuffer ?? Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000);
   const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
