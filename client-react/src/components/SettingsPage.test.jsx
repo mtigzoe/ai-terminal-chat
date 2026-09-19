@@ -523,3 +523,25 @@ describe('NVIDIA NIM provider', () => {
     ).toBeTruthy();
   });
 });
+
+
+test('clears persisted agent file permissions when persistent memory is disabled', async () => {
+  await renderLoaded();
+  localStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['src/App.jsx']));
+  localStorage.setItem('project-explorer:http://localhost:9000:selected', JSON.stringify(['src/App.jsx']));
+  localStorage.setItem('project-explorer:http://localhost:9000:expanded', JSON.stringify(['src']));
+  sessionStorage.setItem('ai-terminal-chat:allowed-paths', JSON.stringify(['src/App.jsx']));
+
+  const toggle = screen.getByRole('switch', { name: /persistent memory/i });
+  expect(toggle).toBeChecked();
+
+  fireEvent.click(toggle);
+
+  await waitFor(() => {
+    expect(localStorage.getItem('ai-terminal-chat:memory-enabled')).toBe('false');
+    expect(localStorage.getItem('ai-terminal-chat:allowed-paths')).toBeNull();
+    expect(localStorage.getItem('project-explorer:http://localhost:9000:selected')).toBeNull();
+    expect(localStorage.getItem('project-explorer:http://localhost:9000:expanded')).toBeNull();
+  });
+  expect(sessionStorage.getItem('ai-terminal-chat:allowed-paths')).toBeTruthy();
+});
