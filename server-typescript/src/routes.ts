@@ -557,6 +557,7 @@ app.post("/chat", async (c) => {
 
   const msg = String(data.chat || "").trim();
   const history: unknown[] = Array.isArray(data.history) ? data.history : [];
+  const userInstructions = typeof data.user_instructions === "string" ? data.user_instructions.trim() || undefined : undefined;
   const requestId = String(data.request_id || crypto.randomUUID());
 
   if (!msg) {
@@ -566,7 +567,7 @@ app.post("/chat", async (c) => {
   const provider = getActiveProvider();
   let contents: unknown[];
   try {
-    contents = provider.buildContents(msg, history);
+    contents = provider.buildContents(msg, history, userInstructions);
   } catch (exc) {
     return c.json(
       { text: "", error: `Could not process conversation history: ${exc}` },
@@ -659,6 +660,7 @@ app.post("/stream", async (c) => {
 
   const msg = String(data.chat || "").trim();
   const history: unknown[] = Array.isArray(data.history) ? data.history : [];
+  const userInstructions = typeof data.user_instructions === "string" ? data.user_instructions.trim() || undefined : undefined;
   const requestId = String(data.request_id || crypto.randomUUID());
 
   if (!msg) {
@@ -668,7 +670,7 @@ app.post("/stream", async (c) => {
   const provider = getActiveProvider();
   let contents: unknown[];
   try {
-    contents = provider.buildContents(msg, history);
+    contents = provider.buildContents(msg, history, userInstructions);
   } catch (exc) {
     return c.text(`[Error building request: ${exc}]`);
   }
