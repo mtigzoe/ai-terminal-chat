@@ -191,6 +191,23 @@ describe('loading settings', () => {
 });
 
 describe('provider selection persistence', () => {
+  test('restores the cached provider when the backend starts with a different default', async () => {
+    localStorage.setItem('ai-terminal-chat:provider-selection', JSON.stringify({
+      provider: 'ollama',
+      model: 'qwen3.5',
+      ollama_hostname: 'cyber.local:11434',
+    }));
+    await renderLoaded({ provider: 'gemini', model: 'gemini-3.6-flash' });
+
+    expect(axios.post).toHaveBeenCalledWith(`${HOST}/providers/select`, {
+      provider: 'ollama',
+      model: 'qwen3.5',
+      ollama_base_url: 'cyber.local:11434',
+    });
+    expect(screen.getByLabelText(/ai provider/i)).toHaveValue('ollama');
+    expect(screen.getByLabelText(/^model$/i)).toHaveValue('qwen3.5');
+  });
+
   test('persists a provider change immediately so closing without Save still restores it', async () => {
     await renderLoaded({ provider: 'gemini', model: 'gemini-3.6-flash' });
     axios.post.mockImplementation((url, payload) => {
