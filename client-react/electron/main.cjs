@@ -258,6 +258,7 @@ ipcMain.handle('dialog:chooseFolder', async (event, defaultPath) => {
   }
   const selectedPath = fs.realpathSync.native(result.filePaths[0]);
   authorizedProjectRoots.add(selectedPath);
+  saveAuthorizedProjectRoots(app.getPath('userData'), authorizedProjectRoots);
   projectRoot = selectedPath; // Store for path validation
   return selectedPath;
 });
