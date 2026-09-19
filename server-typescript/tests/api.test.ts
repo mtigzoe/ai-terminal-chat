@@ -779,50 +779,66 @@ describe("POST /confirm", () => {
   });
 
   it("keeps a pending confirmation when the confirmed tool is cancelled", async () => {
-    const action = createPending(
-      "git_commit",
-      { message: "cancel me" },
-      { requires_confirmation: true },
-      undefined,
-    );
+    // git_commit confirmations bind to the Git index. Keep this regression
+    // test in an isolated repository so unrelated tests cannot change the
+    // shared checkout's index between createPending() and /confirm.
+    const originalRoot = getProjectRoot();
+    const root = path.join(os.tmpdir(), `confirm-cancel-${Date.now()}`);
+    fs.mkdirSync(root, { recursive: true });
+    execSync("git init -q", { cwd: root, stdio: "ignore" });
+    execSync('git config user.email "test@example.com"', { cwd: root, stdio: "ignore" });
+    execSync('git config user.name "Test"', { cwd: root, stdio: "ignore" });
+    setProjectRoot(root);
 
-    gitCommitMock.mockImplementationOnce(
-      async (_message: string, _confirmed: boolean, signal?: AbortSignal) =>
-        await new Promise((_resolve, reject) => {
-          const rejectCancelled = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-          if (signal?.aborted) {
-            rejectCancelled();
-            return;
-          }
-          signal?.addEventListener("abort", rejectCancelled, { once: true });
+    try {
+      const action = createPending(
+        "git_commit",
+        { message: "cancel me" },
+        { requires_confirmation: true },
+        undefined,
+      );
+
+      gitCommitMock.mockImplementationOnce(
+        async (_message: string, _confirmed: boolean, signal?: AbortSignal) =>
+          await new Promise((_resolve, reject) => {
+            const rejectCancelled = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            if (signal?.aborted) {
+              rejectCancelled();
+              return;
+            }
+            signal?.addEventListener("abort", rejectCancelled, { once: true });
+          }),
+      );
+
+      const requestId = "cancelled-confirm-request";
+      const confirmPromise = createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action_id: action.action_id,
+          confirmed: true,
+          request_id: requestId,
         }),
-    );
+      });
 
-    const requestId = "cancelled-confirm-request";
-    const confirmPromise = createTestApp().request("http://localhost/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action_id: action.action_id,
-        confirmed: true,
-        request_id: requestId,
-      }),
-    });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const cancelRes = await createTestApp().request(
+        `http://localhost/cancel/${requestId}`,
+        { method: "POST" },
+      );
+      expect(cancelRes.status).toBe(200);
+      expect((await cancelRes.json()).cancelled).toBe(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const cancelRes = await createTestApp().request(
-      `http://localhost/cancel/${requestId}`,
-      { method: "POST" },
-    );
-    expect(cancelRes.status).toBe(200);
-    expect((await cancelRes.json()).cancelled).toBe(true);
-
-    const res = await confirmPromise;
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.cancelled).toBe(true);
-    expect(data.result).toBeUndefined();
-    expect(getPending(action.action_id)?.action_id).toBe(action.action_id);
+      const res = await confirmPromise;
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.cancelled).toBe(true);
+      expect(data.result).toBeUndefined();
+      expect(getPending(action.action_id)?.action_id).toBe(action.action_id);
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("resumes the agent loop end-to-end after a real /chat confirmation", async () => {
