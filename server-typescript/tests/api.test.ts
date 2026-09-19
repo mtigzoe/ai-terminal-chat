@@ -773,6 +773,44 @@ describe("POST /confirm", () => {
     expect(data.error).toBeDefined();
   });
 
+  it("keeps a pending confirmation when the confirm request is already cancelled", async () => {
+    const action = createPending(
+      "git_add",
+      { path: "cancelled-confirm.txt" },
+      { requires_confirmation: true },
+      {
+        provider_fingerprint: providerFingerprint(getProvider()),
+        contents: [],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [],
+        last_call_signature: null,
+        consecutive_repeat_count: 0,
+        consecutive_error_count: 0,
+      },
+    );
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const res = await createTestApp().request("http://localhost/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action_id: action.action_id,
+        confirmed: true,
+        request_id: "cancelled-confirm-request",
+      }),
+      signal: controller.signal,
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.cancelled).toBe(true);
+    expect(data.result).toBeUndefined();
+    expect(getPending(action.action_id)?.action_id).toBe(action.action_id);
+  });
+
   it("resumes the agent loop end-to-end after a real /chat confirmation", async () => {
     // Regression test for the /confirm handler running the confirmed tool
     // in isolation and stopping, instead of letting the model take another
