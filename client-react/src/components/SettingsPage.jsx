@@ -153,6 +153,7 @@ const SettingsPage = ({ host }) => {
         // backend response overwrites the cached UI selection.
         const cached = readStoredProvider();
         let restored = providerResponse.data;
+        let restoreError = '';
         if (
           cached?.provider &&
           (providerResponse.data.providers || []).includes(cached.provider) &&
@@ -170,12 +171,10 @@ const SettingsPage = ({ host }) => {
             const restoreResponse = await axios.post(host + '/providers/select', payload);
             restored = restoreResponse.data;
           } catch (error) {
-            setStatusIsError(true);
-            setStatusMessage(
+            restoreError =
               error?.response?.data?.error ||
-                error?.message ||
-                'Could not restore the saved provider selection.'
-            );
+              error?.message ||
+              'Could not restore the saved provider selection.';
           }
         }
 
@@ -186,7 +185,8 @@ const SettingsPage = ({ host }) => {
           checkOllamaCli();
         }
         setAllowedCommands(allowedCommandsResponse.data.commands || []);
-        if (!statusIsError) setStatusMessage('');
+        setStatusIsError(Boolean(restoreError));
+        setStatusMessage(restoreError);
         void loadModels(restored.name, restored.model || '');
       } catch {
         if (active) {
