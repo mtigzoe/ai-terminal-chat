@@ -124,3 +124,73 @@ def test_pop_pending_rejects_apply_patch_when_listed_file_changes(tmp_path, monk
     target.write_text("changed after preview\n", encoding="utf-8")
 
     assert pop_pending(action.action_id) is None
+
+
+def test_pop_pending_rejects_git_commit_when_index_changes(tmp_path, monkeypatch):
+    """git_commit confirmation is bound to the git index fingerprint."""
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    index = git_dir / "index"
+    index.write_bytes(b"DIRC\x00\x00\x00\x02original-index")
+
+    action = create_pending(
+        "git_commit",
+        {"message": "test"},
+        {"requires_confirmation": True},
+    )
+    assert get_pending(action.action_id) is not None
+    states = action.confirmation_file_state
+    assert states is not None
+    assert any(s.get("kind") == "git_index" for s in states)
+
+    index.write_bytes(b"DIRC\x00\x00\x00\x02changed-index-bytes")
+
+    assert pop_pending(action.action_id) is None
+
+
+def test_pop_pending_rejects_git_push_when_head_changes(tmp_path, monkeypatch):
+    """git_push confirmation is bound to HEAD/branch and remote config."""
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    refs = git_dir / "refs" / "heads"
+    refs.mkdir(parents=True)
+    (refs / "main").write_text("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", encoding="utf-8")
+    (git_dir / "config").write_text(
+        "[remote \"origin\"]\n\turl = https://example.com/repo.git\n",
+        encoding="utf-8",
+    )
+
+    action = create_pending(
+        "git_push",
+        {"remote": "origin", "branch": "main"},
+        {"requires_confirmation": True},
+    )
+    assert get_pending(action.action_id) is not None
+    kinds = {s.get("kind") for s in (action.confirmation_file_state or [])}
+    assert "git_head" in kinds
+    assert "git_remote" in kinds
+
+    (refs / "main").write_text("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", encoding="utf-8")
+
+    assert pop_pending(action.action_id) is None
+
+
+def test_pop_pending_allows_git_commit_when_index_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (git_dir / "index").write_bytes(b"DIRCstable-index")
+
+    action = create_pending(
+        "git_commit",
+        {"message": "ok"},
+        {"requires_confirmation": True},
+    )
+    consumed = pop_pending(action.action_id)
+    assert consumed is not None
+    assert consumed.tool_name == "git_commit"
