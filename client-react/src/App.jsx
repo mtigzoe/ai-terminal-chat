@@ -212,6 +212,42 @@ function App() {
   useEffect(() => { const sync = () => { try { const memoryEnabled = localStorage.getItem('ai-terminal-chat:memory-enabled') !== 'false'; if (!memoryEnabled) localStorage.removeItem('ai-terminal-chat:allowed-paths'); const storage = memoryEnabled ? localStorage : sessionStorage; const raw = storage.getItem('ai-terminal-chat:allowed-paths'); if (!raw) { setAllowedPaths([]); return; } const parsed = JSON.parse(raw); setAllowedPaths(Array.isArray(parsed) ? parsed : []); } catch { setAllowedPaths([]); } }; const onVisible = () => { if (document.visibilityState === 'visible') sync(); }; window.addEventListener('focus', sync); document.addEventListener('visibilitychange', onVisible); const onStorage = (event) => { if (event.key === 'ai-terminal-chat:allowed-paths' || event.key === 'ai-terminal-chat:memory-enabled') sync(); }; window.addEventListener('storage', onStorage); return () => { window.removeEventListener('focus', sync); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('storage', onStorage); }; }, []);
   useEffect(() => { const regions = ['chat', 'terminal']; const focusRegion = (id) => { if (id === 'chat') { inputRef.current?.focus(); return; } if (id === 'terminal') window.setTimeout(() => document.querySelector('[data-focus-target="terminal-input"]')?.focus?.(), 0); }; const onKeyDown = (event) => { if (event.key !== 'F6') return; event.preventDefault(); const active = document.activeElement; let current = 'chat'; if (active?.closest?.('[data-focus-region="terminal"]') || active?.getAttribute?.('data-focus-target') === 'terminal-input') current = 'terminal'; else if (active === inputRef.current || active?.closest?.('.chat-app')) current = 'chat'; const index = regions.indexOf(current); const nextIndex = event.shiftKey ? (index - 1 + regions.length) % regions.length : (index + 1) % regions.length; focusRegion(regions[nextIndex]); }; window.addEventListener('keydown', onKeyDown); return () => window.removeEventListener('keydown', onKeyDown); }, []);
 
+  // Navigating away (Settings/History/Project) or closing the tab must decline
+  // any pending confirmation and cancel an in-flight request. Otherwise the
+  // server keeps the pending action until capacity eviction.
+  useEffect(() => {
+    const onPageHide = () => {
+      const confirmationRequestId = confirmationRequestIdRef.current;
+      const pending = pendingConfirmation;
+      if (pending && confirmationRequestId && pending.action_id) {
+        confirmationRequestIdRef.current = null;
+        const body = JSON.stringify({
+          action_id: pending.action_id,
+          confirmed: false,
+          allowed_paths: resolveAllowedPaths(),
+        });
+        try {
+          fetch(`${host}/confirm`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+            keepalive: true,
+          }).catch(() => {});
+        } catch { /* ignore */ }
+      }
+      const activeRequestId = requestIdRef.current;
+      if (activeRequestId) {
+        requestIdRef.current = null;
+        try {
+          fetch(`${host}/cancel/${activeRequestId}`, { method: 'POST', keepalive: true }).catch(() => {});
+        } catch { /* ignore */ }
+      }
+      abortControllerRef.current?.abort();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [pendingConfirmation, host]);
+
   function executeScroll() { const element = document.getElementById('checkpoint'); if (element) element.scrollIntoView({ behavior: 'smooth' }); }
   function validationCheck(str) { return str === null || str.match(/^\s*$/) !== null; }
   function getErrorMessage(error, fallback = "Request failed.") { const serverMessage = error?.response?.data?.error; if (serverMessage) return serverMessage; if (error?.response == null && (error?.message === "Network Error" || error?.code === "ERR_NETWORK" || error?.code === "ECONNABORTED")) { const base = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/$/, ""); const code = error?.code ? ` (${error.code})` : ""; const detail = error?.message && error.message !== "Network Error" ? ` ${error.message}` : ""; return (`Cannot reach the backend at ${base}${code}.${detail} Confirm the backend server is running (for example: npm run dev in server-typescript) and that VITE_API_URL matches its address if you changed the default.`).replace(/\s+/g, " ").trim(); } if (error?.message) return error.message; return fallback; }

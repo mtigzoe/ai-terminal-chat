@@ -230,6 +230,59 @@ describe('non-streaming chat lifecycle', () => {
     });
   });
 
+  test('pagehide while confirmation is pending declines the action via /confirm with keepalive', async () => {
+    let confirmCall = 0;
+    let confirmInit = null;
+
+    globalThis.fetch = vi.fn().mockImplementation((url, init) => {
+      if (String(url).includes('/confirm')) {
+        confirmCall += 1;
+        confirmInit = init;
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    axios.post.mockImplementation((url) => {
+      if (url.includes('/confirm')) {
+        return Promise.resolve({ data: { confirmed: false, cancelled: true } });
+      }
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-pagehide',
+              name: 'write_file',
+              args: { path: 'secret.txt' },
+            },
+          ],
+          request_id: 'req-pagehide',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write secret.txt');
+    await screen.findByRole('dialog', { name: /confirmation required/i });
+
+    window.dispatchEvent(new Event('pagehide'));
+
+    await waitFor(() => {
+      expect(confirmCall).toBe(1);
+    });
+    expect(confirmInit).toEqual(expect.objectContaining({
+      method: 'POST',
+      keepalive: true,
+    }));
+    const body = JSON.parse(confirmInit.body);
+    expect(body).toEqual(expect.objectContaining({
+      action_id: 'action-pagehide',
+      confirmed: false,
+    }));
+  });
+
   test('starting a new chat while confirmation is pending declines the action via /confirm', async () => {
     let confirmCall = 0;
     let confirmBody = null;
