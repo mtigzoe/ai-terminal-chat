@@ -596,6 +596,45 @@ describe('streaming tool confirmation resolution', () => {
     }
   }
 
+  test('streaming confirm error records the error string, not the message object', async () => {
+    const streamChunks = [
+      JSON.stringify({
+        type: 'pending_confirmation',
+        action_id: 'action-err',
+        name: 'write_file',
+        args: { path: 'x.txt' },
+      }) + '\n',
+    ];
+    global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(streamChunks));
+
+    render(<App />);
+    enableStreaming();
+    await sendMessage('write x');
+
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+
+    axios.post.mockImplementation((url) => {
+      if (String(url).includes('/confirm')) {
+        const err = new Error('Request failed');
+        err.response = { status: 500, data: { error: 'confirm failed hard' } };
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ data: { text: '' } });
+    });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    // Regression: the map callback used to shadow the error string with the
+    // chat message object, so tool_result.error became the message object.
+    const page = document.body.textContent || '';
+    expect(page).not.toMatch(/\[object Object\]/);
+    expect(page).toMatch(/confirm failed hard/);
+  });
+
   test('resolves confirmation during streaming and appends final text to streaming buffer', async () => {
     // First, the stream returns a pending_confirmation event
     const streamChunks = [

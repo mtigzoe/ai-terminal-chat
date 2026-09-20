@@ -398,9 +398,9 @@ function App() {
         setWaiting(false);
       }
     } catch (error) {
-      const message = getErrorMessage(error, 'Could not resolve confirmation.');
+      const errorMessage = getErrorMessage(error, 'Could not resolve confirmation.');
       if (confirmationRequestIdRef.current !== confirmationRequestId) return;
-      setAgentStatus({ phase: 'error', message, assertive: true });
+      setAgentStatus({ phase: 'error', message: errorMessage, assertive: true });
       // The server consumes a pending action before it can fail, so once it has
       // answered at all this action_id is dead. Close the dialog instead of
       // leaving Allow wired to an id that can only ever return 404 from here on.
@@ -412,12 +412,12 @@ function App() {
         // Also clean up the pending model message on error
         if (is_stream) {
           setData((current) => {
-            return current.map((message) => {
-              if (message.role === 'model' && message.pendingConfirmation) {
-                const { pendingConfirmation, ...rest } = message;
-                return { ...rest, toolActivity: [...(message.toolActivity || []), { type: 'tool_result', name: action.name, result: { error: message } }] };
+            return current.map((msg) => {
+              if (msg.role === 'model' && msg.pendingConfirmation) {
+                const { pendingConfirmation, ...rest } = msg;
+                return { ...rest, toolActivity: [...(msg.toolActivity || []), { type: 'tool_result', name: action.name, result: { error: errorMessage } }] };
               }
-              return message;
+              return msg;
             });
           });
           showStreamdiv(false);
@@ -425,7 +425,7 @@ function App() {
           setStreamToolActivity([]);
           setWaiting(false);
         }
-        setStreamToolActivity((current) => [...current, { type: 'tool_result', name: action.name, result: { error: message } }]);
+        setStreamToolActivity((current) => [...current, { type: 'tool_result', name: action.name, result: { error: errorMessage } }]);
       }
     } finally {
       confirmingRef.current = false;
