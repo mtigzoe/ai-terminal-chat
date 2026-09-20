@@ -62,11 +62,13 @@ def test_registering_the_same_id_twice_resets_the_event():
 def test_oldest_entry_is_evicted_once_capacity_is_reached(monkeypatch):
     monkeypatch.setattr(cancellation, "MAX_TRACKED_REQUESTS", 2)
 
-    cancellation.register("req-1")
+    first = cancellation.register("req-1")
     cancellation.register("req-2")
     cancellation.register("req-3")
 
-    # req-1 was evicted; cancel now records a pending intent.
+    # req-1 was evicted and must be signalled so its agent loop can stop.
+    assert first.is_set() is True
+    # req-1 is no longer live; cancel records a pending intent.
     assert cancellation.cancel("req-1") is True
     event = cancellation.register("req-1")
     assert event.is_set() is True

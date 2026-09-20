@@ -31,7 +31,8 @@ def register(request_id: str) -> Event:
     """Create (or reset) the cancellation event for a request id.
 
     If a cancel intent was recorded before registration, the returned
-    event is already set.
+    event is already set. When the registry is at capacity the oldest
+    tracked request is cancelled and evicted (mirrors TypeScript).
     """
 
     event = Event()
@@ -42,7 +43,8 @@ def register(request_id: str) -> Event:
         if request_id in _EVENTS:
             del _EVENTS[request_id]
         if len(_EVENTS) >= MAX_TRACKED_REQUESTS:
-            _EVENTS.popitem(last=False)
+            _oldest_id, oldest_event = _EVENTS.popitem(last=False)
+            oldest_event.set()
         _EVENTS[request_id] = event
     return event
 
