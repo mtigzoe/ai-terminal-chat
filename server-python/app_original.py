@@ -87,7 +87,14 @@ API_KEY_ENV_VARS = {
 }
 
 app = Flask(__name__)
+# Match TypeScript's 2 MiB request body limit (request-body-limit.ts).
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 CORS(app)
+
+
+@app.errorhandler(413)
+def handle_payload_too_large(_exc):
+    return {"error": "Payload Too Large"}, 413
 
 
 @app.errorhandler(Exception)

@@ -572,6 +572,19 @@ def test_stream_client_disconnect_cancels_agent_and_releases(client, monkeypatch
     assert "disconnect-me" in released_ids, "client disconnect must release tracking"
 
 
+
+def test_oversized_request_body_is_rejected(client):
+    """Request bodies larger than MAX_CONTENT_LENGTH must return 413."""
+    # 2 MiB + 1 byte of JSON-ish payload
+    huge = "x" * (2 * 1024 * 1024 + 1)
+    response = client.post(
+        "/chat",
+        data=huge,
+        content_type="application/json",
+    )
+    assert response.status_code == 413
+
+
 # Global error handler (app.handle_unexpected_error)
 # ---------------------------------------------------------
 
