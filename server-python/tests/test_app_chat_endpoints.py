@@ -281,7 +281,11 @@ def test_chat_unexpected_internal_error_does_not_crash_server(client, monkeypatc
 
 
 def test_chat_releases_cancellation_tracking_after_completion(client, monkeypatch):
-    """A finished request's id must not remain tracked as cancellable."""
+    """A finished request's id is released from the live registry.
+
+    A subsequent cancel is still acknowledged (pending-intent semantics)
+    but does not imply the completed request is still running.
+    """
 
     _set_provider(monkeypatch, FakeProvider([ProviderResponse(text="done")]))
 
@@ -290,8 +294,10 @@ def test_chat_releases_cancellation_tracking_after_completion(client, monkeypatc
     )
     assert response.status_code == 200
 
+    # Live tracking was released; cancel records a fresh pending intent.
     cancel_response = client.post("/cancel/track-me")
-    assert cancel_response.get_json()["cancelled"] is False
+    assert cancel_response.status_code == 200
+    assert cancel_response.get_json()["cancelled"] is True
 
 
 # ---------------------------------------------------------
