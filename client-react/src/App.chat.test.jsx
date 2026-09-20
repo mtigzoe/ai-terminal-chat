@@ -167,6 +167,68 @@ describe('non-streaming chat lifecycle', () => {
     expect(getTextarea()).not.toBeDisabled();
   });
 
+  test('cancelling a pending confirmation declines it and re-enables input', async () => {
+    let confirmCall = 0;
+
+    axios.post.mockImplementation((url) => {
+      if (url.includes('/confirm')) {
+        confirmCall += 1;
+        return Promise.resolve({
+          data: {
+            confirmed: false,
+            cancelled: true,
+            action_id: 'action-1',
+            result: { cancelled: true },
+            tool_activity: [
+              {
+                type: 'tool_result',
+                name: 'write_file',
+                result: { cancelled: true, message: 'Action declined by user.' },
+              },
+            ],
+            text: '',
+            request_id: 'req-confirm-cancel',
+          },
+        });
+      }
+
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-1',
+              name: 'write_file',
+              args: { path: 'secret.txt' },
+            },
+          ],
+          request_id: 'req-confirm-cancel',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write secret.txt');
+
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel response/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    expect(confirmCall).toBe(1);
+
+
+    const textarea = getTextarea();
+    fireEvent.change(textarea, { target: { value: 'next message' } });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /send message/i })).not.toBeDisabled();
+    });
+  });
   test('cancelling an in-flight request stops it, notifies the backend, and re-enables input', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     axios.post.mockImplementation((url, data, config) => (
