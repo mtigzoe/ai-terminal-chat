@@ -288,6 +288,10 @@ def safe_path(path: str) -> Path:
     if not path or not str(path).strip():
         raise ValueError("A path is required.")
 
+    # Null bytes are never valid in OS path APIs and can truncate paths.
+    if "\x00" in str(path):
+        raise ValueError("Path contains an invalid null byte.")
+
     if PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute():
         raise ValueError(
             "Absolute paths are not allowed. Use a path relative to the "
