@@ -499,9 +499,19 @@ def stream():
         cancel_event = cancellation.register(request_id)
         allowed_paths = _extract_allowed_paths(data)
         set_allowed_read_paths(allowed_paths)
+        agent_gen = run_agent_loop(provider, contents, cancel_event=cancel_event)
         try:
-            for event in run_agent_loop(provider, contents, cancel_event=cancel_event):
-                yield json.dumps(_stream_event_to_plain(event)) + "\n"
+            for event in agent_gen:
+                try:
+                    yield json.dumps(_stream_event_to_plain(event)) + "\n"
+                except GeneratorExit:
+                    # Client disconnected mid-stream. Signal cancellation so the
+                    # agent stops at the next cooperative checkpoint, then close
+                    # the agent generator so it cannot keep running tools after
+                    # the HTTP response is gone.
+                    cancellation.cancel(request_id)
+                    agent_gen.close()
+                    raise
         except Exception as exc:
             yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
         finally:

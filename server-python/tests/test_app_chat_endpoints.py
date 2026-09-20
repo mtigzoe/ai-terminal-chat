@@ -507,6 +507,71 @@ def test_stream_git_commit_with_message_routes_to_git_commit_tool(client, monkey
 
 
 # ---------------------------------------------------------
+
+def test_stream_client_disconnect_cancels_agent_and_releases(client, monkeypatch):
+    """Closing the stream generator mid-flight must cancel the request so the
+    agent cannot keep running tools after the HTTP client is gone, and must
+    release cancellation tracking.
+    """
+    cancelled_ids = []
+    released_ids = []
+    original_cancel = cancellation.cancel
+    original_release = cancellation.release
+
+    def tracking_cancel(request_id):
+        cancelled_ids.append(request_id)
+        return original_cancel(request_id)
+
+    def tracking_release(request_id):
+        released_ids.append(request_id)
+        return original_release(request_id)
+
+    monkeypatch.setattr(cancellation, "cancel", tracking_cancel)
+    monkeypatch.setattr(cancellation, "release", tracking_release)
+
+    # Multi-step agent: first yield a tool_call, then a final. Closing after
+    # the first chunk simulates the client disconnecting mid-stream.
+    _set_provider(
+        monkeypatch,
+        FakeProvider(
+            [
+                ProviderResponse(
+                    text=None,
+                    tool_calls=[ToolCall("list_directory", {"path": "."})],
+                ),
+                ProviderResponse(text="done"),
+            ]
+        ),
+    )
+
+    # Invoke the stream view directly so we can close the generator without
+    # draining the whole response body (client.disconnect is not reliable in
+    # the Flask test client for this case).
+    with app.app.test_request_context(
+        "/stream",
+        method="POST",
+        json={"chat": "list files", "history": [], "request_id": "disconnect-me"},
+        content_type="application/json",
+    ):
+        # Resolve the view function bound to /stream
+        view = None
+        for rule in app.app.url_map.iter_rules():
+            if rule.rule == "/stream" and "POST" in rule.methods:
+                view = app.app.view_functions[rule.endpoint]
+                break
+        assert view is not None
+        response = view()
+        gen = response.response  # stream_with_context iterable
+        # Consume one chunk so registration has happened
+        first = next(iter(gen))
+        assert first  # got some NDJSON
+        # Client disconnect: close the generator
+        gen.close()
+
+    assert "disconnect-me" in cancelled_ids, "client disconnect must cancel the request"
+    assert "disconnect-me" in released_ids, "client disconnect must release tracking"
+
+
 # Global error handler (app.handle_unexpected_error)
 # ---------------------------------------------------------
 
