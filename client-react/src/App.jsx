@@ -105,6 +105,9 @@ function App() {
   const abortControllerRef = useRef(null);
   const requestIdRef = useRef(null);
   const confirmationRequestIdRef = useRef(null);
+  // Tracks the in-flight /confirm request so Cancel can stop a long resume.
+  const confirmRequestIdRef = useRef(null);
+  const confirmAbortControllerRef = useRef(null);
   const host = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/+$/, "");
   const url = host + "/chat";
   const streamUrl = host + "/stream";
@@ -197,8 +200,11 @@ function App() {
       fetch(`${host}/cancel/${activeRequestId}`, { method: 'POST' }).catch(() => {});
     }
     abortControllerRef.current?.abort();
+    confirmAbortControllerRef.current?.abort();
     requestIdRef.current = null;
     confirmationRequestIdRef.current = null;
+    confirmRequestIdRef.current = null;
+    confirmAbortControllerRef.current = null;
     abortControllerRef.current = null;
     awaitingConfirmationRef.current = false;
     confirmingRef.current = false;
@@ -253,6 +259,16 @@ function App() {
   function getErrorMessage(error, fallback = "Request failed.") { const serverMessage = error?.response?.data?.error; if (serverMessage) return serverMessage; if (error?.response == null && (error?.message === "Network Error" || error?.code === "ERR_NETWORK" || error?.code === "ECONNABORTED")) { const base = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/$/, ""); const code = error?.code ? ` (${error.code})` : ""; const detail = error?.message && error.message !== "Network Error" ? ` ${error.message}` : ""; return (`Cannot reach the backend at ${base}${code}.${detail} Confirm the backend server is running (for example: npm run dev in server-typescript) and that VITE_API_URL matches its address if you changed the default.`).replace(/\s+/g, " ").trim(); } if (error?.message) return error.message; return fallback; }
   const cancelBackendRequest = () => { const requestId = requestIdRef.current; if (!requestId) return; fetch(`${host}/cancel/${requestId}`, { method: "POST" }).catch(() => {}); };
   const stopCurrentRequest = () => {
+    // If /confirm is already in flight (Allow/Decline processing a long resume),
+    // cancel that resume rather than attempting a second /confirm that would
+    // be blocked by confirmingRef.
+    if (confirmingRef.current && confirmRequestIdRef.current) {
+      const confirmRequestId = confirmRequestIdRef.current;
+      fetch(`${host}/cancel/${confirmRequestId}`, { method: 'POST' }).catch(() => {});
+      confirmAbortControllerRef.current?.abort();
+      setAgentStatus({ phase: 'cancelled', message: 'Cancelling confirmation.', assertive: false });
+      return;
+    }
     // A pending confirmation has already paused the original request.
     // Decline that action instead of cancelling an already-finished request.
     if (pendingConfirmation && confirmationRequestIdRef.current) {
@@ -270,12 +286,17 @@ function App() {
     if (!action || confirmingRef.current || !confirmationRequestId) return;
     confirmingRef.current = true;
     setConfirmationResolving(true);
+    const confirmRequestId = generateRequestId();
+    confirmRequestIdRef.current = confirmRequestId;
+    const confirmController = new AbortController();
+    confirmAbortControllerRef.current = confirmController;
     try {
       const response = await axios.post(`${host}/confirm`, {
         action_id: action.action_id,
         confirmed,
         allowed_paths: resolveAllowedPaths(),
-      });
+        request_id: confirmRequestId,
+      }, { signal: confirmController.signal });
       if (confirmationRequestIdRef.current !== confirmationRequestId) return;
       const permissionGranted = action.name === 'read_file_permission' && confirmed === true && response.data?.permission_granted === true;
       if (permissionGranted) {
@@ -398,6 +419,17 @@ function App() {
         setWaiting(false);
       }
     } catch (error) {
+      // Cancel during an in-flight /confirm (Allow/Decline) — treat as cancelled.
+      if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED' || error?.name === 'AbortError') {
+        if (confirmationRequestIdRef.current === confirmationRequestId) {
+          confirmationRequestIdRef.current = null;
+          setPendingConfirmation(null);
+          awaitingConfirmationRef.current = false;
+          setAgentStatus({ phase: 'cancelled', message: 'Confirmation cancelled.', assertive: false });
+          setWaiting(false);
+        }
+        return;
+      }
       const errorMessage = getErrorMessage(error, 'Could not resolve confirmation.');
       if (confirmationRequestIdRef.current !== confirmationRequestId) return;
       setAgentStatus({ phase: 'error', message: errorMessage, assertive: true });
@@ -430,6 +462,12 @@ function App() {
     } finally {
       confirmingRef.current = false;
       setConfirmationResolving(false);
+      if (confirmRequestIdRef.current === confirmRequestId) {
+        confirmRequestIdRef.current = null;
+      }
+      if (confirmAbortControllerRef.current === confirmController) {
+        confirmAbortControllerRef.current = null;
+      }
     }
   };
 

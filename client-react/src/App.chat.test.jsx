@@ -167,6 +167,71 @@ describe('non-streaming chat lifecycle', () => {
     expect(getTextarea()).not.toBeDisabled();
   });
 
+  test('cancelling while confirmation is resolving stops the in-flight /confirm resume', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+    let resolveConfirm;
+    let confirmPayload;
+    let confirmConfig;
+
+    axios.post.mockImplementation((url, data, config) => {
+      if (String(url).includes('/confirm')) {
+        confirmPayload = data;
+        confirmConfig = config;
+        return new Promise((resolve, reject) => {
+          resolveConfirm = { resolve, reject };
+          config?.signal?.addEventListener('abort', () => {
+            const err = new Error('canceled');
+            err.name = 'CanceledError';
+            err.code = 'ERR_CANCELED';
+            reject(err);
+          });
+        });
+      }
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-long-confirm',
+              name: 'write_file',
+              args: { path: 'long.txt' },
+            },
+          ],
+          request_id: 'req-long-confirm',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write long.txt');
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(confirmPayload).toEqual(expect.objectContaining({
+        action_id: 'action-long-confirm',
+        confirmed: true,
+        request_id: expect.any(String),
+      }));
+    });
+
+    // Cancel while /confirm is still in flight
+    fireEvent.click(screen.getByRole('button', { name: /cancel response/i }));
+
+    await waitFor(() => {
+      expect(confirmConfig.signal.aborted).toBe(true);
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/cancel/${confirmPayload.request_id}`),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
   test('cancelling a pending confirmation declines it and re-enables input', async () => {
     let confirmCall = 0;
 
