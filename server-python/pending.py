@@ -144,14 +144,25 @@ def get_pending(action_id: str):
 def pop_pending(action_id: str):
     """Consume a pending action exactly once.
 
-    Returns None if the action is missing or its confirmation file fingerprint
-    no longer matches (target changed after the preview was shown).
+    Returns None if the action is missing, the project root changed since the
+    action was created, or its confirmation file fingerprint no longer matches
+    (target changed after the preview was shown).
     """
 
     with _LOCK:
         action = _PENDING.get(action_id)
         if action is None:
             return None
+        resume = action.resume or {}
+        saved_root = resume.get("project_root")
+        if saved_root:
+            try:
+                if Path(str(saved_root)).resolve() != get_project_root().resolve():
+                    del _PENDING[action_id]
+                    return None
+            except OSError:
+                del _PENDING[action_id]
+                return None
         if not _file_state_matches(action.confirmation_file_state):
             del _PENDING[action_id]
             return None

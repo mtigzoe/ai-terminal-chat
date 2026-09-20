@@ -6,9 +6,11 @@ from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Optional
 import shlex
+from pathlib import Path
 
 from providers.base import Provider, ProviderResponse, ToolCall
 from pending import create_pending
+from security import get_project_root
 from tools import (
     DEFAULT_TOOL_TIMEOUT,
     GIT_CONFIRM_TOOL_NAMES,
@@ -400,6 +402,19 @@ def resume_agent_loop(provider: Provider, action, confirmed: bool, cancel_event:
             "differs from the provider/model that created the pending action."
         )
 
+    saved_root = resume.get("project_root")
+    if saved_root:
+        try:
+            if Path(str(saved_root)).resolve() != get_project_root().resolve():
+                raise ValueError(
+                    "Cannot resume this action because the active project root "
+                    "differs from the project that created the pending action."
+                )
+        except OSError as exc:
+            raise ValueError(
+                "Cannot resume this action because the project root is no longer valid."
+            ) from exc
+
     remaining_calls = list(resume["remaining_calls"])
     call = remaining_calls.pop(0)
     function_name = call.name
@@ -549,6 +564,7 @@ def _agent_loop(
                         result,
                         resume={
                             "provider_fingerprint": provider_fingerprint(provider),
+                            "project_root": str(get_project_root()),
                             "contents": contents,
                             "round_index": round_index,
                             "tool_results": list(tool_results),
@@ -609,6 +625,7 @@ def _agent_loop(
                         },
                         resume={
                             "provider_fingerprint": provider_fingerprint(provider),
+                            "project_root": str(get_project_root()),
                             "contents": contents,
                             "round_index": round_index,
                             "tool_results": list(tool_results),

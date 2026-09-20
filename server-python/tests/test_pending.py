@@ -86,3 +86,23 @@ def test_pop_pending_allows_create_file_when_still_missing(tmp_path, monkeypatch
     consumed = pop_pending(action.action_id)
     assert consumed is not None
     assert consumed.tool_name == "create_file"
+
+
+def test_pop_pending_rejects_when_project_root_changes(tmp_path, monkeypatch):
+    """Pending actions must not confirm against a different project root."""
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    (tmp_path / "file.txt").write_text("original\n", encoding="utf-8")
+
+    action = create_pending(
+        "write_file",
+        {"path": "file.txt", "contents": "new\n"},
+        {"requires_confirmation": True},
+        resume={"project_root": str(tmp_path.resolve()), "provider_fingerprint": "fake:model"},
+    )
+    assert get_pending(action.action_id) is not None
+
+    other = tmp_path / "other-project"
+    other.mkdir()
+    monkeypatch.setattr(security, "PROJECT_ROOT", other)
+
+    assert pop_pending(action.action_id) is None
