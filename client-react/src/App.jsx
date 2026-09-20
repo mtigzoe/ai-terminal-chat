@@ -108,6 +108,10 @@ function App() {
   // Tracks the in-flight /confirm request so Cancel can stop a long resume.
   const confirmRequestIdRef = useRef(null);
   const confirmAbortControllerRef = useRef(null);
+  // Stream mode of the request that produced the pending confirmation.
+  // resolveConfirmation must use this, not the live toggle, so flipping
+  // "Stream response" mid-dialog cannot take the wrong update path.
+  const pendingWasStreamingRef = useRef(false);
   const host = (import.meta.env.VITE_API_URL || "http://localhost:9000").replace(/\/+$/, "");
   const url = host + "/chat";
   const streamUrl = host + "/stream";
@@ -216,6 +220,7 @@ function App() {
     abortControllerRef.current = null;
     awaitingConfirmationRef.current = false;
     confirmingRef.current = false;
+    pendingWasStreamingRef.current = false;
     const newId = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setChatId(newId);
     try { localStorage.setItem('ai-terminal-chat:current-chat-id', newId); } catch {}
@@ -344,7 +349,7 @@ function App() {
       // Clear the awaiting confirmation flag since we're now processing the response
       awaitingConfirmationRef.current = false;
 
-      if (is_stream) {
+      if (pendingWasStreamingRef.current) {
         // In streaming mode, find the pending model message in data and update it.
         setData((current) => {
           // Find the last model message with pendingConfirmation flag
@@ -402,7 +407,7 @@ function App() {
         // All confirmations resolved - clean up the pending flag
         confirmationRequestIdRef.current = null;
         setPendingConfirmation(null);
-        if (is_stream) {
+        if (pendingWasStreamingRef.current) {
           // Remove pendingConfirmation flag from the model message
           setData((current) => {
             return current.map((message) => {
@@ -467,7 +472,7 @@ function App() {
         setPendingConfirmation(null);
         awaitingConfirmationRef.current = false;
         // Also clean up the pending model message on error
-        if (is_stream) {
+        if (pendingWasStreamingRef.current) {
           setData((current) => {
             return current.map((msg) => {
               if (msg.role === 'model' && msg.pendingConfirmation) {
@@ -539,7 +544,7 @@ function App() {
     if (!is_stream) handleNonStreamingChat(message);
     else handleStreamingChat(message);
   };
-  const handleNonStreamingChat = async (message) => { const requestId = generateRequestId(); requestIdRef.current = requestId; const controller = new AbortController(); abortControllerRef.current = controller; const resolvedAllowedPaths = resolveAllowedPaths(); const userInstructions = resolveUserInstructions(); const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions }; const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: nowISO() }]; flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); }); executeScroll(); const headerConfig = { headers: { 'Content-Type': 'application/json;charset=UTF-8' }, signal: controller.signal }; const fetchData = async () => { let modelResponse = ""; let toolActivity = []; let cancelled = false; try { const response = await axios.post(url, chatData, headerConfig); if (requestIdRef.current !== requestId) return; modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled); const pending = toolActivity.find((item) => item.type === 'pending_confirmation'); if (pending) { confirmationRequestIdRef.current = requestId; setPendingConfirmation(pending); setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false }); } else if (cancelled) { if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false }); } else { const status = statusFromToolActivity(toolActivity); if (status) setAgentStatus(status); else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } } catch (error) { if (requestIdRef.current !== requestId) return; if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") { cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); } } finally { if (requestIdRef.current !== requestId) return; abortControllerRef.current = null; requestIdRef.current = null; const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }]; flushSync(() => { setData(updatedData); setWaiting(false); }); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0); } }; fetchData(); };
+  const handleNonStreamingChat = async (message) => { const requestId = generateRequestId(); requestIdRef.current = requestId; const controller = new AbortController(); abortControllerRef.current = controller; const resolvedAllowedPaths = resolveAllowedPaths(); const userInstructions = resolveUserInstructions(); const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions }; const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: nowISO() }]; flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); }); executeScroll(); const headerConfig = { headers: { 'Content-Type': 'application/json;charset=UTF-8' }, signal: controller.signal }; const fetchData = async () => { let modelResponse = ""; let toolActivity = []; let cancelled = false; try { const response = await axios.post(url, chatData, headerConfig); if (requestIdRef.current !== requestId) return; modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled); const pending = toolActivity.find((item) => item.type === 'pending_confirmation'); if (pending) { confirmationRequestIdRef.current = requestId; pendingWasStreamingRef.current = false; setPendingConfirmation(pending); setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false }); } else if (cancelled) { if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false }); } else { const status = statusFromToolActivity(toolActivity); if (status) setAgentStatus(status); else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } } catch (error) { if (requestIdRef.current !== requestId) return; if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") { cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); } } finally { if (requestIdRef.current !== requestId) return; abortControllerRef.current = null; requestIdRef.current = null; const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }]; flushSync(() => { setData(updatedData); setWaiting(false); }); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0); } }; fetchData(); };
   const handleStreamingChat = async (message) => {
     const resolvedAllowedPaths = resolveAllowedPaths();
     const userInstructions = resolveUserInstructions();
@@ -573,6 +578,7 @@ const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: n
           toolActivity.push(event);
           setStreamToolActivity([...toolActivity]);
           confirmationRequestIdRef.current = requestId;
+          pendingWasStreamingRef.current = true;
           setPendingConfirmation(event);
           // Mark that we're awaiting user confirmation; the stream will end here.
           awaitingConfirmationRef.current = true;

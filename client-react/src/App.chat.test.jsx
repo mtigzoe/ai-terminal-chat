@@ -275,6 +275,64 @@ describe('non-streaming chat lifecycle', () => {
     );
   });
 
+  test('toggling stream mode while confirmation is pending still resolves the original request path', async () => {
+    let confirmCalls = 0;
+    axios.post.mockImplementation((url) => {
+      if (String(url).includes('/confirm')) {
+        confirmCalls += 1;
+        return Promise.resolve({
+          data: {
+            confirmed: true,
+            text: 'Wrote file after allow.',
+            tool_activity: [
+              { type: 'tool_result', name: 'write_file', result: { path: 'toggle.txt' } },
+            ],
+            request_id: 'req-toggle-stream',
+          },
+        });
+      }
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-toggle-stream',
+              name: 'write_file',
+              args: { path: 'toggle.txt' },
+            },
+          ],
+          request_id: 'req-pending-toggle',
+        },
+      });
+    });
+
+    render(<App />);
+    // Start non-streaming (default in many tests is toggled from localStorage; force off)
+    const streamToggle = screen.getByRole('button', { name: /stream response/i });
+    if (streamToggle.getAttribute('aria-pressed') === 'true') {
+      fireEvent.click(streamToggle);
+    }
+
+    await sendMessage('write toggle.txt');
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+
+    // Flip stream mode while the dialog is open
+    fireEvent.click(streamToggle);
+    expect(streamToggle.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(confirmCalls).toBe(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // Non-stream path should still surface the approved result text
+    expect(await screen.findByText(/Wrote file after allow/i)).toBeInTheDocument();
+  });
+
   test('server cancelled flag after Allow shows cancelled status not complete', async () => {
     axios.post.mockImplementation((url, data) => {
       if (String(url).includes('/confirm')) {
