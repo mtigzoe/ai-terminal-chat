@@ -136,10 +136,11 @@ def test_select_provider_switches_active_provider(client, monkeypatch):
             app.provider = original_provider
 
 
-def test_cancel_endpoint_reports_unknown_request_id(client):
+def test_cancel_endpoint_records_pending_intent_for_unknown_request_id(client):
+    """Cancel before register is acknowledged and recorded as pending intent."""
     response = client.post("/cancel/does-not-exist")
     assert response.status_code == 200
-    assert response.get_json()["cancelled"] is False
+    assert response.get_json()["cancelled"] is True
 
 
 def test_confirm_endpoint_requires_action_id(client):
