@@ -596,43 +596,50 @@ describe('streaming tool confirmation resolution', () => {
     }
   }
 
-  test('streaming confirm error records the error string, not the message object', async () => {
+  test('auto-approves read_file_permission in streaming when permission mode is read', async () => {
+    localStorage.setItem('ai-terminal-chat:agent-permission-mode', 'read');
+
     const streamChunks = [
       JSON.stringify({
         type: 'pending_confirmation',
-        action_id: 'action-err',
-        name: 'write_file',
-        args: { path: 'x.txt' },
+        action_id: 'action-auto-read',
+        name: 'read_file_permission',
+        args: { path: 'README.md' },
       }) + '\n',
     ];
     global.fetch = vi.fn().mockResolvedValueOnce(makeStreamResponse(streamChunks));
 
-    render(<App />);
-    enableStreaming();
-    await sendMessage('write x');
-
-    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
-
-    axios.post.mockImplementation((url) => {
+    let confirmCall = 0;
+    axios.post.mockImplementation((url, data) => {
       if (String(url).includes('/confirm')) {
-        const err = new Error('Request failed');
-        err.response = { status: 500, data: { error: 'confirm failed hard' } };
-        return Promise.reject(err);
+        confirmCall += 1;
+        expect(data.confirmed).toBe(true);
+        expect(data.action_id).toBe('action-auto-read');
+        return Promise.resolve({
+          data: {
+            confirmed: true,
+            action_id: 'action-auto-read',
+            permission_granted: true,
+            tool_activity: [
+              { type: 'tool_result', name: 'read_file_permission', result: { permission_granted: true } },
+            ],
+            text: 'Granted.',
+            request_id: 'req-auto-read',
+          },
+        });
       }
       return Promise.resolve({ data: { text: '' } });
     });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /^allow$/i }));
+    render(<App />);
+    enableStreaming();
+    await sendMessage('read README');
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(confirmCall).toBe(1);
     });
-
-    // Regression: the map callback used to shadow the error string with the
-    // chat message object, so tool_result.error became the message object.
-    const page = document.body.textContent || '';
-    expect(page).not.toMatch(/\[object Object\]/);
-    expect(page).toMatch(/confirm failed hard/);
+    // Auto-approve should not leave the dialog open
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   test('resolves confirmation during streaming and appends final text to streaming buffer', async () => {

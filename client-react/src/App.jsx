@@ -592,6 +592,9 @@ const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: n
           setAnswer("");
           showStreamdiv(false);
           setStreamToolActivity([]);
+          // Stream is done; waiting must be false so auto-approve can run.
+          // MessageInput remains blocked via pendingConfirmation.
+          setWaiting(false);
           executeScroll();
           window.setTimeout(() => inputRef.current?.focus(), 0);
         } else {
