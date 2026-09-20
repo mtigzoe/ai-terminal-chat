@@ -183,9 +183,17 @@ function App() {
   const handleNewChat = () => {
     // A new chat must invalidate any in-flight request before clearing the UI.
     // Otherwise the old request's finally block can repopulate the new chat.
-    // If a confirmation is pending, decline it via /confirm (same as Cancel response)
-    // rather than only POSTing /cancel, which is a no-op after the original request finished.
-    if (pendingConfirmation && confirmationRequestIdRef.current) {
+    // Prefer cancelling an in-flight /confirm resume (Allow already consumed the
+    // pending action). Declining via /confirm would 404 in that case.
+    if (confirmRequestIdRef.current) {
+      const confirmRequestId = confirmRequestIdRef.current;
+      confirmRequestIdRef.current = null;
+      fetch(`${host}/cancel/${confirmRequestId}`, { method: 'POST' }).catch(() => {});
+      confirmAbortControllerRef.current?.abort();
+      confirmAbortControllerRef.current = null;
+      confirmationRequestIdRef.current = null;
+    } else if (pendingConfirmation && confirmationRequestIdRef.current) {
+      // Confirmation dialog still open — decline via /confirm (same as Cancel response).
       const action = pendingConfirmation;
       axios.post(`${host}/confirm`, {
         action_id: action.action_id,

@@ -167,6 +167,60 @@ describe('non-streaming chat lifecycle', () => {
     expect(getTextarea()).not.toBeDisabled();
   });
 
+  test('starting a new chat while confirmation is resolving cancels the in-flight /confirm resume', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+    let confirmPayload;
+    let confirmConfig;
+
+    axios.post.mockImplementation((url, data, config) => {
+      if (String(url).includes('/confirm')) {
+        confirmPayload = data;
+        confirmConfig = config;
+        return new Promise((resolve, reject) => {
+          config?.signal?.addEventListener('abort', () => {
+            const err = new Error('canceled');
+            err.name = 'CanceledError';
+            err.code = 'ERR_CANCELED';
+            reject(err);
+          });
+        });
+      }
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-newchat-confirm',
+              name: 'write_file',
+              args: { path: 'y.txt' },
+            },
+          ],
+          request_id: 'req-newchat-confirm',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write y');
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(confirmPayload?.request_id).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('link', { name: /new chat/i }));
+
+    await waitFor(() => {
+      expect(confirmConfig.signal.aborted).toBe(true);
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/cancel/${confirmPayload.request_id}`),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
   test('pagehide while confirmation is resolving cancels the in-flight /confirm resume', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     let confirmPayload;
