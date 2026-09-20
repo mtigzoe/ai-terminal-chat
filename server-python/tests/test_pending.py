@@ -106,3 +106,21 @@ def test_pop_pending_rejects_when_project_root_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(security, "PROJECT_ROOT", other)
 
     assert pop_pending(action.action_id) is None
+
+
+def test_pop_pending_rejects_apply_patch_when_listed_file_changes(tmp_path, monkeypatch):
+    """apply_patch confirmation binds to the files listed in the preview."""
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    target = tmp_path / "patched.txt"
+    target.write_text("original\n", encoding="utf-8")
+
+    action = create_pending(
+        "apply_patch",
+        {"patch": "--- a/patched.txt\n+++ b/patched.txt\n"},
+        {"requires_confirmation": True, "files": ["patched.txt"]},
+    )
+    assert get_pending(action.action_id) is not None
+
+    target.write_text("changed after preview\n", encoding="utf-8")
+
+    assert pop_pending(action.action_id) is None

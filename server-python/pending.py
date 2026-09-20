@@ -51,7 +51,7 @@ class PendingAction:
     resume: Optional[dict] = None
     # Fingerprint of the target path at preview time. When present, confirmation
     # is rejected if the file changed before Allow.
-    confirmation_file_state: Optional[dict] = None
+    confirmation_file_state: Optional[list] = None
 
 
 _PENDING = {}
@@ -93,24 +93,39 @@ def _fingerprint_path(rel_path: str) -> dict:
         return {"path": normalized, "status": "unavailable", "sha256": None}
 
 
-def _capture_file_state(tool_name: str, args: dict) -> Optional[dict]:
-    if tool_name not in _PATH_BOUND_TOOLS:
+def _capture_file_state(tool_name: str, args: dict, preview: Optional[dict] = None) -> Optional[list]:
+    """Return a list of path fingerprints, or None if the tool is not path-bound."""
+    paths: list[str] = []
+    if tool_name in _PATH_BOUND_TOOLS:
+        path = args.get("path")
+        if isinstance(path, str) and path.strip():
+            paths.append(path.strip())
+    elif tool_name == "apply_patch" and isinstance(preview, dict):
+        files = preview.get("files")
+        if isinstance(files, list):
+            paths = [str(p).strip() for p in files if isinstance(p, str) and str(p).strip()]
+    if not paths:
         return None
-    path = args.get("path")
-    if not isinstance(path, str) or not path.strip():
-        return None
-    return _fingerprint_path(path.strip())
+    return [_fingerprint_path(p) for p in paths]
 
 
-def _file_state_matches(saved: Optional[dict]) -> bool:
+def _file_state_matches(saved: Optional[list]) -> bool:
     if not saved:
         return True
-    current = _fingerprint_path(saved.get("path") or "")
-    return (
-        current.get("status") == saved.get("status")
-        and current.get("sha256") == saved.get("sha256")
-        and current.get("path") == saved.get("path")
-    )
+    if not isinstance(saved, list):
+        # Backward-compat: single dict from older pending entries
+        saved = [saved]
+    for entry in saved:
+        if not isinstance(entry, dict):
+            return False
+        current = _fingerprint_path(entry.get("path") or "")
+        if not (
+            current.get("status") == entry.get("status")
+            and current.get("sha256") == entry.get("sha256")
+            and current.get("path") == entry.get("path")
+        ):
+            return False
+    return True
 
 
 def create_pending(tool_name: str, args: dict, preview: dict, resume: Optional[dict] = None) -> PendingAction:
@@ -122,7 +137,7 @@ def create_pending(tool_name: str, args: dict, preview: dict, resume: Optional[d
         args=dict(args),
         preview=preview,
         resume=resume,
-        confirmation_file_state=_capture_file_state(tool_name, args or {}),
+        confirmation_file_state=_capture_file_state(tool_name, args or {}, preview),
     )
 
     with _LOCK:
