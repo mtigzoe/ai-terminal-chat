@@ -275,6 +275,50 @@ describe('non-streaming chat lifecycle', () => {
     );
   });
 
+  test('server cancelled flag after Allow shows cancelled status not complete', async () => {
+    axios.post.mockImplementation((url, data) => {
+      if (String(url).includes('/confirm')) {
+        return Promise.resolve({
+          data: {
+            confirmed: true,
+            cancelled: true,
+            text: '',
+            tool_activity: [
+              { type: 'tool_result', name: 'write_file', result: { cancelled: true, message: 'Stopped' } },
+            ],
+            request_id: 'req-server-cancel',
+          },
+        });
+      }
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-server-cancel',
+              name: 'write_file',
+              args: { path: 'z.txt' },
+            },
+          ],
+          request_id: 'req-pending-server-cancel',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write z');
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // Status must reflect cancellation, not "Action approved and completed."
+    expect(screen.getByText(/confirmation cancelled|response cancelled|stopped/i)).toBeInTheDocument();
+    expect(screen.queryByText(/action approved and completed/i)).not.toBeInTheDocument();
+  });
+
   test('cancelling while confirmation is resolving stops the in-flight /confirm resume', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     let resolveConfirm;

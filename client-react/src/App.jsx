@@ -417,8 +417,14 @@ function App() {
           setAnswer('');
           setStreamToolActivity([]);
         }
-        if (resumed && response.data?.cancelled && !confirmed) {
-          setAgentStatus({ phase: 'cancelled', message: 'Action declined by user.', assertive: false });
+        if (resumed && response.data?.cancelled) {
+          // Server cancelled the resume (user Cancel, capacity eviction, or
+          // disconnect) even when this client originally sent confirmed=true.
+          setAgentStatus({
+            phase: 'cancelled',
+            message: confirmed ? 'Confirmation cancelled.' : 'Action declined by user.',
+            assertive: false,
+          });
         } else if (resumed && response.data?.error && !finalText) {
           setAgentStatus({ phase: 'error', message: response.data.error, assertive: true });
         } else {
