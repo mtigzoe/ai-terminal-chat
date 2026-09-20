@@ -167,6 +167,60 @@ describe('non-streaming chat lifecycle', () => {
     expect(getTextarea()).not.toBeDisabled();
   });
 
+  test('pagehide while confirmation is resolving cancels the in-flight /confirm resume', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+    let confirmPayload;
+    let confirmConfig;
+
+    axios.post.mockImplementation((url, data, config) => {
+      if (String(url).includes('/confirm')) {
+        confirmPayload = data;
+        confirmConfig = config;
+        return new Promise((resolve, reject) => {
+          config?.signal?.addEventListener('abort', () => {
+            const err = new Error('canceled');
+            err.name = 'CanceledError';
+            err.code = 'ERR_CANCELED';
+            reject(err);
+          });
+        });
+      }
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-pagehide-confirm',
+              name: 'write_file',
+              args: { path: 'x.txt' },
+            },
+          ],
+          request_id: 'req-pagehide-confirm',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write x');
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^allow$/i }));
+
+    await waitFor(() => {
+      expect(confirmPayload?.request_id).toBeTruthy();
+    });
+
+    window.dispatchEvent(new Event('pagehide'));
+
+    await waitFor(() => {
+      expect(confirmConfig.signal.aborted).toBe(true);
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining(`/cancel/${confirmPayload.request_id}`),
+      expect.objectContaining({ method: 'POST', keepalive: true }),
+    );
+  });
+
   test('cancelling while confirmation is resolving stops the in-flight /confirm resume', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     let resolveConfirm;

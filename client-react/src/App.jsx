@@ -223,23 +223,34 @@ function App() {
   // server keeps the pending action until capacity eviction.
   useEffect(() => {
     const onPageHide = () => {
-      const confirmationRequestId = confirmationRequestIdRef.current;
-      const pending = pendingConfirmation;
-      if (pending && confirmationRequestId && pending.action_id) {
-        confirmationRequestIdRef.current = null;
-        const body = JSON.stringify({
-          action_id: pending.action_id,
-          confirmed: false,
-          allowed_paths: resolveAllowedPaths(),
-        });
+      // Prefer cancelling an in-flight /confirm resume (Allow already consumed
+      // the pending action). Declining via /confirm would 404 in that case.
+      const inFlightConfirmId = confirmRequestIdRef.current;
+      if (inFlightConfirmId) {
+        confirmRequestIdRef.current = null;
         try {
-          fetch(`${host}/confirm`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body,
-            keepalive: true,
-          }).catch(() => {});
+          fetch(`${host}/cancel/${inFlightConfirmId}`, { method: 'POST', keepalive: true }).catch(() => {});
         } catch { /* ignore */ }
+        confirmAbortControllerRef.current?.abort();
+      } else {
+        const confirmationRequestId = confirmationRequestIdRef.current;
+        const pending = pendingConfirmation;
+        if (pending && confirmationRequestId && pending.action_id) {
+          confirmationRequestIdRef.current = null;
+          const body = JSON.stringify({
+            action_id: pending.action_id,
+            confirmed: false,
+            allowed_paths: resolveAllowedPaths(),
+          });
+          try {
+            fetch(`${host}/confirm`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body,
+              keepalive: true,
+            }).catch(() => {});
+          } catch { /* ignore */ }
+        }
       }
       const activeRequestId = requestIdRef.current;
       if (activeRequestId) {
@@ -482,7 +493,18 @@ function App() {
     if (validationCheck(message)) return;
     // Abort any in-flight request before starting a new one (e.g. Terminal
     // "Send to chat" can fire while a previous chat request is still waiting).
-    if (pendingConfirmation && confirmationRequestIdRef.current) {
+    if (confirmRequestIdRef.current) {
+      // Allow already consumed the pending action; cancel the resume.
+      const confirmRequestId = confirmRequestIdRef.current;
+      confirmRequestIdRef.current = null;
+      fetch(`${host}/cancel/${confirmRequestId}`, { method: 'POST' }).catch(() => {});
+      confirmAbortControllerRef.current?.abort();
+      confirmAbortControllerRef.current = null;
+      confirmationRequestIdRef.current = null;
+      setPendingConfirmation(null);
+      awaitingConfirmationRef.current = false;
+      confirmingRef.current = false;
+    } else if (pendingConfirmation && confirmationRequestIdRef.current) {
       const action = pendingConfirmation;
       axios.post(`${host}/confirm`, {
         action_id: action.action_id,
