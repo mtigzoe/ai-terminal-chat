@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import subprocess
+from child_process import SubprocessCancelled, run_cancellable
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -1046,14 +1047,14 @@ def run_command(command: str, confirm: bool = False) -> dict:
         if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
             args = ["cmd", "/c", "dir", *args[1:]]
 
-        result = subprocess.run(
-            args,
-            cwd=PROJECT_ROOT,
-            shell=False,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
+        try:
+            result = run_cancellable(
+                args,
+                cwd=PROJECT_ROOT,
+                timeout=60,
+            )
+        except SubprocessCancelled:
+            return {"error": "Command cancelled.", "cancelled": True}
 
         # Cap output so a noisy command can't blow up the context window.
         max_output = 20_000
@@ -1357,16 +1358,16 @@ def _run_git(
         + list(args)
     )
     try:
-        return subprocess.run(
-            ["git", *safe_args],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            input=input_text,
-            env=env,
-            shell=False,
-        )
+        try:
+            return run_cancellable(
+                ["git", *safe_args],
+                cwd=PROJECT_ROOT,
+                timeout=timeout,
+                input_text=input_text,
+                env=env,
+            )
+        except SubprocessCancelled:
+            raise
     finally:
         try:
             import shutil

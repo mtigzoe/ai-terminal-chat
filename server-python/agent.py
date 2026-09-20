@@ -10,6 +10,7 @@ from pathlib import Path
 
 from providers.base import Provider, ProviderResponse, ToolCall
 from pending import create_pending
+from child_process import SubprocessCancelled, reset_active_cancel_event, set_active_cancel_event
 from security import get_project_root
 from tools import (
     DEFAULT_TOOL_TIMEOUT,
@@ -336,29 +337,61 @@ def _cancelled_event():
     return {"type": "cancelled"}
 
 
-def _run_tool_with_timeout(function, function_name: str, function_args: dict, timeout_seconds: float) -> dict:
-    """Run a tool with a timeout while preserving request-scoped context."""
+def _run_tool_with_timeout(
+    function,
+    function_name: str,
+    function_args: dict,
+    timeout_seconds: float,
+    cancel_event: Optional[Event] = None,
+) -> dict:
+    """Run a tool with a timeout while preserving request-scoped context.
+
+    When ``cancel_event`` is set, subprocesses started via run_cancellable
+    (run_command, git tools) are terminated promptly including their process
+    tree, instead of waiting for the full timeout.
+    """
     result_queue: Queue = Queue(maxsize=1)
     context = copy_context()
 
     def worker():
+        token = set_active_cancel_event(cancel_event)
         try:
             result_queue.put(context.run(function, **function_args))
+        except SubprocessCancelled:
+            result_queue.put({"error": "Tool cancelled.", "cancelled": True})
         except TypeError as exc:
             result_queue.put({"error": f"Malformed arguments for {function_name}: {exc}"})
         except Exception as exc:
             result_queue.put({"error": f"Tool {function_name} failed: {exc}"})
+        finally:
+            reset_active_cancel_event(token)
 
     thread = Thread(target=worker, name=f"ai-terminal-tool:{function_name}", daemon=True)
     thread.start()
-    thread.join(timeout_seconds)
+
+    # Poll so a cancel mid-tool is observed without waiting the full timeout.
+    deadline = __import__("time").monotonic() + float(timeout_seconds)
+    while thread.is_alive():
+        if cancel_event is not None and cancel_event.is_set():
+            # Subprocess tree kill is handled inside run_cancellable; wait briefly
+            # for the worker to surface the cancelled result.
+            thread.join(2.0)
+            break
+        remaining = deadline - __import__("time").monotonic()
+        if remaining <= 0:
+            break
+        thread.join(min(0.1, remaining))
 
     if thread.is_alive():
+        if cancel_event is not None and cancel_event.is_set():
+            return {"error": "Tool cancelled.", "cancelled": True}
         return {"error": f"Tool {function_name} exceeded its {timeout_seconds}s execution limit and was abandoned."}
 
     try:
         return result_queue.get_nowait()
     except Empty:
+        if cancel_event is not None and cancel_event.is_set():
+            return {"error": "Tool cancelled.", "cancelled": True}
         return {"error": f"Tool {function_name} completed without returning a result."}
 
 
@@ -426,7 +459,7 @@ def resume_agent_loop(provider: Provider, action, confirmed: bool, cancel_event:
         # generator, so the retried read below actually succeeds.
         if confirmed:
             timeout_seconds = TOOL_TIMEOUTS.get("read_file", DEFAULT_TOOL_TIMEOUT)
-            result = _run_tool_with_timeout(TOOL_FUNCTIONS["read_file"], "read_file", function_args, timeout_seconds)
+            result = _run_tool_with_timeout(TOOL_FUNCTIONS["read_file"], "read_file", function_args, timeout_seconds, cancel_event=cancel_event)
         else:
             result = {"cancelled": True, "message": "Action declined by user."}
     elif confirmed:
@@ -434,7 +467,7 @@ def resume_agent_loop(provider: Provider, action, confirmed: bool, cancel_event:
         confirm_args = dict(function_args)
         confirm_args["confirm"] = True
         timeout_seconds = TOOL_TIMEOUTS.get(function_name, DEFAULT_TOOL_TIMEOUT)
-        result = _run_tool_with_timeout(function, function_name, confirm_args, timeout_seconds)
+        result = _run_tool_with_timeout(function, function_name, confirm_args, timeout_seconds, cancel_event=cancel_event)
     else:
         result = {"cancelled": True, "message": "Action declined by user."}
 
@@ -555,7 +588,7 @@ def _agent_loop(
                 preview_args = dict(function_args)
                 preview_args["confirm"] = False
                 timeout_seconds = TOOL_TIMEOUTS.get(function_name, DEFAULT_TOOL_TIMEOUT)
-                result = _run_tool_with_timeout(function, function_name, preview_args, timeout_seconds)
+                result = _run_tool_with_timeout(function, function_name, preview_args, timeout_seconds, cancel_event=cancel_event)
 
                 if not result.get("error") and result.get("requires_confirmation"):
                     action = create_pending(
@@ -598,7 +631,7 @@ def _agent_loop(
                     return
             else:
                 timeout_seconds = TOOL_TIMEOUTS.get(function_name, DEFAULT_TOOL_TIMEOUT)
-                result = _run_tool_with_timeout(function, function_name, function_args, timeout_seconds)
+                result = _run_tool_with_timeout(function, function_name, function_args, timeout_seconds, cancel_event=cancel_event)
 
             # Reading an unselected file is a user-permission boundary, not a
             # normal model/tool error. Pause here and let the browser present
