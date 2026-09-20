@@ -229,6 +229,71 @@ describe('non-streaming chat lifecycle', () => {
       expect(screen.getByRole('button', { name: /send message/i })).not.toBeDisabled();
     });
   });
+
+  test('starting a new chat while confirmation is pending declines the action via /confirm', async () => {
+    let confirmCall = 0;
+    let confirmBody = null;
+
+    axios.post.mockImplementation((url, data) => {
+      if (url.includes('/confirm')) {
+        confirmCall += 1;
+        confirmBody = data;
+        return Promise.resolve({
+          data: {
+            confirmed: false,
+            cancelled: true,
+            action_id: 'action-new-chat',
+            result: { cancelled: true },
+            tool_activity: [
+              {
+                type: 'tool_result',
+                name: 'write_file',
+                result: { cancelled: true, message: 'Action declined by user.' },
+              },
+            ],
+            text: '',
+            request_id: 'req-new-chat-confirm',
+          },
+        });
+      }
+
+      return Promise.resolve({
+        data: {
+          text: '',
+          tool_activity: [
+            {
+              type: 'pending_confirmation',
+              action_id: 'action-new-chat',
+              name: 'write_file',
+              args: { path: 'secret.txt' },
+            },
+          ],
+          request_id: 'req-new-chat-confirm',
+        },
+      });
+    });
+
+    render(<App />);
+    await sendMessage('write secret.txt');
+
+    const dialog = await screen.findByRole('dialog', { name: /confirmation required/i });
+    expect(dialog).toBeInTheDocument();
+
+    // After the stream/request finishes at pending_confirmation, requestIdRef is cleared.
+    // New chat must still decline via /confirm, not rely on /cancel.
+    const newChatLink = await screen.findByRole('link', { name: /new chat/i });
+    fireEvent.click(newChatLink);
+
+    await waitFor(() => {
+      expect(confirmCall).toBe(1);
+    });
+    expect(confirmBody).toEqual(expect.objectContaining({
+      action_id: 'action-new-chat',
+      confirmed: false,
+    }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   test('cancelling an in-flight request stops it, notifies the backend, and re-enables input', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     axios.post.mockImplementation((url, data, config) => (

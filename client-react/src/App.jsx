@@ -180,6 +180,18 @@ function App() {
   const handleNewChat = () => {
     // A new chat must invalidate any in-flight request before clearing the UI.
     // Otherwise the old request's finally block can repopulate the new chat.
+    // If a confirmation is pending, decline it via /confirm (same as Cancel response)
+    // rather than only POSTing /cancel, which is a no-op after the original request finished.
+    if (pendingConfirmation && confirmationRequestIdRef.current) {
+      const action = pendingConfirmation;
+      axios.post(`${host}/confirm`, {
+        action_id: action.action_id,
+        confirmed: false,
+        allowed_paths: resolveAllowedPaths(),
+      }).catch(() => {});
+      // Clear refs immediately so a late /confirm response cannot mutate the new chat.
+      confirmationRequestIdRef.current = null;
+    }
     const activeRequestId = requestIdRef.current;
     if (activeRequestId) {
       fetch(`${host}/cancel/${activeRequestId}`, { method: 'POST' }).catch(() => {});
