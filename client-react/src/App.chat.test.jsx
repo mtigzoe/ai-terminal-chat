@@ -347,6 +347,64 @@ describe('non-streaming chat lifecycle', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  test('Send result to chat aborts a previous in-flight chat request', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+    let firstConfig;
+    let secondStarted = false;
+    let chatPosts = 0;
+
+    axios.post.mockImplementation((url, data, config) => {
+      if (String(url).includes('/terminal/run')) {
+        return Promise.resolve({
+          data: { stdout: 'hello from terminal', stderr: '', returncode: 0 },
+        });
+      }
+      // Chat posts
+      chatPosts += 1;
+      if (chatPosts === 1) {
+        firstConfig = config;
+        return new Promise((resolve, reject) => {
+          config.signal.addEventListener('abort', () => {
+            const err = new Error('canceled');
+            err.name = 'CanceledError';
+            err.code = 'ERR_CANCELED';
+            reject(err);
+          });
+        });
+      }
+      secondStarted = true;
+      return Promise.resolve({
+        data: { text: 'second response', tool_activity: [], request_id: data.request_id },
+      });
+    });
+
+    render(<App />);
+
+    // Run a terminal command so "Send result to chat" is available
+    fireEvent.change(screen.getByLabelText(/^command$/i), { target: { value: 'echo hello' } });
+    fireEvent.click(screen.getByRole('button', { name: /^run$/i }));
+    await screen.findByRole('button', { name: /send result to chat/i });
+
+    // Start a hanging chat request
+    await sendMessage('first');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /cancel response/i })).toBeInTheDocument();
+    });
+
+    // TerminalPanel can send while chat is waiting — must abort the first request
+    fireEvent.click(screen.getByRole('button', { name: /send result to chat/i }));
+
+    await waitFor(() => {
+      expect(secondStarted).toBe(true);
+    });
+    await screen.findByText('second response');
+    expect(firstConfig.signal.aborted).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/cancel/'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
   test('cancelling an in-flight request stops it, notifies the backend, and re-enables input', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
     axios.post.mockImplementation((url, data, config) => (

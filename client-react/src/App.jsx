@@ -440,7 +440,31 @@ function App() {
     resolveConfirmation(true, pendingConfirmation, true);
   }, [pendingConfirmation, waiting]);
 
-  const handleClick = (message) => { if (validationCheck(message)) return; if (!is_stream) handleNonStreamingChat(message); else handleStreamingChat(message); };
+  const handleClick = (message) => {
+    if (validationCheck(message)) return;
+    // Abort any in-flight request before starting a new one (e.g. Terminal
+    // "Send to chat" can fire while a previous chat request is still waiting).
+    if (pendingConfirmation && confirmationRequestIdRef.current) {
+      const action = pendingConfirmation;
+      axios.post(`${host}/confirm`, {
+        action_id: action.action_id,
+        confirmed: false,
+        allowed_paths: resolveAllowedPaths(),
+      }).catch(() => {});
+      confirmationRequestIdRef.current = null;
+      setPendingConfirmation(null);
+      awaitingConfirmationRef.current = false;
+    }
+    const previousRequestId = requestIdRef.current;
+    if (previousRequestId) {
+      fetch(`${host}/cancel/${previousRequestId}`, { method: 'POST' }).catch(() => {});
+    }
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    requestIdRef.current = null;
+    if (!is_stream) handleNonStreamingChat(message);
+    else handleStreamingChat(message);
+  };
   const handleNonStreamingChat = async (message) => { const requestId = generateRequestId(); requestIdRef.current = requestId; const controller = new AbortController(); abortControllerRef.current = controller; const resolvedAllowedPaths = resolveAllowedPaths(); const userInstructions = resolveUserInstructions(); const chatData = { chat: message, history: data, request_id: requestId, allowed_paths: resolvedAllowedPaths ?? [], user_instructions: userInstructions }; const ndata = [...data, { role: "user", parts: [{ text: message }], timestamp: nowISO() }]; flushSync(() => { setData(ndata); setWaiting(true); setAgentStatus({ phase: 'plan', message: 'Planning next step', assertive: false }); }); executeScroll(); const headerConfig = { headers: { 'Content-Type': 'application/json;charset=UTF-8' }, signal: controller.signal }; const fetchData = async () => { let modelResponse = ""; let toolActivity = []; let cancelled = false; try { const response = await axios.post(url, chatData, headerConfig); if (requestIdRef.current !== requestId) return; modelResponse = response.data.text || ""; toolActivity = response.data.tool_activity || []; cancelled = Boolean(response.data.cancelled); const pending = toolActivity.find((item) => item.type === 'pending_confirmation'); if (pending) { confirmationRequestIdRef.current = requestId; setPendingConfirmation(pending); setAgentStatus(statusFromPendingConfirmation(pending) || { phase: 'confirm', message: 'Confirmation required.', assertive: false }); } else if (cancelled) { if (!modelResponse.trim()) modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response stopped by user.', assertive: false }); } else { const status = statusFromToolActivity(toolActivity); if (status) setAgentStatus(status); else if (modelResponse) setAgentStatus({ phase: 'complete', message: 'Response complete.', assertive: false }); } } catch (error) { if (requestIdRef.current !== requestId) return; if (axios.isCancel(error) || error?.code === "ERR_CANCELED" || error?.name === "CanceledError") { cancelled = true; modelResponse = "[Response stopped by user.]"; setAgentStatus({ phase: 'cancelled', message: 'Response cancelled.', assertive: false }); } else { modelResponse = `Error: ${getErrorMessage(error)}`; setAgentStatus({ phase: 'error', message: getErrorMessage(error), assertive: true }); } } finally { if (requestIdRef.current !== requestId) return; abortControllerRef.current = null; requestIdRef.current = null; const updatedData = [...ndata, { role: "model", parts: [{ text: modelResponse }], toolActivity }]; flushSync(() => { setData(updatedData); setWaiting(false); }); executeScroll(); window.setTimeout(() => inputRef.current?.focus(), 0); } }; fetchData(); };
   const handleStreamingChat = async (message) => {
     const resolvedAllowedPaths = resolveAllowedPaths();
