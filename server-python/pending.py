@@ -14,7 +14,9 @@ protection, mirrors TypeScript confirmation-state).
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -84,16 +86,67 @@ def _resolve_git_dir(root: Path) -> Optional[Path]:
     return None
 
 
+def _symlink_fingerprint(target: str, target_bytes: Optional[bytes] = None) -> str:
+    """Hash a symlink's link-target string (and optionally its contents).
+
+    Binding to the link target itself (not just where it currently points)
+    means retargeting a symlink to a different in-project file always
+    changes the fingerprint, even if that file's bytes happen to match.
+    """
+    payload = b"symlink\x00" + target.encode("utf-8", "surrogateescape")
+    if target_bytes is not None:
+        payload += b"\x00target\x00" + target_bytes
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _fingerprint_path(rel_path: str) -> dict:
-    """Capture a stable fingerprint of a project-relative path."""
+    """Capture a stable fingerprint of a project-relative path.
+
+    Confirmation must bind the requested directory entry, not a symlink's
+    target: otherwise an in-project symlink could be retargeted to a
+    different file with identical contents and the original confirmation
+    would still validate (mirrors TypeScript's confirmation-state.ts).
+    """
     normalized = str(rel_path or "").strip()
     if not normalized:
         return {"path": normalized, "status": "unavailable", "sha256": None}
+
+    root = get_project_root()
+    lexical_path = Path(os.path.normpath(str(root / normalized)))
+
+    try:
+        lexical_stat = lexical_path.lstat()
+    except FileNotFoundError:
+        lexical_stat = None
+    except OSError:
+        return {"path": normalized, "status": "unavailable", "sha256": None}
+
+    if lexical_stat is not None and stat.S_ISLNK(lexical_stat.st_mode):
+        # A write through a symlink changes its resolved target. Bind both
+        # the link target and the target's contents so approval cannot
+        # overwrite changes made to the target after the preview was shown.
+        try:
+            link_target = os.readlink(lexical_path)
+        except OSError:
+            link_target = ""
+        try:
+            resolved_target = safe_path(normalized)
+            target_stat = resolved_target.stat()
+            if not stat.S_ISREG(target_stat.st_mode) or target_stat.st_size > MAX_FINGERPRINT_BYTES:
+                raise OSError("symlink target is not a fingerprintable file")
+            target_bytes = resolved_target.read_bytes()
+        except (ValueError, OSError):
+            # Dangling in-project symlinks are valid delete targets, and an
+            # oversized/non-file/out-of-project target can't be hashed.
+            # Bind the link itself so the action stays confirmable without
+            # pretending an unreadable target is writable.
+            return {"path": normalized, "status": "present", "sha256": _symlink_fingerprint(link_target)}
+        return {"path": normalized, "status": "present", "sha256": _symlink_fingerprint(link_target, target_bytes)}
+
     try:
         resolved = safe_path(normalized)
     except ValueError:
         try:
-            root = get_project_root()
             candidate = (root / normalized).resolve()
             candidate.relative_to(root.resolve())
             resolved = candidate
@@ -102,7 +155,11 @@ def _fingerprint_path(rel_path: str) -> dict:
 
     try:
         if not resolved.exists():
-            return {"path": normalized, "status": "missing", "sha256": None}
+            # A missing target can still be created later. Bind its resolved
+            # location so retargeting an in-project symlinked parent
+            # directory cannot move a confirmed write somewhere else.
+            payload = b"missing\x00" + str(resolved).encode("utf-8", "surrogateescape")
+            return {"path": normalized, "status": "missing", "sha256": hashlib.sha256(payload).hexdigest()}
         if not resolved.is_file():
             return {"path": normalized, "status": "unavailable", "sha256": None}
         size = resolved.stat().st_size

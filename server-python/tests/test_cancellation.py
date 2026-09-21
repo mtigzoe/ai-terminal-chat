@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 SERVER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_DIR))
 
@@ -50,13 +52,19 @@ def test_release_is_safe_for_unknown_or_empty_id():
     cancellation.release(None)
 
 
-def test_registering_the_same_id_twice_resets_the_event():
+def test_register_rejects_duplicate_request_id_instead_of_replacing_it():
+    """A duplicate, unreleased request id must not silently replace the
+    event backing the still-active request (mirrors TypeScript, which
+    throws for exactly this case)."""
     first = cancellation.register("req-1")
-    cancellation.cancel("req-1")
-    assert first.is_set() is True
 
-    second = cancellation.register("req-1")
-    assert second.is_set() is False
+    with pytest.raises(ValueError, match="Request ID is already in use: req-1"):
+        cancellation.register("req-1")
+
+    # The rejected duplicate must not have touched the original event.
+    assert first.is_set() is False
+    assert cancellation.cancel("req-1") is True
+    assert first.is_set() is True
 
 
 def test_oldest_entry_is_evicted_once_capacity_is_reached(monkeypatch):
@@ -89,6 +97,11 @@ def test_cancel_before_register_is_consumed_only_once():
     first = cancellation.register("once")
     assert first.is_set() is True
 
+    # Release before re-registering: a live, unreleased id is now a
+    # rejected duplicate rather than a reset (see the dedicated test
+    # above), so this cycle simulates the request finishing and a later,
+    # unrelated request reusing the same id.
+    cancellation.release("once")
     second = cancellation.register("once")
     assert second.is_set() is False
 

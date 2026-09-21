@@ -865,4 +865,61 @@ describe("POST /confirm", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("stops a resume the same way an explicit /cancel would when the client's HTTP request aborts", async () => {
+    // Regression test: /confirm registered a cancellation signal but never
+    // wired it to the underlying HTTP request the way /chat and /stream do
+    // (bindRequestCancellation), so a client that dropped its connection
+    // mid-resume had no way to stop the loop short of calling /cancel
+    // explicitly. Simulates the drop with an already-aborted request
+    // signal, which agentLoopCore must observe at its very first
+    // cooperative checkpoint, immediately after the confirmed tool result
+    // comes back but before the model gets another turn.
+    const originalRoot = getProjectRoot();
+    const root = path.join(os.tmpdir(), `confirm-abort-${Date.now()}`);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, "notes.txt"), "shh");
+    setProjectRoot(root);
+
+    try {
+      const provider = getProvider();
+      const action = createPending(
+        "read_file_permission",
+        { path: "notes.txt" },
+        { message: "The assistant wants to read 'notes.txt'.", permission_request: true },
+        {
+          provider_fingerprint: providerFingerprint(provider),
+          contents: [],
+          round_index: 0,
+          tool_results: [],
+          remaining_calls: [{ name: "read_file", args: { path: "notes.txt" } }],
+          last_call_signature: null,
+          consecutive_repeat_count: 1,
+          consecutive_error_count: 0,
+        }
+      );
+
+      const controller = new AbortController();
+      controller.abort();
+      const confirmRes = await createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: true }),
+        signal: controller.signal,
+      });
+      expect(confirmRes.status).toBe(200);
+      const confirmData = await confirmRes.json();
+
+      // The already-in-flight confirmed read still completes...
+      expect(confirmData.result).toMatchObject({ path: "notes.txt", contents: "shh" });
+      // ...but the loop stops right there instead of giving the model
+      // another turn, exactly as an explicit /cancel would.
+      expect(confirmData.cancelled).toBe(true);
+      expect(confirmData.text).toBe("");
+      expect(confirmData.pending_confirmation).toBeUndefined();
+    } finally {
+      setProjectRoot(originalRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

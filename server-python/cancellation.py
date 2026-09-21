@@ -28,20 +28,23 @@ _LOCK = Lock()
 
 
 def register(request_id: str) -> Event:
-    """Create (or reset) the cancellation event for a request id.
+    """Create the cancellation event for a request id.
 
-    If a cancel intent was recorded before registration, the returned
-    event is already set. When the registry is at capacity the oldest
-    tracked request is cancelled and evicted (mirrors TypeScript).
+    Raises ValueError if the id is already registered and unreleased,
+    rather than silently replacing the event backing an in-flight
+    request (mirrors TypeScript's cancellation.ts). If a cancel intent
+    was recorded before registration, the returned event is already
+    set. When the registry is at capacity the oldest tracked request is
+    cancelled and evicted (mirrors TypeScript).
     """
 
     event = Event()
     with _LOCK:
+        if request_id in _EVENTS:
+            raise ValueError(f"Request ID is already in use: {request_id}")
         if request_id in _PENDING_CANCELLATIONS:
             del _PENDING_CANCELLATIONS[request_id]
             event.set()
-        if request_id in _EVENTS:
-            del _EVENTS[request_id]
         if len(_EVENTS) >= MAX_TRACKED_REQUESTS:
             _oldest_id, oldest_event = _EVENTS.popitem(last=False)
             oldest_event.set()

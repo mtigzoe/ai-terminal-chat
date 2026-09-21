@@ -891,6 +891,7 @@ app.post("/confirm", async (c) => {
   let nextPending: PendingConfirmationEvent | null = null;
   let resultCaptured = false;
   const cancelSignal = register(requestId);
+  const cancelCleanup = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
 
   let allowedPaths = extractAllowedPaths(data);
   if (
@@ -942,7 +943,8 @@ app.post("/confirm", async (c) => {
   } catch (exc) {
     errorMessage = `Unexpected server error: ${exc}`;
   } finally {
-    release(requestId);
+    cancelCleanup();
+    release(requestId, cancelSignal);
   }
 
   baseResponse.tool_activity = toolActivity;

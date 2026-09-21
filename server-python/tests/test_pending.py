@@ -194,3 +194,116 @@ def test_pop_pending_allows_git_commit_when_index_unchanged(tmp_path, monkeypatc
     consumed = pop_pending(action.action_id)
     assert consumed is not None
     assert consumed.tool_name == "git_commit"
+
+
+def test_pop_pending_rejects_when_symlink_retargeted_to_identical_content(tmp_path, monkeypatch):
+    """A confirmation must bind the symlink entry itself, not just target
+    bytes: retargeting to a different in-project file with identical
+    content must still invalidate the pending action (TS parity)."""
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    original = tmp_path / "original.txt"
+    original.write_text("same bytes\n", encoding="utf-8")
+    decoy = tmp_path / "decoy.txt"
+    decoy.write_text("same bytes\n", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    link.symlink_to(original)
+
+    action = create_pending(
+        "write_file",
+        {"path": "link.txt", "contents": "new\n"},
+        {"requires_confirmation": True},
+    )
+    assert get_pending(action.action_id) is not None
+
+    link.unlink()
+    link.symlink_to(decoy)
+
+    assert pop_pending(action.action_id) is None
+
+
+def test_pop_pending_allows_symlink_write_when_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    original = tmp_path / "original.txt"
+    original.write_text("same bytes\n", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    link.symlink_to(original)
+
+    action = create_pending(
+        "write_file",
+        {"path": "link.txt", "contents": "new\n"},
+        {"requires_confirmation": True},
+    )
+    consumed = pop_pending(action.action_id)
+    assert consumed is not None
+
+
+def test_pop_pending_allows_dangling_symlink_delete_when_unchanged(tmp_path, monkeypatch):
+    """Dangling in-project symlinks are valid delete targets."""
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    link = tmp_path / "dangling.txt"
+    link.symlink_to(tmp_path / "does-not-exist.txt")
+
+    action = create_pending(
+        "delete_file",
+        {"path": "dangling.txt"},
+        {"requires_confirmation": True},
+    )
+    consumed = pop_pending(action.action_id)
+    assert consumed is not None
+
+
+def test_pop_pending_rejects_when_dangling_symlink_retargeted(tmp_path, monkeypatch):
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    link = tmp_path / "dangling.txt"
+    link.symlink_to(tmp_path / "does-not-exist.txt")
+
+    action = create_pending(
+        "delete_file",
+        {"path": "dangling.txt"},
+        {"requires_confirmation": True},
+    )
+
+    link.unlink()
+    link.symlink_to(tmp_path / "somewhere-else.txt")
+
+    assert pop_pending(action.action_id) is None
+
+
+def test_pop_pending_rejects_create_file_when_parent_symlink_retargeted(tmp_path, monkeypatch):
+    """A still-missing create target must bind its resolved parent so
+    retargeting an in-project symlinked parent directory cannot move a
+    confirmed write to a different location."""
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    real_dir_a = tmp_path / "real-a"
+    real_dir_a.mkdir()
+    real_dir_b = tmp_path / "real-b"
+    real_dir_b.mkdir()
+    link_dir = tmp_path / "linked"
+    link_dir.symlink_to(real_dir_a)
+
+    action = create_pending(
+        "create_file",
+        {"path": "linked/new-file.txt", "contents": "hello\n"},
+        {"requires_confirmation": True},
+    )
+
+    link_dir.unlink()
+    link_dir.symlink_to(real_dir_b)
+
+    assert pop_pending(action.action_id) is None
+
+
+def test_pop_pending_allows_create_file_under_unchanged_symlinked_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    link_dir = tmp_path / "linked"
+    link_dir.symlink_to(real_dir)
+
+    action = create_pending(
+        "create_file",
+        {"path": "linked/new-file.txt", "contents": "hello\n"},
+        {"requires_confirmation": True},
+    )
+    consumed = pop_pending(action.action_id)
+    assert consumed is not None

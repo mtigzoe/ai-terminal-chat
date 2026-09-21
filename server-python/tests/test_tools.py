@@ -266,6 +266,15 @@ def test_safe_path_rejects_posix_absolute_paths(path):
         security.safe_path(path)
 
 
+def test_safe_path_rejects_null_bytes(project_root):
+    """Null bytes in paths must be rejected (they truncate on many OS APIs)."""
+    null_path = "foo" + chr(0) + "bar"
+    with pytest.raises(ValueError, match="null byte"):
+        security.safe_path(null_path)
+    with pytest.raises(ValueError, match="null byte"):
+        security.safe_path("subdir/file" + chr(0) + ".txt")
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -276,17 +285,6 @@ def test_safe_path_rejects_posix_absolute_paths(path):
         "a/b/../../../outside.txt",
     ],
 )
-
-
-def test_safe_path_rejects_null_bytes(project_root):
-    """Null bytes in paths must be rejected (they truncate on many OS APIs)."""
-    null_path = "foo" + chr(0) + "bar"
-    with pytest.raises(ValueError, match="null byte"):
-        security.safe_path(null_path)
-    with pytest.raises(ValueError, match="null byte"):
-        security.safe_path("subdir/file" + chr(0) + ".txt")
-
-
 def test_safe_path_rejects_traversal_variants(project_root, path):
     with pytest.raises(ValueError, match="outside the project"):
         security.safe_path(path)
