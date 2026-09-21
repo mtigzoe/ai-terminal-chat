@@ -417,22 +417,28 @@ export function confirmationPathsForPending(
   toolName: string,
   args: Record<string, unknown>,
 ): string[] {
+  if (toolName === "git_restore") {
+    // staged is checked before looking at path (and a missing/blank path
+    // still falls back to GIT_INDEX_MARKER) so that a malformed call
+    // missing its required "path" doesn't fall through to the shared
+    // empty-target check below and end up with *no* binding at all —
+    // that would make the pending action unconditionally confirmable
+    // regardless of what changed in the meantime. Mirrors
+    // server-python's _confirmation_paths_for_pending.
+    if (args.staged === true) return [GIT_HEAD_MARKER, GIT_INDEX_MARKER];
+    const target = typeof args.path === "string" ? args.path.trim() : "";
+    return target ? [target, GIT_INDEX_MARKER] : [GIT_INDEX_MARKER];
+  }
   if (
     toolName === "create_file" ||
     toolName === "write_file" ||
     toolName === "delete_file" ||
-    toolName === "git_add" ||
-    toolName === "git_restore"
+    toolName === "git_add"
   ) {
     const target = typeof args.path === "string" ? args.path.trim() : "";
     if (!target) return [];
     if (toolName === "git_add") {
       return [target, GIT_INDEX_MARKER];
-    }
-    if (toolName === "git_restore") {
-      return args.staged === true
-        ? [GIT_HEAD_MARKER, GIT_INDEX_MARKER]
-        : [target, GIT_INDEX_MARKER];
     }
     return [target];
   }

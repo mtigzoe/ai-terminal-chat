@@ -12,6 +12,7 @@ from pending import (  # noqa: E402
     create_pending,
     get_pending,
     pop_pending,
+    _confirmation_paths_for_pending,
     _resolve_git_dir,
 )
 
@@ -385,3 +386,24 @@ def test_resolve_git_dir_stops_at_malformed_git_entry_instead_of_walking_further
     (project_root / ".git").write_text("not a valid worktree pointer\n", encoding="utf-8")
 
     assert _resolve_git_dir(project_root) is None
+
+
+def test_confirmation_paths_for_git_restore_falls_back_to_index_when_path_missing():
+    """git_restore's JSON schema requires "path", but a malformed/
+    hallucinated model call could still omit or blank it. Unlike
+    create_file/write_file/delete_file/git_add (where an empty path
+    correctly means "nothing to fingerprint"), git_restore must still
+    fall back to binding the git index -- otherwise the pending action
+    would get zero fingerprint protection and become unconditionally
+    confirmable regardless of what changed in the meantime. staged=True
+    is also checked ahead of path so "unstage everything" isn't skipped
+    by the same fallback (TS parity: confirmation-state.ts's
+    confirmationPathsForPending)."""
+    assert _confirmation_paths_for_pending("git_restore", {"staged": True}, None) == [
+        "__git_head__",
+        "__git_index__",
+    ]
+    assert _confirmation_paths_for_pending("git_restore", {}, None) == ["__git_index__"]
+    assert _confirmation_paths_for_pending(
+        "git_restore", {"path": "   ", "staged": False}, None
+    ) == ["__git_index__"]

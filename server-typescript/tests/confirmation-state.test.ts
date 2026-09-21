@@ -32,6 +32,28 @@ describe("Git index confirmation state", () => {
     ]);
   });
 
+  it("still binds git_restore to the index when a malformed call is missing its required path", () => {
+    // Regression test: the path-based tools (create_file/write_file/
+    // delete_file/git_add) correctly bind to nothing when their path is
+    // missing -- there's nothing to fingerprint. But git_restore used to
+    // share that same "no target -> []" fallback, which meant a
+    // malformed call missing its required "path" (schema violation, but
+    // models do sometimes produce these) got *zero* fingerprint
+    // protection: the pending action became unconditionally confirmable
+    // no matter what changed to the index in the meantime. staged=true
+    // must also be checked before path, not after, so "unstage
+    // everything" isn't skipped by the same empty-path shortcut.
+    expect(confirmationPathsForPending("git_restore", { staged: true })).toEqual([
+      "__git_head__",
+      "__git_index__",
+    ]);
+    expect(confirmationPathsForPending("git_restore", {})).toEqual(["__git_index__"]);
+    expect(confirmationPathsForPending("git_restore", { path: "   ", staged: false })).toEqual([
+      "__git_index__",
+    ]);
+  });
+
+
   it("binds git_push confirmations to the current local HEAD", () => {
     expect(confirmationPathsForPending("git_push", {})).toEqual(["__git_head__", "__git_remote__:<default>"]);
     expect(confirmationPathsForPending("git_push", { branch: "other", remote: "origin" })).toEqual(["__git_push_head__:other", "__git_remote__:origin"]);
