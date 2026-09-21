@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getProjectRoot, isPathWithinRoot, safePath } from "./security.ts";
+import { extractPatchTargetPaths } from "./write-tools.ts";
 
 export interface ConfirmationFileState {
   kind?: "file" | "git_index" | "git_head" | "git_remote";
@@ -351,68 +352,6 @@ export function confirmationFileStatesMatch(
   });
 }
 
-function unquoteGitPath(raw: string): string {
-  let candidate = raw.split("\t")[0]?.trim() ?? "";
-  if (
-    candidate.length >= 2 &&
-    candidate.startsWith('"') &&
-    candidate.endsWith('"')
-  ) {
-    candidate = candidate.slice(1, -1);
-    const bytes: number[] = [];
-    for (let i = 0; i < candidate.length; i += 1) {
-      if (candidate[i] !== "\\") {
-        const encoded = Buffer.from(candidate[i]!, "utf8");
-        bytes.push(...encoded);
-        continue;
-      }
-      const next = candidate[i + 1] ?? "";
-      const escapes: Record<string, number> = {
-        a: 0x07, b: 0x08, t: 0x09, n: 0x0a,
-        v: 0x0b, f: 0x0c, r: 0x0d, "\\": 0x5c, '"': 0x22,
-      };
-      if (escapes[next] !== undefined) {
-        bytes.push(escapes[next]!);
-        i += 1;
-        continue;
-      }
-      const octal = candidate.slice(i + 1).match(/^[0-7]{1,3}/)?.[0];
-      if (octal) {
-        bytes.push(parseInt(octal, 8));
-        i += octal.length;
-        continue;
-      }
-      bytes.push(0x5c);
-    }
-    candidate = Buffer.from(bytes).toString("utf8");
-  }
-  return candidate;
-}
-
-function patchTargetPaths(patch: string): string[] {
-  const paths: string[] = [];
-  for (const line of patch.split(/\n/)) {
-    const diffGit = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-    if (diffGit) {
-      const oldPath = unquoteGitPath(diffGit[1] ?? "");
-      const newPath = unquoteGitPath(diffGit[2] ?? "");
-      if (oldPath) paths.push(oldPath);
-      if (newPath) paths.push(newPath);
-      continue;
-    }
-    for (const prefix of ["--- a/", "+++ b/", "--- ", "+++ "]) {
-      if (!line.startsWith(prefix)) continue;
-      let candidate = unquoteGitPath(line.slice(prefix.length));
-      if ((prefix === "--- " || prefix === "+++ ") && /^(?:a|b)\//.test(candidate)) {
-        candidate = candidate.slice(2);
-      }
-      if (candidate && candidate !== "/dev/null") paths.push(candidate);
-      break;
-    }
-  }
-  return [...new Set(paths)];
-}
-
 export function confirmationPathsForPending(
   toolName: string,
   args: Record<string, unknown>,
@@ -460,7 +399,16 @@ export function confirmationPathsForPending(
     ];
   }
   if (toolName === "apply_patch") {
-    return patchTargetPaths(typeof args.patch === "string" ? args.patch : "");
+    // Reuses write-tools.ts's own patch-header parser (the one that
+    // actually validates/safe-checks each target before applying)
+    // rather than maintaining a second, independent copy here: a
+    // regex that silently drifts from the authoritative one would mean
+    // confirmation fingerprinting protects a different set of files
+    // than the ones apply_patch actually validated and is about to
+    // touch (server-python mirrors this by fingerprinting apply_patch's
+    // own preview["files"], which is the same resolved list it used
+    // for validation and eventual git apply).
+    return extractPatchTargetPaths(typeof args.patch === "string" ? args.patch : "");
   }
   return [];
 }

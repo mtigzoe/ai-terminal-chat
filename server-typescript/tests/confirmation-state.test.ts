@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { captureConfirmationFileStates, confirmationFileStatesMatch, confirmationPathsForPending } from "../src/confirmation-state.ts";
+import { extractPatchTargetPaths } from "../src/write-tools.ts";
 import { setProjectRoot } from "../src/security.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -166,6 +167,36 @@ describe("Git index confirmation state", () => {
   it("decodes quoted git patch paths for confirmation binding", () => {
     const patch = "--- \"a/line\\011name.txt\"\n+++ \"b/line\\011name.txt\"\n@@ -1 +1 @@\n-one\n+two\n";
     expect(confirmationPathsForPending("apply_patch", { patch })).toEqual(["line\tname.txt"]);
+  });
+
+  it("binds apply_patch confirmations to exactly the paths write-tools.ts validates and applies", () => {
+    // Regression test: confirmation-state.ts used to maintain its own
+    // copy of the diff --git header parser, and it had drifted from
+    // write-tools.ts's authoritative one -- a lazy vs. greedy regex
+    // quantifier -- so a patch touching a path containing the literal
+    // substring " b/" got a *different* target-path extraction for
+    // confirmation fingerprinting than the one write-tools.ts's
+    // applyPatch actually validated (safePath/sensitivity checks) and
+    // is about to hand to `git apply`. That's a TOCTOU-relevant gap:
+    // whatever file apply_patch really touches must be exactly what
+    // gets fingerprinted, not an independently-reparsed approximation.
+    const patch =
+      "diff --git a/note b/draft.txt b/note b/draft.txt\n" +
+      "--- a/note b/draft.txt\n+++ b/note b/draft.txt\n@@ -1 +1 @@\n-one\n+two\n";
+    // The old, separately-drifted lazy-quantifier parser produced
+    // ["note", "draft.txt b/note b/draft.txt", "note b/draft.txt"] for
+    // this input -- a different split entirely from write-tools.ts's
+    // greedy one.
+    expect(confirmationPathsForPending("apply_patch", { patch })).toEqual([
+      "note b/draft.txt b/note",
+      "draft.txt",
+      "note b/draft.txt",
+    ]);
+    // And it's not a coincidence: it's exactly what the shared,
+    // authoritative parser produces.
+    expect(confirmationPathsForPending("apply_patch", { patch })).toEqual(
+      extractPatchTargetPaths(patch),
+    );
   });
 
   it("binds apply_patch confirmations for unprefixed unified-diff paths", () => {

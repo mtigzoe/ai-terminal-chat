@@ -758,7 +758,7 @@ function unquoteGitPath(raw: string): string {
   return candidate;
 }
 
-function extractPatchTargetPaths(patchText: string): string[] {
+export function extractPatchTargetPaths(patchText: string): string[] {
   const paths: string[] = [];
   const seen = new Set<string>();
 
