@@ -87,7 +87,7 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
         // Dangling in-project symlinks are valid delete targets. Bind the
         // link itself so a pending deletion remains confirmable without
         // pretending its missing target is writable.
-        const payload = Buffer.from("symlink\\0" + target, "utf8");
+        const payload = Buffer.from("symlink\0" + target, "utf8");
         return {
           path: normalized,
           status: "present",
@@ -98,7 +98,7 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
       try {
         targetStat = fs.statSync(resolvedTarget);
       } catch {
-        const payload = Buffer.from("symlink\\0" + target, "utf8");
+        const payload = Buffer.from("symlink\0" + target, "utf8");
         return {
           path: normalized,
           status: "present",
@@ -106,7 +106,7 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
         };
       }
       if (!targetStat.isFile() || targetStat.size > MAX_FINGERPRINT_BYTES) {
-        const payload = Buffer.from("symlink\\0" + target, "utf8");
+        const payload = Buffer.from("symlink\0" + target, "utf8");
         return {
           path: normalized,
           status: "present",
@@ -115,7 +115,7 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
       }
       const targetBytes = fs.readFileSync(resolvedTarget);
       const payload = Buffer.concat([
-        Buffer.from("symlink\\0" + target + "\\0target\\0", "utf8"),
+        Buffer.from("symlink\0" + target + "\0target\0", "utf8"),
         targetBytes,
       ]);
       return {
@@ -146,7 +146,7 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
       // A missing target can still be created later. Bind its resolved parent
       // location so retargeting an in-project symlink in the parent directory
       // cannot move the confirmed write to a different location.
-      const payload = Buffer.from("missing\\0" + resolved, "utf8");
+      const payload = Buffer.from("missing\0" + resolved, "utf8");
       return {
         path: normalized,
         status: "missing",
@@ -290,7 +290,7 @@ function fingerprintGitRemote(remote: string): ConfirmationFileState {
     for (const directoryName of ["remotes", "branches"]) {
       const directoryPath = path.join(gitDir, directoryName);
       if (!fs.existsSync(directoryPath)) {
-        configParts.push(`\\0${directoryName}:missing\\0`);
+        configParts.push(`\0${directoryName}:missing\0`);
         continue;
       }
       const directoryStat = fs.lstatSync(directoryPath);
@@ -298,14 +298,14 @@ function fingerprintGitRemote(remote: string): ConfirmationFileState {
         return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
       }
       const entries = fs.readdirSync(directoryPath).sort();
-      configParts.push(`\\0${directoryName}:entries\\0`);
+      configParts.push(`\0${directoryName}:entries\0`);
       for (const entry of entries) {
         const entryPath = path.join(directoryPath, entry);
         const entryStat = fs.lstatSync(entryPath);
         if (entryStat.isSymbolicLink() || !entryStat.isFile()) {
           return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
         }
-        configParts.push(`\\0${directoryName}/${entry}\\0`);
+        configParts.push(`\0${directoryName}/${entry}\0`);
         configParts.push(fs.readFileSync(entryPath, "utf8"));
       }
     }

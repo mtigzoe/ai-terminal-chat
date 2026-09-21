@@ -164,6 +164,35 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
+  it("does not let symlink-target/content pairs collide through the join delimiter", () => {
+    // Regression test: the symlink fingerprint used to join
+    // "symlink" + target + "target" + targetBytes with an ordinary
+    // *printable* two-character "\0" (a literal backslash followed by
+    // a zero) instead of a real null byte. A symlink's target string
+    // can legally contain those exact printable characters, so two
+    // completely different (target, content) pairs could be crafted to
+    // concatenate to byte-identical payloads: symlink -> "X" with file
+    // content "Y\0target\0Z" hashed identically to symlink ->
+    // "X\0target\0Y" with file content "Z". That defeats the whole
+    // point of the fingerprint -- confirm a write through the first
+    // symlink, then swap both its destination and that file's content
+    // to the second combination, and the stale confirmation would
+    // still validate. A real null byte can never appear in a symlink
+    // target (filesystems reject it), which is what actually closes
+    // this rather than just relocating it.
+    fs.writeFileSync(path.join(root, "X"), "Y\\0target\\0Z", "utf8");
+    fs.symlinkSync("X", path.join(root, "linkA"));
+
+    fs.writeFileSync(path.join(root, "X\\0target\\0Y"), "Z", "utf8");
+    fs.symlinkSync("X\\0target\\0Y", path.join(root, "linkB"));
+
+    const stateA = captureConfirmationFileStates(["linkA"]);
+    const stateB = captureConfirmationFileStates(["linkB"]);
+    expect(stateA[0]?.status).toBe("present");
+    expect(stateB[0]?.status).toBe("present");
+    expect(stateA[0]?.sha256).not.toBe(stateB[0]?.sha256);
+  });
+
   it("decodes quoted git patch paths for confirmation binding", () => {
     const patch = "--- \"a/line\\011name.txt\"\n+++ \"b/line\\011name.txt\"\n@@ -1 +1 @@\n-one\n+two\n";
     expect(confirmationPathsForPending("apply_patch", { patch })).toEqual(["line\tname.txt"]);
