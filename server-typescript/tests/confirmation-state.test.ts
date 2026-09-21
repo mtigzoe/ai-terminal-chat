@@ -205,3 +205,69 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 });
+
+describe("git dir discovery walks up from a project root subdirectory", () => {
+  // Regression coverage: PROJECT_ROOT can legitimately be a subdirectory of
+  // the actual repository — real git commands already discover the repo by
+  // walking up from cwd (see write-tools.ts's own comment about this exact
+  // scenario) — but the confirmation fingerprints used to check only
+  // PROJECT_ROOT/.git directly. That made every git_add/git_commit/
+  // git_push/etc. confirmation silently and permanently fail as
+  // "unavailable" for a project scoped to a subfolder of a larger repo.
+  let repoRoot: string;
+  let projectRoot: string;
+  beforeEach(() => {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "confirmation-walkup-"));
+    execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoRoot });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repoRoot });
+    projectRoot = path.join(repoRoot, "subproject");
+    fs.mkdirSync(projectRoot);
+    fs.writeFileSync(path.join(projectRoot, "file.txt"), "one\n");
+    execFileSync("git", ["add", "subproject/file.txt"], { cwd: repoRoot });
+    setProjectRoot(projectRoot);
+  });
+  afterEach(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+
+  it("finds the git index by walking up from a subdirectory project root", () => {
+    expect(confirmationPathsForPending("git_commit", { message: "commit" })).toEqual(["__git_index__"]);
+    const states = captureConfirmationFileStates(["__git_index__"]);
+    expect(states[0]?.kind).toBe("git_index");
+    expect(states[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+
+    fs.writeFileSync(path.join(projectRoot, "file.txt"), "two\n");
+    execFileSync("git", ["add", "subproject/file.txt"], { cwd: repoRoot });
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
+  it("still reports unavailable when no repo exists anywhere up the tree", () => {
+    const orphanRoot = fs.mkdtempSync(path.join(os.tmpdir(), "confirmation-no-repo-"));
+    try {
+      setProjectRoot(orphanRoot);
+      const states = captureConfirmationFileStates(["__git_index__"]);
+      expect(states[0]?.status).toBe("unavailable");
+      expect(confirmationFileStatesMatch(states)).toBe(false);
+    } finally {
+      fs.rmSync(orphanRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("stops at a malformed .git entry instead of walking further up to a real repo", () => {
+    const outerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "confirmation-malformed-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: outerRoot });
+      const subRoot = path.join(outerRoot, "sub");
+      fs.mkdirSync(subRoot);
+      // Exists, but is neither a directory nor a valid "gitdir: ..."
+      // worktree pointer file — git itself would refuse to treat this as
+      // a repo rather than keep searching ancestors, and so should we.
+      fs.writeFileSync(path.join(subRoot, ".git"), "not a valid worktree pointer\n");
+      setProjectRoot(subRoot);
+      const states = captureConfirmationFileStates(["__git_index__"]);
+      expect(states[0]?.status).toBe("unavailable");
+    } finally {
+      fs.rmSync(outerRoot, { recursive: true, force: true });
+    }
+  });
+});

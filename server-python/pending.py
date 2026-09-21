@@ -68,22 +68,50 @@ _LOCK = Lock()
 
 
 def _resolve_git_dir(root: Path) -> Optional[Path]:
-    """Return the git directory for the project, handling worktree .git files."""
-    git_entry = root / ".git"
+    """Return the git directory for the project.
+
+    Handles worktree ``.git`` files and, like the real ``git`` binary
+    (and like this module's own ``_run_git`` calls, which pass ``root``
+    as ``cwd`` and let git discover the repo from there), a project root
+    that is a *subdirectory* of the actual repository: walk upward until
+    a ``.git`` entry is found or the filesystem root is reached. Without
+    this, scoping the project to a subfolder of a larger repo made every
+    git-index/HEAD/remote fingerprint read "unavailable" — which
+    pop_pending treats as untrustworthy and always refuses — so no
+    git_add/git_commit/git_push/etc. confirmation could ever succeed,
+    even though the underlying git commands themselves work fine from
+    that same directory.
+    """
     try:
-        if not git_entry.exists():
-            return None
-        if git_entry.is_file():
-            text = git_entry.read_text(encoding="utf-8", errors="replace")
-            match = re.search(r"^gitdir:\s*(.+)\s*$", text, re.IGNORECASE | re.MULTILINE)
-            if not match:
-                return None
-            return (root / match.group(1).strip()).resolve()
-        if git_entry.is_dir():
-            return git_entry.resolve()
+        current = root.resolve()
     except OSError:
         return None
-    return None
+    while True:
+        git_entry = current / ".git"
+        try:
+            exists = git_entry.exists()
+        except OSError:
+            return None
+        if exists:
+            try:
+                if git_entry.is_file():
+                    text = git_entry.read_text(encoding="utf-8", errors="replace")
+                    match = re.search(r"^gitdir:\s*(.+)\s*$", text, re.IGNORECASE | re.MULTILINE)
+                    if match:
+                        return (current / match.group(1).strip()).resolve()
+                    return None
+                if git_entry.is_dir():
+                    return git_entry.resolve()
+            except OSError:
+                return None
+            # .git exists but is neither a worktree pointer file nor a
+            # directory: git itself would refuse to treat this as a repo
+            # rather than keep searching ancestors, so stop here too.
+            return None
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
 
 
 def _symlink_fingerprint(target: str, target_bytes: Optional[bytes] = None) -> str:

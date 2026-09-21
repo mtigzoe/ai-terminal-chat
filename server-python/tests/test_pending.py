@@ -7,7 +7,13 @@ SERVER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_DIR))
 
 import security  # noqa: E402
-from pending import clear_pending, create_pending, get_pending, pop_pending  # noqa: E402
+from pending import (  # noqa: E402
+    clear_pending,
+    create_pending,
+    get_pending,
+    pop_pending,
+    _resolve_git_dir,
+)
 
 
 def setup_function():
@@ -307,3 +313,75 @@ def test_pop_pending_allows_create_file_under_unchanged_symlinked_dir(tmp_path, 
     )
     consumed = pop_pending(action.action_id)
     assert consumed is not None
+
+
+def test_pop_pending_finds_git_dir_when_project_root_is_a_subdirectory(tmp_path, monkeypatch):
+    """PROJECT_ROOT may be a subdirectory of the actual git repository —
+    the real git binary discovers the repo by walking upward from cwd
+    (see tools._run_git, and apply_patch's own comment about this exact
+    scenario), so git-index/HEAD/remote fingerprinting must do the same
+    or every git_add/git_commit/git_push/etc. confirmation would
+    silently and permanently fail as 'unavailable'."""
+    repo_root = tmp_path
+    git_dir = repo_root / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    index = git_dir / "index"
+    index.write_bytes(b"DIRC\x00\x00\x00\x02original-index")
+
+    project_root = repo_root / "subproject"
+    project_root.mkdir()
+    monkeypatch.setattr(security, "PROJECT_ROOT", project_root)
+
+    action = create_pending(
+        "git_commit",
+        {"message": "test"},
+        {"requires_confirmation": True},
+    )
+    states = action.confirmation_file_state
+    assert states is not None
+    git_state = next(s for s in states if s.get("kind") == "git_index")
+    assert git_state["status"] == "present"
+    assert pop_pending(action.action_id) is not None
+
+    # And a real change to the index (found via the walk-up) is still caught.
+    action2 = create_pending(
+        "git_commit",
+        {"message": "test"},
+        {"requires_confirmation": True},
+    )
+    index.write_bytes(b"DIRC\x00\x00\x00\x02changed-index-bytes")
+    assert pop_pending(action2.action_id) is None
+
+
+def test_pop_pending_rejects_git_commit_when_no_repo_found_anywhere(tmp_path, monkeypatch):
+    project_root = tmp_path / "no-repo-here"
+    project_root.mkdir()
+    monkeypatch.setattr(security, "PROJECT_ROOT", project_root)
+
+    action = create_pending(
+        "git_commit",
+        {"message": "test"},
+        {"requires_confirmation": True},
+    )
+    states = action.confirmation_file_state
+    git_state = next(s for s in states if s.get("kind") == "git_index")
+    assert git_state["status"] == "unavailable"
+    assert pop_pending(action.action_id) is None
+
+
+def test_resolve_git_dir_stops_at_malformed_git_entry_instead_of_walking_further(tmp_path):
+    """A .git entry that exists but is neither a worktree pointer file
+    nor a directory must not be skipped in favor of a real repo further
+    up the tree — git itself would refuse rather than keep searching
+    ancestors, and neither should we."""
+    outer_git = tmp_path / ".git"
+    outer_git.mkdir()
+    (outer_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (outer_git / "index").write_bytes(b"DIRC")
+
+    project_root = tmp_path / "sub"
+    project_root.mkdir()
+    (project_root / ".git").write_text("not a valid worktree pointer\n", encoding="utf-8")
+
+    assert _resolve_git_dir(project_root) is None

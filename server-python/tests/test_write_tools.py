@@ -332,10 +332,16 @@ def test_apply_patch_too_large_is_rejected(git_repo, monkeypatch):
 
 
 def test_apply_patch_git_not_installed_reports_clear_error(git_repo, monkeypatch):
-    def fake_run(args, **kwargs):
+    def fake_popen(*args, **kwargs):
         raise FileNotFoundError("git not found")
 
-    monkeypatch.setattr(tools.subprocess, "run", fake_run)
+    # apply_patch -> _run_git -> run_cancellable spawns via
+    # subprocess.Popen, never subprocess.run, so patching "run" (as this
+    # test previously did) has no effect: the real git binary runs for
+    # real, and the test passes or fails based on whether the sandbox
+    # happens to have git installed and whether the sample patch happens
+    # to apply, not on the "git missing" behavior it's meant to check.
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen)
 
     result = tools.apply_patch(_SAMPLE_PATCH, confirm=False)
 

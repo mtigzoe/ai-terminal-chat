@@ -18,6 +18,46 @@ const GIT_HEAD_MARKER = "__git_head__";
 const GIT_PUSH_HEAD_PREFIX = "__git_push_head__:";
 const GIT_REMOTE_PREFIX = "__git_remote__:";
 
+/**
+ * Return the git directory for a project root, handling worktree `.git`
+ * files and, like the real `git` binary (and like this codebase's own
+ * git-tool subprocess calls, which pass the project root as cwd and let
+ * git discover the repo from there), a project root that is a
+ * *subdirectory* of the actual repository: walk upward until a `.git`
+ * entry is found or the filesystem root is reached.
+ *
+ * Without this, scoping the project to a subfolder of a larger repo
+ * made every git-index/HEAD/remote fingerprint read "unavailable" —
+ * which pop_pending's TypeScript counterpart treats as untrustworthy
+ * and always refuses — so no git_add/git_commit/git_push/etc.
+ * confirmation could ever succeed there, even though the underlying git
+ * commands themselves work fine from that same directory. Mirrors
+ * server-python's pending.py _resolve_git_dir.
+ */
+function resolveGitDir(root: string): string | null {
+  let current = path.resolve(root);
+  for (;;) {
+    const gitEntry = path.join(current, ".git");
+    let entryStat: fs.Stats;
+    try {
+      entryStat = fs.lstatSync(gitEntry);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      current = parent;
+      continue;
+    }
+    if (entryStat.isFile()) {
+      const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
+      if (!match) return null;
+      return path.resolve(current, match[1]!.trim());
+    }
+    // Not a worktree pointer file: treat as (or a symlink to) the git
+    // directory itself, same as the original single-level lookup did.
+    return gitEntry;
+  }
+}
+
 function fingerprintFile(relPath: string): ConfirmationFileState {
   const normalized = String(relPath);
   try {
@@ -129,15 +169,9 @@ function fingerprintFile(relPath: string): ConfirmationFileState {
 
 function fingerprintGitIndex(): ConfirmationFileState {
   try {
-    const gitEntry = path.join(getProjectRoot(), ".git");
-    let gitDir = gitEntry;
-    if (fs.lstatSync(gitEntry).isFile()) {
-      const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
-      if (!match) {
-        return { kind: "git_index", path: GIT_INDEX_MARKER, status: "unavailable", sha256: null };
-      }
-      const target = match[1]!.trim();
-      gitDir = path.resolve(getProjectRoot(), target);
+    const gitDir = resolveGitDir(getProjectRoot());
+    if (!gitDir) {
+      return { kind: "git_index", path: GIT_INDEX_MARKER, status: "unavailable", sha256: null };
     }
     const indexPath = path.join(gitDir, "index");
     if (!fs.existsSync(indexPath)) {
@@ -158,14 +192,8 @@ function fingerprintGitIndex(): ConfirmationFileState {
 function fingerprintGitHead(branch?: string): ConfirmationFileState {
   const marker = branch ? `${GIT_PUSH_HEAD_PREFIX}${branch}` : GIT_HEAD_MARKER;
   try {
-    const gitEntry = path.join(getProjectRoot(), ".git");
-    let gitDir = gitEntry;
-    if (fs.lstatSync(gitEntry).isFile()) {
-      const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
-      if (!match) return { kind: "git_head", path: marker, status: "unavailable", sha256: null };
-      const target = match[1]!.trim();
-      gitDir = path.resolve(getProjectRoot(), target);
-    }
+    const gitDir = resolveGitDir(getProjectRoot());
+    if (!gitDir) return { kind: "git_head", path: marker, status: "unavailable", sha256: null };
 
     const headPath = path.join(gitDir, "HEAD");
     const head = fs.readFileSync(headPath, "utf8");
@@ -221,13 +249,8 @@ function fingerprintGitHead(branch?: string): ConfirmationFileState {
 function fingerprintGitRemote(remote: string): ConfirmationFileState {
   const marker = GIT_REMOTE_PREFIX + remote;
   try {
-    const gitEntry = path.join(getProjectRoot(), ".git");
-    let gitDir = gitEntry;
-    if (fs.lstatSync(gitEntry).isFile()) {
-      const match = fs.readFileSync(gitEntry, "utf8").match(/^gitdir:\s*(.+)\s*$/im);
-      if (!match) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
-      gitDir = path.resolve(getProjectRoot(), match[1]!.trim());
-    }
+    const gitDir = resolveGitDir(getProjectRoot());
+    if (!gitDir) return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
     if (!remote || (remote !== "<default>" && !/^[\w.-]+$/.test(remote))) {
       return { kind: "git_remote", path: marker, status: "unavailable", sha256: null };
     }
