@@ -21,6 +21,32 @@ def client():
     clear_pending()
 
 
+def test_untrusted_browser_origin_is_rejected_before_route(client):
+    response = client.get("/providers", headers={"Origin": "https://attacker.example"})
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "Origin is not allowed."
+
+
+def test_allowed_browser_origin_receives_cors_header(client):
+    response = client.get("/providers", headers={"Origin": "http://localhost:5173"})
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+
+
+def test_non_loopback_server_requires_api_auth_token(client, monkeypatch):
+    monkeypatch.setattr(app, "_IS_LOOPBACK_SERVER", False)
+    monkeypatch.setattr(app, "_API_AUTH_TOKEN", "test-token")
+
+    unauthorized = client.get("/providers")
+    assert unauthorized.status_code == 401
+
+    authorized = client.get(
+        "/providers",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert authorized.status_code == 200
+
+
 def test_providers_endpoint_reports_current_and_supported(client):
     response = client.get("/providers")
     assert response.status_code == 200
