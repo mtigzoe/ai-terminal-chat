@@ -233,6 +233,21 @@ test("runIsolatedGit blocks remote proxy", async () => {
     rmSync(repo, { recursive: true, force: true });
   }
 });
+test("dynamic Git config clears remote proxy and helper", async () => {
+  const repo = initRepo();
+  setLocal(repo, "remote.origin.proxy", "http://127.0.0.1:9");
+  setLocal(repo, "remote.origin.vcs", "evil");
+  __setProjectRootForTests(repo);
+  try {
+    const { runIsolatedGit } = await import("./git.ts");
+    const result = await runIsolatedGit(["remote", "get-url", "origin"]);
+    assert.equal(result.code, 0);
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 
 test("runIsolatedGit blocks core.sshCommand override via -c", async () => {
   const repo = initRepo();
