@@ -1143,7 +1143,7 @@ def _strip_dangerous_git_config(content: str) -> str:
         stripped = raw.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             section = stripped[1:-1].strip().lower()
-            skipping = (section == "url" or section.startswith("url ") or section == "filter" or section.startswith("filter ") or section == "include" or section.startswith("includeif "))
+            skipping = (section == "url" or section.startswith("url ") or section == "filter" or section.startswith("filter ") or section == "include" or section.startswith("includeif ") or section == "hook" or section.startswith("hook "))
         if not skipping:
             out.append(raw)
     return "".join(out)
