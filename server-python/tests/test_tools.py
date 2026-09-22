@@ -808,6 +808,9 @@ def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
     [
         "pytest ../outside.py",
         "pytest --rootdir ../outside",
+        "pytest -o cache_dir=../outside",
+        "pytest --override-ini=cache_dir=../outside",
+        "pytest --override-ini cache_dir=../outside",
         "black --check ../outside.py",
         "ruff check ../outside.py",
         "flake8 ../outside.py",
