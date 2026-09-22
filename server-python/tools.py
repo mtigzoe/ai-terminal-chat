@@ -946,6 +946,94 @@ def is_command_allowed(command: str) -> bool:
     )
 
 
+
+def _looks_like_local_path(value: str) -> bool:
+    """True when a command argument appears to name a local filesystem path."""
+    value = value.strip()
+    if not value:
+        return False
+    if value.startswith("file:"):
+        return True
+    if Path(value).is_absolute() or re.match(r"^[A-Za-z]:[\\\\/]", value):
+        return True
+    if value in {".", ".."} or value.startswith(("./", "../", ".\\\\", "..\\\\")):
+        return True
+    return "/" in value or "\\\\" in value
+
+
+def _execution_path_error(raw_path: str) -> str | None:
+    """Reject execution paths that escape PROJECT_ROOT, including symlinks."""
+    candidate = raw_path.strip().strip('"')
+    if candidate.startswith("file:"):
+        candidate = candidate[5:]
+        if candidate.startswith("//"):
+            candidate = candidate[2:]
+    try:
+        safe_path(candidate)
+    except ValueError as exc:
+        return f"Access denied: execution path is outside the project root: {raw_path} ({exc})"
+    return None
+
+
+def _execution_path_permission_error(command: str) -> dict | None:
+    """Keep allowlisted test/lint/install path arguments inside PROJECT_ROOT."""
+    try:
+        tokens = shlex.split(command, posix=False)
+    except ValueError:
+        return {"error": "Access denied: could not safely parse execution command paths."}
+    if not tokens:
+        return None
+
+    executable = tokens[0].lower()
+    if executable in {"pytest", "black", "ruff", "flake8", "pip", "pip3"}:
+        path_options = {
+            "-c", "--config", "--confcutdir", "--rootdir", "--basetemp",
+            "--append-config", "--output-file", "-o",
+        }
+        for index in range(1, len(tokens)):
+            token = tokens[index]
+            if token in path_options:
+                if index + 1 >= len(tokens) or not tokens[index + 1].strip():
+                    return {"error": f"Access denied: missing path for {token}."}
+                error = _execution_path_error(tokens[index + 1])
+                if error:
+                    return {"error": error}
+                continue
+            matched = next((option for option in path_options if token.startswith(option + "=")), None)
+            if matched:
+                value = token[len(matched) + 1:]
+                if not value:
+                    return {"error": f"Access denied: missing path for {matched}."}
+                error = _execution_path_error(value)
+                if error:
+                    return {"error": error}
+                continue
+
+            if token.startswith("-"):
+                continue
+            target = token.split("::", 1)[0]
+            if _looks_like_local_path(target):
+                error = _execution_path_error(target)
+                if error:
+                    return {"error": error}
+
+    if executable == "npm":
+        for index in range(1, len(tokens)):
+            token = tokens[index]
+            if token in {"--prefix", "--workspace"}:
+                if index + 1 >= len(tokens):
+                    return {"error": f"Access denied: missing path for {token}."}
+                error = _execution_path_error(tokens[index + 1])
+                if error:
+                    return {"error": error}
+            for option in ("--prefix", "--workspace"):
+                if token.startswith(option + "="):
+                    error = _execution_path_error(token[len(option) + 1:])
+                    if error:
+                        return {"error": error}
+
+    return None
+
 def run_command(command: str, confirm: bool = False) -> dict:
     """Run an allowlisted development command in the project directory.
 
@@ -1003,6 +1091,10 @@ def run_command(command: str, confirm: bool = False) -> dict:
     sensitive_path_error = _command_sensitive_path_error(canonical)
     if sensitive_path_error is not None:
         return sensitive_path_error
+
+    execution_path_error = _execution_path_permission_error(canonical)
+    if execution_path_error is not None:
+        return execution_path_error
 
     if is_execution_risk_command(canonical) and not confirm:
         return {
