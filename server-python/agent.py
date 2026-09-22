@@ -35,7 +35,6 @@ _INSPECT_TOOLS = {
     "git_diff",
     "git_log",
     "git_branch",
-    "git_fetch",
 }
 _EXECUTE_TOOLS = {
     "run_command",
@@ -312,8 +311,6 @@ def _describe_tool_progress(function_name: str, function_args: dict) -> tuple:
             return "inspect", "Inspecting recent commits"
         if function_name == "git_branch":
             return "inspect", "Listing git branches"
-        if function_name == "git_fetch":
-            return "inspect", "Fetching from remote"
         return "inspect", f"Inspecting via {function_name}"
 
     if function_name in _EXECUTE_TOOLS:
