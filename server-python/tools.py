@@ -1066,17 +1066,22 @@ def _execution_path_permission_error(command: str) -> dict | None:
                     return {"error": error}
 
     if executable == "npm":
+        path_options = {"--prefix", "--workspace", "--userconfig", "--globalconfig"}
         for index in range(1, len(tokens)):
             token = tokens[index]
-            if token in {"--prefix", "--workspace"}:
+            if token in path_options:
                 if index + 1 >= len(tokens):
                     return {"error": f"Access denied: missing path for {token}."}
                 error = _execution_path_error(tokens[index + 1])
                 if error:
                     return {"error": error}
-            for option in ("--prefix", "--workspace"):
+                continue
+            for option in path_options:
                 if token.startswith(option + "="):
-                    error = _execution_path_error(token[len(option) + 1:])
+                    value = token[len(option) + 1:]
+                    if not value:
+                        return {"error": f"Access denied: missing path for {option}."}
+                    error = _execution_path_error(value)
                     if error:
                         return {"error": error}
 
