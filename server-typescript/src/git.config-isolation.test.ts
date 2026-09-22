@@ -350,6 +350,7 @@ test("url.insteadOf is stripped for network isolation", async () => {
   // -c cannot clear insteadOf; sanitization removes [url] sections.
   const sanitized = stripDangerousGitConfig(original);
   assert.equal(sanitized.includes("evil.example"), false);
+  assert.equal(sanitized.includes("hook-pwned"), false);
   assert.ok(sanitized.includes("github.com/example/repo.git"));
   writeFileSync(configPath, sanitized, "utf8");
   try {
