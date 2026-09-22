@@ -185,6 +185,58 @@ def test_confirm_endpoint_executes_stored_write_once(client, monkeypatch):
         app.WRITE_TOOL_NAMES.discard("fake_write")
 
 
+def test_confirm_endpoint_rejects_saved_action_after_project_root_changes(client, monkeypatch, tmp_path):
+    """A pending mutation is bound to the project root that created it.
+    Switching roots before confirmation must not fall back to executing the
+    stored action against the new root.
+    """
+    import security
+
+    root_a = tmp_path / "project-a"
+    root_b = tmp_path / "project-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    original_root = security.get_project_root()
+
+    calls = []
+
+    def fake_write(path, confirm=False):
+        calls.append((path, confirm))
+        return {"written": True, "path": path}
+
+    monkeypatch.setitem(app.TOOL_FUNCTIONS, "fake_write", fake_write)
+    app.WRITE_TOOL_NAMES.add("fake_write")
+
+    try:
+        security.PROJECT_ROOT.set(root_a)
+        action = create_pending(
+            "fake_write",
+            {"path": "example.txt"},
+            {"requires_confirmation": True},
+            resume={
+                "provider_fingerprint": app.provider_fingerprint(app.provider),
+                "project_root": str(root_a.resolve()),
+                "contents": [],
+                "round_index": 0,
+                "tool_results": [],
+                "remaining_calls": [],
+            },
+        )
+
+        security.PROJECT_ROOT.set(root_b)
+        response = client.post(
+            "/confirm",
+            json={"action_id": action.action_id, "confirmed": True},
+        )
+
+        assert response.status_code == 409
+        assert "project root differs" in response.get_json()["error"].lower()
+        assert calls == []
+    finally:
+        security.PROJECT_ROOT.set(original_root)
+        app.WRITE_TOOL_NAMES.discard("fake_write")
+
+
 def test_confirm_endpoint_accepts_git_category_actions(client, monkeypatch):
     """/confirm must authorize git_add even though it's not in
     WRITE_TOOL_NAMES — it's gated via GIT_CONFIRM_TOOL_NAMES instead.
