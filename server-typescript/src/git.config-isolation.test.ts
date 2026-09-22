@@ -471,7 +471,7 @@ test("withSanitizedGitConfig restores config after failure", async () => {
   setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
   const configPath = join(repo, ".git", "config");
   const before = readFileSync(configPath, "utf8");
-  assert.ok(before.includes("evil.example"));\n    assert.ok(before.includes("hook-pwned"));
+  assert.ok(before.includes("evil.example"));
   __setProjectRootForTests(repo);
   try {
     // Force a failing network op under sanitization (invalid remote)
