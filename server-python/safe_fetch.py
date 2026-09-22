@@ -54,6 +54,14 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 
+# SSRF validation pins the target hostname to a validated IP. Environment
+# proxies (HTTP_PROXY/HTTPS_PROXY) would otherwise make the actual TCP peer
+# the proxy, not the validated target, allowing a proxy to reach a blocked
+# private/metadata address on the caller's behalf. Keep this session direct
+# and reject caller-supplied proxies as well.
+_SESSION = requests.Session()
+_SESSION.trust_env = False
+
 # ---------------------------------------------------------------------------
 # Address classification (mirrors safe-fetch.ts's blockedAddressReason)
 # ---------------------------------------------------------------------------
@@ -280,6 +288,10 @@ def safe_request(
     via requests' internal, unpinned reconnect.
     """
     kwargs.pop("allow_redirects", None)
+    proxies = kwargs.get("proxies")
+    if proxies:
+        raise SSRFError("Proxy configuration is not allowed by the SSRF-safe transport")
+    kwargs.pop("proxies", None)
     current_method = method
     current_url = url
     hops = 0
@@ -297,7 +309,7 @@ def safe_request(
         family, pinned_addr = _pick_pin(addresses)
 
         with _pinned(hostname, family, pinned_addr):
-            response = requests.request(current_method, current_url, allow_redirects=False, **kwargs)
+            response = _SESSION.request(current_method, current_url, allow_redirects=False, **kwargs)
 
         if response.status_code not in _REDIRECT_STATUSES:
             return response
