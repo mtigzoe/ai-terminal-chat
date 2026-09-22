@@ -979,7 +979,7 @@ function getToolFunctions(): Record<string, (args: Record<string, unknown>) => u
       gitDiff(String(args.path || ""), Boolean(args.staged)),
     git_log: (args) => gitLog(Number(args.max_count || 10)),
     git_branch: () => gitBranch(),
-    git_fetch: (args) => gitFetch(String(args.remote || "")),
+    git_fetch: (args) => gitFetch(String(args.remote || ""), args.confirm === true),
     git_pull: (args) =>
       gitPull(String(args.remote || ""), String(args.branch || ""), Boolean(args.confirm)),
     git_restore: (args) =>
