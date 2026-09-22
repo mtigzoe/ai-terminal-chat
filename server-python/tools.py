@@ -1514,7 +1514,10 @@ def _run_git(
         # Best-effort mode bits; continue with empty file.
         pass
 
-    env = os.environ.copy()
+    # Reuse the terminal environment sanitizer so Git cannot inherit
+    # repository/object/config/transport/helper overrides from the server.
+    # The controlled Git values below are then applied explicitly.
+    env = _sanitized_terminal_env()
     # Empty GIT_EXTERNAL_DIFF makes Git try to execute "" and fail with
     # "cannot run : No such file or directory". Remove inherited values
     # instead; --no-ext-diff / -c diff.external= block repo-controlled helpers.
