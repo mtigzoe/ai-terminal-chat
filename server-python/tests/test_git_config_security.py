@@ -24,11 +24,12 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def test_strip_dangerous_git_config_removes_execution_sections():
-    config = "[core]\n\tbare = false\n[filter \"evil\"]\n\tclean = sh -c \"touch pwned; cat\"\n[url \"file:///evil/\"]\n\tinsteadOf = https://example.com/\n[include]\n\tpath = evil.conf\n[merge \"evil\"]\n\tdriver = sh -c \"touch merge-pwned\"\n"
+    config = "[core]\n\tbare = false\n[filter \"evil\"]\n\tclean = sh -c \"touch pwned; cat\"\n[url \"file:///evil/\"]\n\tinsteadOf = https://example.com/\n[include]\n\tpath = evil.conf\n[hook \"evil\"]\n\tevent = pre-commit\n\tcommand = sh -c \"touch hook-pwned\"\n[merge \"evil\"]\n\tdriver = sh -c \"touch merge-pwned\"\n"
     sanitized = tools._strip_dangerous_git_config(config)
     assert 'filter "evil"' not in sanitized
     assert 'url "file:///evil/"' not in sanitized
     assert '[include]' not in sanitized
+    assert 'hook "evil"' not in sanitized
     assert 'merge "evil"' in sanitized
 
 
