@@ -1095,24 +1095,7 @@ def _execution_path_permission_error(command: str) -> dict | None:
                     if error:
                         return {"error": error}
 
-            for option in node_options:
-                if token == option:
-                    if index + 1 >= len(tokens):
-                        return {"error": f"Access denied: missing value for {option}."}
-                    node_value = tokens[index + 1]
-                    if "--require=" in node_value:
-                        value = node_value.split("--require=", 1)[1]
-                        error = _execution_path_error(value)
-                        if error:
-                            return {"error": error}
-                    continue
-                if token.startswith(option + "="):
-                    node_value = token[len(option) + 1:]
-                    if "--require=" in node_value:
-                        value = node_value.split("--require=", 1)[1]
-                        error = _execution_path_error(value)
-                    if error:
-                        return {"error": error}
+
 
     return None
 
