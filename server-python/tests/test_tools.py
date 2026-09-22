@@ -794,6 +794,49 @@ def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
     assert str(tools.PROJECT_ROOT) in result["stdout"]
 
 # ---------------------------------------------------------------------------
+# Execution-path boundary regression tests
+#
+# Python's run_command() requires confirmation for test/lint/install commands,
+# but confirmation is not a substitute for the project-root boundary. These
+# commands must not be able to inspect or write through path-valued options
+# outside PROJECT_ROOT.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest ../outside.py",
+        "pytest --rootdir ../outside",
+        "black --check ../outside.py",
+        "ruff check ../outside.py",
+        "flake8 ../outside.py",
+        "flake8 --config ../outside.ini",
+        "flake8 --append-config ../outside.ini",
+        "flake8 --output-file ../outside.log",
+        "flake8 --output-file=../outside.log",
+    ],
+)
+def test_execution_paths_cannot_escape_project_root(command):
+    result = tools.run_command(command)
+    assert "error" in result, f"{command!r} must be rejected before confirmation/execution"
+    assert "outside the project" in result["error"].lower() or "outside the project root" in result["error"].lower()
+
+
+def test_execution_path_inside_project_still_requires_confirmation(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "test_sample.py").write_text("def test_sample():\n    assert True\n")
+    monkeypatch.setattr(security, "PROJECT_ROOT", project)
+    monkeypatch.setattr(tools, "PROJECT_ROOT", project)
+
+    result = tools.run_command("pytest test_sample.py")
+    assert result.get("requires_confirmation") is True
+    assert "error" not in result
+
+
+
+# ---------------------------------------------------------------------------
 # Gate-normalization regression tests
 #
 # is_command_allowed() authorizes the tokenized form of a command. Every other
