@@ -82,6 +82,25 @@ def test_terminal_env_strips_execution_injection_variables(monkeypatch):
     assert env["NORMAL_TERMINAL_VALUE"] == "kept"
 
 
+def test_run_git_ignores_inherited_git_repository_environment(git_repo, tmp_path, monkeypatch):
+    outside = tmp_path / "outside-repo"
+    outside.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=outside, check=True)
+
+    monkeypatch.setenv("GIT_DIR", str(outside / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(outside))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(outside / "index"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(outside / "objects"))
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'core.fsmonitor=true'")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "outside-ssh")
+    monkeypatch.setenv("GIT_PROXY_COMMAND", "outside-proxy")
+
+    result = tools._run_git(["rev-parse", "--show-toplevel"], timeout=10)
+
+    assert result.returncode == 0
+    assert Path(result.stdout.strip()).resolve() == git_repo.resolve()
+
+
 def test_safe_path_accepts_project_relative_path():
     path = app.safe_path("server-python")
     assert path == (app.PROJECT_ROOT / "server-python").resolve()
