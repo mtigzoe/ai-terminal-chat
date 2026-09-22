@@ -53,11 +53,15 @@ def test_dynamic_git_config_overrides_execution_paths(tmp_path, monkeypatch):
     _git(root, 'config', 'filter.evil.clean', "sh -c 'touch pwned; cat'")
     _git(root, 'config', 'merge.evil.driver', "sh -c 'touch merge-pwned'")
     _git(root, 'config', 'remote.origin.uploadpack', 'touch upload-pwned')
+    _git(root, 'config', 'hook.evil.command', "sh -c 'touch hook-pwned'")
+    _git(root, 'config', 'hook.evil.event', 'pre-commit')
     monkeypatch.setattr(tools, 'PROJECT_ROOT', root)
     flattened = ' '.join(tools._dynamic_git_config_overrides())
     assert 'filter.evil.clean=' in flattened
     assert 'merge.evil.driver=' in flattened
     assert 'remote.origin.uploadpack=' in flattened
+    assert 'hook.evil.command=' in flattened
+    assert 'hook.evil.event=' in flattened
 
 
 def test_git_config_symlink_is_rejected(tmp_path, monkeypatch):
