@@ -217,6 +217,23 @@ test("runIsolatedGit blocks gpg.program on status/log", async () => {
   }
 });
 
+test("runIsolatedGit blocks remote proxy", async () => {
+  const repo = initRepo();
+  const marker = join(repo, "REMOTE_PROXY");
+  const { configValue } = markerScript(marker);
+  setLocal(repo, "remote.origin.proxy", configValue);
+  execFileSync("git", ["remote", "add", "origin", "https://example.com/repo.git"], { cwd: repo, stdio: "ignore" });
+  __setProjectRootForTests(repo);
+  try {
+    const result = await runIsolatedGit(["remote", "get-url", "origin"]);
+    assert.equal(existsSync(marker), false, "remote proxy must not run");
+    assert.equal(result.code, 0);
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("runIsolatedGit blocks core.sshCommand override via -c", async () => {
   const repo = initRepo();
   const marker = join(repo, "SSHCMD");
