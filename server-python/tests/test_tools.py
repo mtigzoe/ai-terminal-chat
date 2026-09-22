@@ -815,6 +815,10 @@ def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
         "flake8 --append-config ../outside.ini",
         "flake8 --output-file ../outside.log",
         "flake8 --output-file=../outside.log",
+        "pip install -r ../outside-requirements.txt",
+        "pip install --requirement=../outside-requirements.txt",
+        "pip install -e ../outside-package",
+        "pip3 install --editable=../outside-package",
     ],
 )
 def test_execution_paths_cannot_escape_project_root(command):
