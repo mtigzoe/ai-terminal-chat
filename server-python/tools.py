@@ -1099,6 +1099,26 @@ def _execution_path_permission_error(command: str) -> dict | None:
 
     return None
 
+# Environment variables that can change interpreter/plugin/configuration behavior in
+# project-controlled terminal processes. These are removed so a server-level
+# environment cannot inject startup code or alternate config into allowlisted
+# pytest/npm commands.
+_TERMINAL_ENV_BLOCKLIST = frozenset({
+    "NODE_OPTIONS", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP",
+    "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PERL5LIB", "PERL5OPT",
+    "RUBYLIB", "RUBYOPT", "BASH_ENV", "ENV",
+})
+
+
+def _sanitized_terminal_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for key in list(env):
+        upper = key.upper()
+        if upper in _TERMINAL_ENV_BLOCKLIST or upper.startswith("NPM_CONFIG_"):
+            env.pop(key, None)
+    return env
+
+
 def run_command(command: str, confirm: bool = False) -> dict:
     """Run an allowlisted development command in the project directory.
 
@@ -1209,6 +1229,7 @@ def run_command(command: str, confirm: bool = False) -> dict:
                 args,
                 cwd=PROJECT_ROOT,
                 timeout=60,
+                env=_sanitized_terminal_env(),
             )
         except SubprocessCancelled:
             return {"error": "Command cancelled.", "cancelled": True}
