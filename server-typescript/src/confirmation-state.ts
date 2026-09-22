@@ -382,6 +382,12 @@ export function confirmationPathsForPending(
     return [target];
   }
   if (toolName === "git_commit") return [GIT_INDEX_MARKER];
+  if (toolName === "git_fetch") {
+    const remote = typeof args.remote === "string" ? args.remote.trim() : "";
+    return [
+      remote && /^[\\w.-]+$/.test(remote) ? `${GIT_REMOTE_PREFIX}${remote}` : `${GIT_REMOTE_PREFIX}<default>`,
+    ];
+  }
   if (toolName === "git_push") {
     const branch = typeof args.branch === "string" ? args.branch.trim() : "";
     const remote = typeof args.remote === "string" ? args.remote.trim() : "";
