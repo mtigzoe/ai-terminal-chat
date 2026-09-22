@@ -64,7 +64,7 @@ describe("Git repository-config code execution audit", () => {
 [core]
     sshCommand = echo "EXECUTED_SSH_COMMAND" > /tmp/ssh_executed.txt
 `);
-      const result = await gitFetch("nonexistent");
+      const result = await gitFetch("nonexistent", true);
       expect(result.error).toBeDefined();
     });
   });
@@ -76,7 +76,7 @@ describe("Git repository-config code execution audit", () => {
     url = file:///definitely/nonexistent/git-audit-remote.git
     uploadpack = echo "EXECUTED_UPLOADPACK" > /tmp/uploadpack_executed.txt
 `);
-      const result = await gitFetch("origin");
+      const result = await gitFetch("origin", true);
       expect(result.error).toBeDefined();
     });
 
@@ -110,7 +110,7 @@ describe("Git repository-config code execution audit", () => {
     url = file:///definitely/nonexistent/git-audit-remote.git
     proxy = echo "EXECUTED_PROXY" > /tmp/proxy_executed.txt
 `);
-      const result = await gitFetch("origin");
+      const result = await gitFetch("origin", true);
       expect(result.error).toBeDefined();
     });
   });
@@ -121,7 +121,7 @@ describe("Git repository-config code execution audit", () => {
 [credential]
     helper = "!echo EXECUTED_CREDENTIAL_HELPER > /tmp/credential_executed.txt"
 `);
-      const result = await gitFetch("origin");
+      const result = await gitFetch("origin", true);
       expect(result.error).toBeDefined();
     });
 
@@ -249,7 +249,7 @@ describe("Git repository-config code execution audit", () => {
 [url "file:///tmp/malicious"]
     insteadOf = https://github.com/
 `);
-      const result = await gitFetch("origin");
+      const result = await gitFetch("origin", true);
       expect(result.error).toBeDefined();
     });
   });
@@ -315,7 +315,7 @@ describe("Argument validation - verify -- positioning", () => {
 [remote "origin"]
     url = file:///definitely/nonexistent/git-audit-remote.git
 `);
-    const result = await gitFetch("origin");
+    const result = await gitFetch("origin", true);
     expect(result.error).toBeDefined();
   });
 
@@ -338,7 +338,7 @@ describe("Argument validation - verify -- positioning", () => {
   });
 
   it("rejects remote names starting with -", async () => {
-    const result = await gitFetch("--upload-pack=evil");
+    const result = await gitFetch("--upload-pack=evil", true);
     expect(result.error).toBeDefined();
     expect(String(result.error)).toMatch(/cannot start with '-'|option injection/i);
   });
