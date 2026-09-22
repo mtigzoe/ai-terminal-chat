@@ -1939,15 +1939,25 @@ def _validate_git_branch_name(branch: str) -> str:
     return value
 
 
-def git_fetch(remote: str = "") -> dict:
+def git_fetch(remote: str = "", confirm: bool = False) -> dict:
     """Fetch changes from a remote without merging.
+
+    This contacts the configured remote and updates remote-tracking refs,
+    so the agent must obtain explicit confirmation before network access.
 
     Args:
         remote: Remote name to fetch from. Leave empty for all remotes.
-
-    Returns:
-        A dictionary with fetch output, or an error.
+        confirm: True to perform the fetch; false returns a preview.
     """
+    if not confirm:
+        return {
+            "requires_confirmation": True,
+            "remote": remote or "all remotes",
+            "message": (
+                "This will contact the configured Git remote(s) and update "
+                "remote-tracking references. Confirm to proceed."
+            ),
+        }
 
     try:
         validated_remote = _validate_git_remote_name(remote)
