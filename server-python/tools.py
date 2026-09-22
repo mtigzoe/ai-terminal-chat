@@ -988,7 +988,7 @@ def _execution_path_permission_error(command: str) -> dict | None:
     if executable in {"pytest", "black", "ruff", "flake8", "pip", "pip3"}:
         path_options = {
             "-c", "--config", "--confcutdir", "--rootdir", "--basetemp",
-            "--append-config", "--output-file",
+            "--append-config", "--output-file", "--debug",
         }
         override_ini_options = {"-o", "--override-ini"}
         for index in range(1, len(tokens)):
