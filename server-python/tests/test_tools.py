@@ -828,6 +828,8 @@ def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
         "npm test --globalconfig=../outside.npmrc",
         "npm test --node-options=--require=../outside.js",
         "npm test --node-options --require=../outside.js",
+        "npm test --script-shell ../outside-shell",
+        "npm test --script-shell=../outside-shell",
     ],
 )
 def test_execution_paths_cannot_escape_project_root(command):
