@@ -943,12 +943,11 @@ function gitOutputFileOptionError(command: string): string | null {
   }
 
   for (const token of tokens.slice(2)) {
-    const lowered = token.toLowerCase();
     if (
-      lowered === "-o" ||
-      lowered === "--output" ||
-      lowered.startsWith("-o") ||
-      lowered.startsWith("--output=")
+      token === "-o" ||
+      token === "--output" ||
+      token.startsWith("-o") ||
+      token.startsWith("--output=")
     ) {
       return (
         "Command blocked: git inspection output cannot be redirected to a file. " +
