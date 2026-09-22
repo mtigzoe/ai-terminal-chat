@@ -1274,15 +1274,22 @@ const SENSITIVE_ENV_VAR_NAMES = new Set([
   "GH_TOKEN",
   "NPM_TOKEN",
   "NODE_AUTH_TOKEN",
+  "NODE_OPTIONS", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP",
+  "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PERL5LIB", "PERL5OPT",
+  "RUBYLIB", "RUBYOPT", "BASH_ENV", "ENV",
 ]);
 
-function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
+export function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of SENSITIVE_ENV_VAR_NAMES) {
     delete env[name];
   }
   for (const key of Object.keys(env)) {
     const upper = key.toUpperCase();
+    if (upper.startsWith("NPM_CONFIG_")) {
+      delete env[key];
+      continue;
+    }
     if (
       upper.endsWith("_API_KEY") ||
       upper.endsWith("_SECRET") ||
