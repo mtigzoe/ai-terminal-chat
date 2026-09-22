@@ -69,11 +69,15 @@ def test_terminal_env_strips_execution_injection_variables(monkeypatch):
     monkeypatch.setenv("PYTEST_PLUGINS", "outside.plugin")
     monkeypatch.setenv("PYTEST_ADDOPTS", "--override-ini=cache_dir=../outside")
     monkeypatch.setenv("PYTHONPATH", "../outside")
+    monkeypatch.setenv("GIT_SSH", "../outside/ssh-wrapper")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "../outside/ssh-command")
+    monkeypatch.setenv("GIT_SSH_VARIANT", "simple")
+    monkeypatch.setenv("GIT_SSL_NO_VERIFY", "1")
     monkeypatch.setenv("NPM_CONFIG_USERCONFIG", "../outside/.npmrc")
     monkeypatch.setenv("NPM_CONFIG_NODE_OPTIONS", "--require ./outside.js")
     monkeypatch.setenv("NORMAL_TERMINAL_VALUE", "kept")
     env = _sanitized_terminal_env()
-    for key in ("NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS"):
+    for key in ("NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS"):
         assert key not in env
     assert env["NORMAL_TERMINAL_VALUE"] == "kept"
 
