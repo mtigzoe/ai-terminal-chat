@@ -187,6 +187,23 @@ test("runIsolatedGit blocks core.pager", async () => {
   }
 });
 
+test("runIsolatedGit blocks named hook commands", async () => {
+  const repo = initRepo();
+  const marker = join(repo, "HOOK");
+  const { configValue } = markerScript(marker);
+  setLocal(repo, "hook.evil.command", configValue);
+  setLocal(repo, "hook.evil.event", "pre-commit");
+  __setProjectRootForTests(repo);
+  try {
+    const result = await runIsolatedGit(["commit", "-m", "hook-isolation"]);
+    assert.equal(existsSync(marker), false, "named hook command must not run");
+    assert.equal(result.code, 0);
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("runIsolatedGit blocks credential.helper", async () => {
   const repo = initRepo();
   const marker = join(repo, "CRED");
