@@ -338,7 +338,7 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     // Command-line -c cannot reliably neutralize multivars such as url.*.insteadOf
     // or filter.*.{clean,smudge,process}. Sanitize repository config when such keys
     // are present instead of appending an empty command-line value.
-    if (!options.skipDynamicOverrides) {
+    if (!options.skipDynamicOverrides && dynamic.length > 0) {
       return await withSanitizedGitConfigUnlocked(() =>
         runIsolatedGit(args, { ...options, skipDynamicOverrides: true, dynamicOverrides: dynamic, holdLock: true }),
       );
