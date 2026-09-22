@@ -822,6 +822,10 @@ def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
         "pip install --requirement=../outside-requirements.txt",
         "pip install -e ../outside-package",
         "pip3 install --editable=../outside-package",
+        "npm test --userconfig ../outside.npmrc",
+        "npm test --userconfig=../outside.npmrc",
+        "npm test --globalconfig ../outside.npmrc",
+        "npm test --globalconfig=../outside.npmrc",
     ],
 )
 def test_execution_paths_cannot_escape_project_root(command):
