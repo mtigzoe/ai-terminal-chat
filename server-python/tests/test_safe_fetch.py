@@ -454,3 +454,18 @@ def test_non_http_scheme_is_rejected_up_front():
 def test_resolve_and_validate_raises_for_unresolvable_hostname(dns):
     with pytest.raises(safe_fetch.SSRFError):
         safe_fetch.safe_request("GET", "http://this-hostname-is-not-in-the-fake-dns-map.test/")
+
+
+def test_safe_request_ignores_environment_proxies():
+    """The SSRF transport must not let HTTP(S)_PROXY change the actual
+    connection target after DNS validation."""
+    assert safe_fetch._SESSION.trust_env is False
+
+
+def test_safe_request_rejects_explicit_proxy_configuration():
+    with pytest.raises(safe_fetch.SSRFError, match="Proxy configuration"):
+        safe_fetch.safe_request(
+            "GET",
+            "http://example.test/",
+            proxies={"http": "http://127.0.0.1:8888"},
+        )
