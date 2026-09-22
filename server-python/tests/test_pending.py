@@ -25,6 +25,15 @@ def teardown_function():
     clear_pending()
 
 
+def test_git_fetch_confirmation_is_bound_to_remote():
+    assert _confirmation_paths_for_pending("git_fetch", {}, None) == [
+        "__git_remote__:<default>"
+    ]
+    assert _confirmation_paths_for_pending(
+        "git_fetch", {"remote": "origin"}, None
+    ) == ["__git_remote__:origin"]
+
+
 def test_pending_action_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
     (tmp_path / "app.py").write_text("original\n", encoding="utf-8")
