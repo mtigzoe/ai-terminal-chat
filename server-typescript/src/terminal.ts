@@ -1098,6 +1098,7 @@ function executionPathPermissionError(command: string): string | null {
       "--userconfig",
       "--globalconfig",
     ]);
+    const nodeOptions = new Set(["--node-options"]);
 
     for (let i = 1; i < tokens.length; i += 1) {
       const token = tokens[i];
@@ -1118,6 +1119,18 @@ function executionPathPermissionError(command: string): string | null {
         if (token.startsWith(`${option}=`)) {
           const value = token.slice(option.length + 1);
           if (!value) continue;
+          const error = executionPathError(root, value);
+          if (error) return error;
+        }
+      }
+
+      for (const option of nodeOptions) {
+        const nodeValue = token === option
+          ? tokens[i + 1]
+          : token.startsWith(`${option}=`) ? token.slice(option.length + 1) : undefined;
+        if (nodeValue === undefined) continue;
+        if (nodeValue.includes("--require=")) {
+          const value = nodeValue.split("--require=", 2)[1];
           const error = executionPathError(root, value);
           if (error) return error;
         }
