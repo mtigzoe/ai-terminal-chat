@@ -1,7 +1,7 @@
 """Tests for safe_fetch.py -- SSRF / DNS-rebinding protection.
 
 Mirrors the scenarios server-typescript/tests/ssrf-vuln-confirmation.test.ts
-exercises for safe-fetch.ts, plus a DNS-rebinding-specific proof that a
+exercises for safe-fetch.ts, with a DNS-rebinding-specific proof that a
 pinned connection can't be redirected mid-request by a second,
 uncontrolled resolver call.
 
