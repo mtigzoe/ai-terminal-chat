@@ -1066,7 +1066,7 @@ def _execution_path_permission_error(command: str) -> dict | None:
                     return {"error": error}
 
     if executable == "npm":
-        path_options = {"--prefix", "--workspace", "--userconfig", "--globalconfig"}
+        path_options = {"--prefix", "--workspace", "--userconfig", "--globalconfig", "--script-shell"}
         # npm accepts arbitrary config keys as CLI options. node-options is
         # especially security-sensitive because npm passes it to Node when
         # lifecycle scripts run. Reject path-bearing Node options outside root.
