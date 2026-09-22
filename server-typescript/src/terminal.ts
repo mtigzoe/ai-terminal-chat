@@ -926,6 +926,40 @@ function directoryListingPermissionError(command: string): string | null {
  * id_ed25519/id_ecdsa, secrets.json and `.git/` were reachable through
  * allowlisted readers such as `git show <rev>:<path>`.
  */
+function gitOutputFileOptionError(command: string): string | null {
+  let tokens: string[];
+  try {
+    tokens = tokenizeCommand(command);
+  } catch {
+    return "Access denied: could not safely parse Git options.";
+  }
+
+  if (
+    tokens.length < 2 ||
+    tokens[0].toLowerCase() !== "git" ||
+    !new Set(["diff", "log", "show"]).has(tokens[1].toLowerCase())
+  ) {
+    return null;
+  }
+
+  for (const token of tokens.slice(2)) {
+    const lowered = token.toLowerCase();
+    if (
+      lowered === "-o" ||
+      lowered === "--output" ||
+      lowered.startsWith("-o") ||
+      lowered.startsWith("--output=")
+    ) {
+      return (
+        "Command blocked: git inspection output cannot be redirected to a file. " +
+        "Use stdout instead."
+      );
+    }
+  }
+
+  return null;
+}
+
 function commandSensitivePathError(command: string): string | null {
   let tokens: string[];
   try {
@@ -1308,6 +1342,11 @@ export async function runCommand(
         `Command not allowed: '${normalized}'. ` +
         `Allowed command prefixes: ${JSON.stringify(getAllowedCommands())}`,
     };
+  }
+
+  const gitOutputError = gitOutputFileOptionError(normalized);
+  if (gitOutputError) {
+    return { error: gitOutputError };
   }
 
   const sensitivePathError = commandSensitivePathError(normalized);
