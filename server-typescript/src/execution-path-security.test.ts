@@ -88,6 +88,8 @@ test("npm user/global config cannot target a file outside the project root", asy
       `npm test --userconfig="${config}"`,
       `npm test --globalconfig "${config}"`,
       `npm test --globalconfig="${config}"`,
+      "npm test --node-options=--require=../outside.js",
+      "npm test --node-options --require=../outside.js",
     ]) {
       const result = await runCommand(command, true);
       assert.ok(isToolError(result));
