@@ -193,6 +193,7 @@ test("runIsolatedGit blocks named hook commands", async () => {
   const { configValue } = markerScript(marker);
   setLocal(repo, "hook.evil.command", configValue);
   setLocal(repo, "hook.evil.event", "pre-commit");
+  execFileSync("git", ["add", "a.txt"], { cwd: repo, stdio: "ignore" });
   __setProjectRootForTests(repo);
   try {
     const result = await runIsolatedGit(["commit", "-m", "hook-isolation"]);
