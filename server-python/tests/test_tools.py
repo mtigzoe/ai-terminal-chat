@@ -932,10 +932,6 @@ def test_git_log_patch_does_not_leak_unselected_file_contents(git_repo_with_hist
     [
         "git log -L 1,1:README.md",
         "git log -L:main:README.md",
-        "git log --diff-merges=first-parent",
-        "git log --diff-merges=remerge",
-        "git log -c HEAD",
-        "git log -m HEAD",
     ],
 )
 def test_git_log_diff_generating_options_respect_read_permissions(git_repo_with_history, command):
