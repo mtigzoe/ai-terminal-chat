@@ -33,6 +33,21 @@ def test_allowed_browser_origin_receives_cors_header(client):
     assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
 
 
+def test_allowed_browser_origin_supports_cors_preflight(client):
+    response = client.options(
+        "/chat",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+    assert "POST" in response.headers["Access-Control-Allow-Methods"]
+    assert "Content-Type" in response.headers["Access-Control-Allow-Headers"]
+
+
 def test_non_loopback_server_requires_api_auth_token(client, monkeypatch):
     monkeypatch.setattr(app, "_IS_LOOPBACK_SERVER", False)
     monkeypatch.setattr(app, "_API_AUTH_TOKEN", "test-token")
