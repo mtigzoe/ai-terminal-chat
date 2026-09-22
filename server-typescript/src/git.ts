@@ -237,7 +237,7 @@ export function stripDangerousGitConfig(content: string): string {
     const trimmed = raw.trim(); const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
     if (sectionMatch) {
       const body = sectionMatch[1]!.trim().toLowerCase();
-      if (body.startsWith("url ") || body === "url" || body.startsWith("filter ") || body === "filter") { skipping = true; continue; }
+      if (body.startsWith("url ") || body === "url" || body.startsWith("filter ") || body === "filter" || body.startsWith("hook ") || body === "hook") { skipping = true; continue; }
       skipping = false; out.push(raw); continue;
     }
     if (skipping) continue;
