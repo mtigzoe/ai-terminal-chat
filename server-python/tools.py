@@ -2385,6 +2385,23 @@ def write_file(path: str, contents: str, confirm: bool = False) -> dict:
             ),
         }
 
+    # A hard-linked file can have another directory entry outside the project.
+    # Path/symlink containment does not detect this because both names resolve
+    # to the same inode. Refuse mutation when the existing target has multiple
+    # links, otherwise write_text() would modify the same inode through an
+    # outside-project path.
+    if existed:
+        try:
+            if file_path.stat().st_nlink > 1:
+                return {
+                    "error": (
+                        f"Refusing to write '{path}': the file has multiple "
+                        f"hard links and may also be accessible outside the project."
+                    )
+                }
+        except OSError as exc:
+            return {"error": f"Could not inspect file links: {exc}"}
+
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(contents, encoding="utf-8")
