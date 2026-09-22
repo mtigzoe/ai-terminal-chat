@@ -66,6 +66,10 @@ def test_dynamic_git_config_includes_remote_proxy(tmp_path, monkeypatch):
     flattened = ' '.join(tools._dynamic_git_config_overrides())
     assert 'remote.origin.proxy=' in flattened
 
+    _git(root, 'config', 'remote.origin.vcs', 'evil')
+    flattened = ' '.join(tools._dynamic_git_config_overrides())
+    assert 'remote.origin.vcs=' in flattened
+
 
 def test_git_config_symlink_is_rejected(tmp_path, monkeypatch):
     root = tmp_path / "repo"
