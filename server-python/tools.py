@@ -841,6 +841,36 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
 
 
 
+def _git_output_file_option_error(command: str) -> dict | None:
+    """Reject Git inspection options that redirect output to a file.
+
+    Git's --output=<file> (and --output <file>) writes generated output to
+    that file instead of stdout. Treating these commands as read-only would
+    therefore let an agent mutate a project file without confirmation.
+    """
+    try:
+        tokens = shlex.split(command, posix=False)
+    except ValueError:
+        return {"error": "Access denied: could not safely parse Git options."}
+
+    if len(tokens) < 2 or tokens[0].lower() != "git":
+        return None
+    if tokens[1].lower() not in {"diff", "log", "show"}:
+        return None
+
+    for token in tokens[2:]:
+        lowered = token.lower()
+        if lowered in {"-o", "--output"} or lowered.startswith("-o") or lowered.startswith("--output="):
+            return {
+                "error": (
+                    "Command blocked: git inspection output cannot be redirected "
+                    "to a file. Use stdout instead."
+                )
+            }
+
+    return None
+
+
 def _command_sensitive_path_error(command: str) -> dict | None:
     """Apply the secrets/.git protection every path tool uses to run_command args.
 
@@ -999,6 +1029,10 @@ def run_command(command: str, confirm: bool = False) -> dict:
                 f"prefixes: {sorted(ALLOWED_COMMAND_PREFIXES)}"
             )
         }
+
+    git_output_error = _git_output_file_option_error(canonical)
+    if git_output_error is not None:
+        return git_output_error
 
     sensitive_path_error = _command_sensitive_path_error(canonical)
     if sensitive_path_error is not None:
