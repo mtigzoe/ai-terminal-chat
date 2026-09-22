@@ -13,24 +13,23 @@ import { phaseLabel } from '../agentStatus.js';
 function AgentStatusRegion({ status }) {
   const regionRef = useRef(null);
   const lastMessageRef = useRef('');
+  const [announcement, setAnnouncement] = useState('');
 
   useEffect(() => {
     if (!status) {
       lastMessageRef.current = '';
-      if (regionRef.current) regionRef.current.textContent = '';
+      setAnnouncement('');
       return;
     }
-    const live = status.assertive ? 'assertive' : 'polite';
     const message = `${phaseLabel(status.phase)}. ${status.message || ''}`.trim();
     if (message === lastMessageRef.current) return;
     lastMessageRef.current = message;
-    const el = regionRef.current;
-    if (!el) return;
-    el.setAttribute('aria-live', live);
-    // Clear briefly so screen readers re-announce even when the text is similar.
-    el.textContent = '';
+    // Clear through React state, rather than mutating a React-managed DOM node.
+    // This briefly empties the live region so screen readers re-announce repeated
+    // status text without creating a React/jsdom DOM ownership race.
+    setAnnouncement('');
     const id = window.setTimeout(() => {
-      el.textContent = message;
+      setAnnouncement(message);
     }, 40);
     return () => window.clearTimeout(id);
   }, [status]);
@@ -49,6 +48,7 @@ function AgentStatusRegion({ status }) {
   }
 
   const live = status.assertive ? 'assertive' : 'polite';
+  const showAnnouncement = Boolean(announcement);
   return (
     <div
       id="agent-status-live"
@@ -58,8 +58,8 @@ function AgentStatusRegion({ status }) {
       aria-live={live}
       aria-atomic="true"
     >
-      <span className="agent-status-phase">{phaseLabel(status.phase)}</span>
-      <span className="agent-status-message">{status.message}</span>
+      <span className="agent-status-phase">{showAnnouncement ? phaseLabel(status.phase) : ''}</span>
+      <span className="agent-status-message">{announcement}</span>
     </div>
   );
 }
