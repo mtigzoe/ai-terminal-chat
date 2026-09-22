@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 import requests
 
+import safe_fetch
 from prompts import CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION
 from providers.base import Provider, ProviderCapabilities, ProviderResponse, ToolCall
 from tools import TOOL_SCHEMAS
@@ -101,7 +102,7 @@ class AnthropicProvider(Provider):
         # billed request; treat credential presence + DNS reachability
         # via a HEAD/GET to the API host as a soft availability check.
         try:
-            response = requests.get(
+            response = safe_fetch.safe_get(
                 f"{self.base_url}/v1/messages",
                 headers=self._headers(),
                 timeout=min(self.timeout, 10),
@@ -118,6 +119,8 @@ class AnthropicProvider(Provider):
                     f"from {self.base_url}/v1/messages."
                 ),
             }
+        except safe_fetch.SSRFError as exc:
+            return {"available": False, "error": str(exc)}
         except requests.RequestException as exc:
             return {"available": False, "error": self._unreachable_message(exc)}
         except Exception as exc:
@@ -222,12 +225,14 @@ class AnthropicProvider(Provider):
     def generate(self, contents: list) -> ProviderResponse:
         use_tools = bool(self._capabilities.tools)
         try:
-            response = requests.post(
+            response = safe_fetch.safe_post(
                 f"{self.base_url}/v1/messages",
                 headers=self._headers(),
                 json=self._payload(contents, use_tools=use_tools),
                 timeout=self.timeout,
             )
+        except safe_fetch.SSRFError:
+            raise
         except requests.RequestException as exc:
             raise RuntimeError(self._unreachable_message(exc)) from exc
 

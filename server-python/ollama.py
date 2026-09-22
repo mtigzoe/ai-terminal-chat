@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 import requests
 
+import safe_fetch
 from openai_compatible import (
     OpenAICompatibleProvider,
     looks_like_tools_unsupported,
@@ -217,7 +218,9 @@ class OllamaProvider(OpenAICompatibleProvider):
         kwargs.setdefault("timeout", min(self.timeout, 10))
         url = f"{self.native_base_url}{path}"
         try:
-            return requests.request(method, url, **kwargs)
+            return safe_fetch.safe_request(method, url, **kwargs)
+        except safe_fetch.SSRFError:
+            raise
         except requests.RequestException as exc:
             raise RuntimeError(self._unreachable_message(exc)) from exc
 

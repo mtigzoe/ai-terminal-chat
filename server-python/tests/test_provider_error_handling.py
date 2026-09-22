@@ -37,7 +37,7 @@ def test_openai_compatible_missing_choices_key_raises_clear_error():
     mock_response.json.return_value = {"unexpected": "shape"}
     mock_response.raise_for_status = Mock()
 
-    with patch("openai_compatible.requests.post", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         with pytest.raises(RuntimeError, match="Unexpected response shape"):
             provider.generate([{"role": "user", "content": "hi"}])
 
@@ -48,7 +48,7 @@ def test_openai_compatible_empty_choices_list_raises_clear_error():
     mock_response.json.return_value = {"choices": []}
     mock_response.raise_for_status = Mock()
 
-    with patch("openai_compatible.requests.post", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         with pytest.raises(RuntimeError, match="Unexpected response shape"):
             provider.generate([{"role": "user", "content": "hi"}])
 
@@ -66,7 +66,7 @@ def test_openai_compatible_non_json_body_raises_clear_error():
     mock_response.text = "<html>not json</html>"
     mock_response.raise_for_status = Mock()
 
-    with patch("openai_compatible.requests.post", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         with pytest.raises(RuntimeError, match="non-JSON response body"):
             provider.generate([{"role": "user", "content": "hi"}])
 
@@ -101,7 +101,7 @@ def test_openai_compatible_malformed_tool_call_arguments_degrade_gracefully():
     }
     mock_response.raise_for_status = Mock()
 
-    with patch("openai_compatible.requests.post", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         result = provider.generate([{"role": "user", "content": "hi"}])
 
     assert len(result.tool_calls) == 1
@@ -113,7 +113,7 @@ def test_openai_compatible_timeout_raises_actionable_runtime_error():
     provider = OpenAIProvider(api_key="test-key")
 
     with patch(
-        "openai_compatible.requests.post",
+        "openai_compatible.safe_fetch.safe_post",
         side_effect=requests.Timeout("Read timed out"),
     ):
         with pytest.raises(RuntimeError, match="Could not reach OpenAI"):
@@ -128,7 +128,7 @@ def test_openai_compatible_connection_error_is_wrapped_not_raw():
     provider = OpenAIProvider(api_key="test-key")
 
     with patch(
-        "openai_compatible.requests.post",
+        "openai_compatible.safe_fetch.safe_post",
         side_effect=requests.ConnectionError("Connection refused"),
     ):
         try:
@@ -200,7 +200,7 @@ def test_anthropic_unexpected_content_shape_raises_clear_error():
     mock_response.json.return_value = {"content": "not-a-list"}
     mock_response.raise_for_status = Mock()
 
-    with patch("anthropic_provider.requests.post", return_value=mock_response):
+    with patch("anthropic_provider.safe_fetch.safe_post", return_value=mock_response):
         with pytest.raises(RuntimeError, match="Unexpected Anthropic response shape"):
             provider.generate([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
 
@@ -212,7 +212,7 @@ def test_anthropic_non_json_body_raises_clear_error():
     mock_response.text = "<html>not json</html>"
     mock_response.raise_for_status = Mock()
 
-    with patch("anthropic_provider.requests.post", return_value=mock_response):
+    with patch("anthropic_provider.safe_fetch.safe_post", return_value=mock_response):
         with pytest.raises(RuntimeError, match="non-JSON body"):
             provider.generate([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
 
@@ -221,7 +221,7 @@ def test_anthropic_timeout_raises_actionable_runtime_error():
     provider = AnthropicProvider(api_key="sk-ant")
 
     with patch(
-        "anthropic_provider.requests.post",
+        "anthropic_provider.safe_fetch.safe_post",
         side_effect=requests.Timeout("Read timed out"),
     ):
         with pytest.raises(RuntimeError, match="Could not reach Anthropic"):
@@ -247,7 +247,7 @@ def test_anthropic_malformed_tool_use_input_defaults_to_empty_dict():
     }
     mock_response.raise_for_status = Mock()
 
-    with patch("anthropic_provider.requests.post", return_value=mock_response):
+    with patch("anthropic_provider.safe_fetch.safe_post", return_value=mock_response):
         result = provider.generate(
             [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
         )

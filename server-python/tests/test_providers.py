@@ -121,7 +121,7 @@ def test_ollama_probe_uses_native_api():
     )
     response = Mock(status_code=200)
 
-    with patch("ollama.requests.request", return_value=response) as request:
+    with patch("ollama.safe_fetch.safe_request", return_value=response) as request:
         result = provider.probe()
 
     assert result == {"available": True, "error": None}
@@ -142,7 +142,7 @@ def test_ollama_lists_native_models():
         ]
     }
 
-    with patch("ollama.requests.request", return_value=response):
+    with patch("ollama.safe_fetch.safe_request", return_value=response):
         models = provider.list_models()
 
     assert [item["id"] for item in models] == ["qwen3.5:9b", "llama3.1"]
@@ -169,7 +169,7 @@ def test_ollama_unreachable_probe_returns_actionable_error():
     )
 
     with patch(
-        "ollama.requests.request",
+        "ollama.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         result = provider.probe()
@@ -211,7 +211,7 @@ def test_kilo_provider_sends_bearer_auth():
     response = Mock(status_code=200)
     response.json.return_value = {"data": [{"id": "test-model"}]}
 
-    with patch("openai_compatible.requests.request", return_value=response) as request:
+    with patch("openai_compatible.safe_fetch.safe_request", return_value=response) as request:
         models = provider.list_models()
 
     assert models == [{"id": "test-model"}]
@@ -240,7 +240,7 @@ def test_kilo_unreachable_probe_returns_actionable_error():
     )
 
     with patch(
-        "openai_compatible.requests.request",
+        "openai_compatible.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         result = provider.probe()
@@ -598,7 +598,7 @@ def test_openai_provider_sends_bearer_auth():
     response = Mock(status_code=200)
     response.json.return_value = {"data": [{"id": "gpt-4o-mini"}, {"id": "gpt-4o"}]}
 
-    with patch("openai_compatible.requests.request", return_value=response) as request:
+    with patch("openai_compatible.safe_fetch.safe_request", return_value=response) as request:
         models = provider.list_models()
 
     assert models == [{"id": "gpt-4o-mini"}, {"id": "gpt-4o"}]
@@ -613,7 +613,7 @@ def test_openai_provider_list_models_empty_on_error():
     provider = OpenAIProvider(api_key="test-key")
 
     with patch(
-        "openai_compatible.requests.request",
+        "openai_compatible.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         models = provider.list_models()
@@ -723,7 +723,7 @@ def test_openai_provider_generate_posts_chat_completions():
     mock_response.raise_for_status = Mock()
 
     with patch(
-        "openai_compatible.requests.post", return_value=mock_response
+        "openai_compatible.safe_fetch.safe_post", return_value=mock_response
     ) as post:
         result = provider.generate(
             [{"role": "user", "content": "hi"}]
@@ -746,7 +746,7 @@ def test_openai_provider_unreachable_probe_returns_actionable_error():
     )
 
     with patch(
-        "openai_compatible.requests.request",
+        "openai_compatible.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         result = provider.probe()
@@ -764,7 +764,7 @@ def test_openai_provider_http_error_surfaces_status():
         "requests"
     ).HTTPError(response=mock_response)
 
-    with patch("openai_compatible.requests.post", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         try:
             provider.generate([{"role": "user", "content": "hi"}])
         except RuntimeError as exc:
@@ -888,7 +888,7 @@ def test_xai_provider_sends_bearer_auth():
         "data": [{"id": "grok-4.6"}, {"id": "grok-4.5"}]
     }
 
-    with patch("openai_compatible.requests.request", return_value=response) as request:
+    with patch("openai_compatible.safe_fetch.safe_request", return_value=response) as request:
         models = provider.list_models()
 
     assert models == [{"id": "grok-4.6"}, {"id": "grok-4.5"}]
@@ -900,7 +900,7 @@ def test_xai_provider_list_models_empty_on_error():
     provider = XAIProvider(api_key="test-key")
 
     with patch(
-        "openai_compatible.requests.request",
+        "openai_compatible.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         models = provider.list_models()
@@ -1010,7 +1010,7 @@ def test_xai_provider_generate_posts_chat_completions():
     mock_response.raise_for_status = Mock()
 
     with patch(
-        "openai_compatible.requests.post", return_value=mock_response
+        "openai_compatible.safe_fetch.safe_post", return_value=mock_response
     ) as post:
         result = provider.generate([{"role": "user", "content": "hi"}])
 
@@ -1036,7 +1036,7 @@ def test_xai_provider_unreachable_probe_returns_actionable_error():
     )
 
     with patch(
-        "openai_compatible.requests.request",
+        "openai_compatible.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         result = provider.probe()
@@ -1054,7 +1054,7 @@ def test_xai_provider_http_error_surfaces_status():
         "requests"
     ).HTTPError(response=mock_response)
 
-    with patch("openai_compatible.requests.post", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         try:
             provider.generate([{"role": "user", "content": "hi"}])
         except RuntimeError as exc:
@@ -1170,7 +1170,7 @@ def test_openrouter_passes_model_slug_unchanged():
     mock_response.raise_for_status = Mock()
 
     with patch(
-        "openai_compatible.requests.post", return_value=mock_response
+        "openai_compatible.safe_fetch.safe_post", return_value=mock_response
     ) as post:
         provider.generate([{"role": "user", "content": "hi"}])
 
@@ -1217,7 +1217,7 @@ def test_openrouter_provider_sends_bearer_auth():
         "data": [{"id": "openai/gpt-4o-mini"}, {"id": "anthropic/claude-sonnet-4"}]
     }
 
-    with patch("openai_compatible.requests.request", return_value=response) as request:
+    with patch("openai_compatible.safe_fetch.safe_request", return_value=response) as request:
         models = provider.list_models()
 
     assert models == [
@@ -1296,7 +1296,7 @@ def test_openrouter_provider_generate_posts_chat_completions():
     mock_response.raise_for_status = Mock()
 
     with patch(
-        "openai_compatible.requests.post", return_value=mock_response
+        "openai_compatible.safe_fetch.safe_post", return_value=mock_response
     ) as post:
         result = provider.generate([{"role": "user", "content": "hi"}])
 
@@ -1314,7 +1314,7 @@ def test_openrouter_provider_unreachable_probe():
     provider = OpenRouterProvider(api_key="test-key")
 
     with patch(
-        "openai_compatible.requests.request",
+        "openai_compatible.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         result = provider.probe()
@@ -1524,7 +1524,7 @@ def test_anthropic_generate_posts_messages_api():
     mock_response.raise_for_status = Mock()
 
     with patch(
-        "anthropic_provider.requests.post", return_value=mock_response
+        "anthropic_provider.safe_fetch.safe_post", return_value=mock_response
     ) as post:
         result = provider.generate(
             [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
@@ -1737,7 +1737,7 @@ def test_nvidia_provider_sends_bearer_auth_and_model_slug():
     mock_response.raise_for_status = Mock()
 
     with patch(
-        "openai_compatible.requests.post", return_value=mock_response
+        "openai_compatible.safe_fetch.safe_post", return_value=mock_response
     ) as post:
         provider.generate([{"role": "user", "content": "hi"}])
 
@@ -1774,7 +1774,7 @@ def test_nvidia_list_models_returns_catalog_ids():
     }
     mock_response.raise_for_status = Mock()
 
-    with patch("openai_compatible.requests.request", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_request", return_value=mock_response):
         models = provider.list_models()
 
     assert models == [
@@ -1796,7 +1796,7 @@ def test_nvidia_http_error_does_not_leak_api_key():
     mock_response.raise_for_status.side_effect = exc
     mock_response.json.return_value = {}
 
-    with patch("openai_compatible.requests.post", return_value=mock_response):
+    with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         try:
             provider.generate([{"role": "user", "content": "hi"}])
         except RuntimeError as raised:
@@ -1817,7 +1817,7 @@ def test_nvidia_unreachable_error_names_provider():
     )
 
     with patch(
-        "openai_compatible.requests.post",
+        "openai_compatible.safe_fetch.safe_post",
         side_effect=requests.ConnectionError("connection refused"),
     ):
         try:

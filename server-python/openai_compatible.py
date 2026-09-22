@@ -13,6 +13,7 @@ from typing import Optional
 
 import requests
 
+import safe_fetch
 from prompts import CHAT_ONLY_INSTRUCTION, SYSTEM_INSTRUCTION
 from providers.base import Provider, ProviderCapabilities, ProviderResponse, ToolCall
 from tools import TOOL_SCHEMAS
@@ -150,7 +151,9 @@ class OpenAICompatibleProvider(Provider):
         kwargs.setdefault("headers", self._headers())
         kwargs.setdefault("timeout", min(self.timeout, 10))
         try:
-            return requests.request(method, url, **kwargs)
+            return safe_fetch.safe_request(method, url, **kwargs)
+        except safe_fetch.SSRFError:
+            raise
         except requests.RequestException as exc:
             raise RuntimeError(self._unreachable_message(exc)) from exc
 
@@ -322,12 +325,14 @@ class OpenAICompatibleProvider(Provider):
 
     def _complete(self, contents, use_tools: bool) -> ProviderResponse:
         try:
-            response = requests.post(
+            response = safe_fetch.safe_post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(),
                 json=self._chat_payload(contents, use_tools),
                 timeout=self.timeout,
             )
+        except safe_fetch.SSRFError:
+            raise
         except requests.RequestException as exc:
             raise RuntimeError(self._unreachable_message(exc)) from exc
 
