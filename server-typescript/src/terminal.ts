@@ -1097,6 +1097,7 @@ function executionPathPermissionError(command: string): string | null {
       "--workspace",
       "--userconfig",
       "--globalconfig",
+      "--script-shell",
     ]);
     const nodeOptions = new Set(["--node-options"]);
 
