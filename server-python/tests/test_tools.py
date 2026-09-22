@@ -149,8 +149,7 @@ def test_command_allowlist_quoted_arguments_preserved():
 def test_is_forbidden_prefix_blocks_broad_git_prefix():
     """A broad 'git' prefix must be rejected by _is_forbidden_prefix
     because it would permit dangerous git subcommands."""
-    from tools import _sanitized_terminal_env
-from tools import _is_forbidden_prefix  # noqa: F401
+    from tools import _is_forbidden_prefix  # noqa: F401
 
     assert _is_forbidden_prefix("git") is True
     assert _is_forbidden_prefix("rm") is True
