@@ -144,7 +144,6 @@ def _apply_cors_policy(response):
 
 # Match TypeScript's 2 MiB request body limit (request-body-limit.ts).
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
-CORS(app)
 
 
 @app.errorhandler(413)
