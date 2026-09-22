@@ -1017,6 +1017,29 @@ def _execution_path_permission_error(command: str) -> dict | None:
                 if error:
                     return {"error": error}
 
+    if executable in {"pip", "pip3"}:
+        for index in range(1, len(tokens)):
+            token = tokens[index]
+            if token in {"-r", "--requirement", "-e", "--editable"}:
+                if index + 1 >= len(tokens) or not tokens[index + 1].strip():
+                    return {"error": f"Access denied: missing path for {token}."}
+                error = _execution_path_error(tokens[index + 1])
+                if error:
+                    return {"error": error}
+                continue
+            for option in ("-r", "--requirement", "-e", "--editable"):
+                if token.startswith(option + "="):
+                    value = token[len(option) + 1:]
+                    if not value:
+                        return {"error": f"Access denied: missing path for {option}."}
+                    error = _execution_path_error(value)
+                    if error:
+                        return {"error": error}
+            if not token.startswith("-") and _looks_like_local_path(token):
+                error = _execution_path_error(token)
+                if error:
+                    return {"error": error}
+
     if executable == "npm":
         for index in range(1, len(tokens)):
             token = tokens[index]
