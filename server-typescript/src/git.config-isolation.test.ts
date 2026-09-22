@@ -342,6 +342,8 @@ test("url.insteadOf is stripped for network isolation", async () => {
     stdio: "ignore",
   });
   setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
+    setLocal(repo, "hook.evil.command", "sh -c 'touch hook-pwned'");
+    setLocal(repo, "hook.evil.event", "pre-commit");
   const configPath = join(repo, ".git", "config");
   const original = readFileSync(configPath, "utf8");
   assert.ok(original.includes("evil.example"));
@@ -469,7 +471,7 @@ test("withSanitizedGitConfig restores config after failure", async () => {
   setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
   const configPath = join(repo, ".git", "config");
   const before = readFileSync(configPath, "utf8");
-  assert.ok(before.includes("evil.example"));
+  assert.ok(before.includes("evil.example"));\n    assert.ok(before.includes("hook-pwned"));
   __setProjectRootForTests(repo);
   try {
     // Force a failing network op under sanitization (invalid remote)
