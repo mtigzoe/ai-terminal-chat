@@ -59,6 +59,14 @@ def test_dynamic_git_config_overrides_execution_paths(tmp_path, monkeypatch):
     assert 'remote.origin.uploadpack=' in flattened
 
 
+def test_dynamic_git_config_includes_remote_proxy(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _git(root, 'config', 'remote.origin.proxy', 'sh -c "touch proxy-pwned"')
+    monkeypatch.setattr(tools, 'PROJECT_ROOT', root)
+    flattened = ' '.join(tools._dynamic_git_config_overrides())
+    assert 'remote.origin.proxy=' in flattened
+
+
 def test_git_config_symlink_is_rejected(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
