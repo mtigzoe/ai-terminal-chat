@@ -988,8 +988,9 @@ def _execution_path_permission_error(command: str) -> dict | None:
     if executable in {"pytest", "black", "ruff", "flake8", "pip", "pip3"}:
         path_options = {
             "-c", "--config", "--confcutdir", "--rootdir", "--basetemp",
-            "--append-config", "--output-file", "-o",
+            "--append-config", "--output-file",
         }
+        override_ini_options = {"-o", "--override-ini"}
         for index in range(1, len(tokens)):
             token = tokens[index]
             if token in path_options:
@@ -1007,6 +1008,30 @@ def _execution_path_permission_error(command: str) -> dict | None:
                 error = _execution_path_error(value)
                 if error:
                     return {"error": error}
+                continue
+
+            if token in override_ini_options:
+                if index + 1 >= len(tokens) or not tokens[index + 1].strip():
+                    return {"error": f"Access denied: missing value for {token}."}
+                override = tokens[index + 1].strip()
+                key, separator, value = override.partition("=")
+                if separator and key.strip().lower() == "cache_dir":
+                    error = _execution_path_error(value)
+                    if error:
+                        return {"error": error}
+                continue
+
+            matched_override = next(
+                (option for option in override_ini_options if token.startswith(option + "=")),
+                None,
+            )
+            if matched_override:
+                override = token[len(matched_override) + 1:].strip()
+                key, separator, value = override.partition("=")
+                if separator and key.strip().lower() == "cache_dir":
+                    error = _execution_path_error(value)
+                    if error:
+                        return {"error": error}
                 continue
 
             if token.startswith("-"):
