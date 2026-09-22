@@ -859,8 +859,7 @@ def _git_output_file_option_error(command: str) -> dict | None:
         return None
 
     for token in tokens[2:]:
-        lowered = token.lower()
-        if lowered in {"-o", "--output"} or lowered.startswith("-o") or lowered.startswith("--output="):
+        if token in {"-o", "--output"} or token.startswith("-o") or token.startswith("--output="):
             return {
                 "error": (
                     "Command blocked: git inspection output cannot be redirected "
