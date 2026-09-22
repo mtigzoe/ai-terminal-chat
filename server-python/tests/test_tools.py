@@ -136,6 +136,28 @@ def test_run_command_rejects_command_chaining():
     assert "not allowed" in result["error"].lower() or "chaining" in result["error"].lower()
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git diff --output=generated.txt",
+        "git diff --output generated.txt",
+        "git diff -ogenerated.txt",
+        "git log --output=generated.txt",
+        "git show --output=generated.txt HEAD",
+    ],
+)
+def test_git_inspection_output_redirection_is_blocked(project_root, command):
+    """Allowlisted Git inspection commands must remain non-mutating."""
+    existing = project_root / "generated.txt"
+    existing.write_text("do not overwrite\n")
+
+    result = tools.run_command(command)
+
+    assert "error" in result
+    assert "redirected" in result["error"].lower()
+    assert existing.read_text() == "do not overwrite\n"
+
+
 def test_run_command_rejects_secret_access():
     result = app.run_command("cat .env")
     assert "blocked" in result["error"].lower() or "not allowed" in result["error"].lower()
