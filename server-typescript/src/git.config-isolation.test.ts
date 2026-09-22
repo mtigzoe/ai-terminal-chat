@@ -220,9 +220,8 @@ test("runIsolatedGit blocks gpg.program on status/log", async () => {
 test("runIsolatedGit blocks remote proxy", async () => {
   const repo = initRepo();
   const marker = join(repo, "REMOTE_PROXY");
-  const { configValue } = markerScript(marker);
-  setLocal(repo, "remote.origin.proxy", configValue);
-  execFileSync("git", ["remote", "add", "origin", "https://example.com/repo.git"], { cwd: repo, stdio: "ignore" });
+  setLocal(repo, "remote.origin.proxy", "http://127.0.0.1:9");
+  setLocal(repo, "remote.origin.url", "https://example.com/repo.git");
   __setProjectRootForTests(repo);
   try {
     const result = await runIsolatedGit(["remote", "get-url", "origin"]);
