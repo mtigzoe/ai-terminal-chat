@@ -64,6 +64,20 @@ def project_root(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_terminal_env_strips_execution_injection_variables(monkeypatch):
+    monkeypatch.setenv("NODE_OPTIONS", "--require ./outside.js")
+    monkeypatch.setenv("PYTEST_PLUGINS", "outside.plugin")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--override-ini=cache_dir=../outside")
+    monkeypatch.setenv("PYTHONPATH", "../outside")
+    monkeypatch.setenv("NPM_CONFIG_USERCONFIG", "../outside/.npmrc")
+    monkeypatch.setenv("NPM_CONFIG_NODE_OPTIONS", "--require ./outside.js")
+    monkeypatch.setenv("NORMAL_TERMINAL_VALUE", "kept")
+    env = _sanitized_terminal_env()
+    for key in ("NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS"):
+        assert key not in env
+    assert env["NORMAL_TERMINAL_VALUE"] == "kept"
+
+
 def test_safe_path_accepts_project_relative_path():
     path = app.safe_path("server-python")
     assert path == (app.PROJECT_ROOT / "server-python").resolve()
@@ -112,7 +126,8 @@ def test_command_allowlist_quoted_arguments_preserved():
 def test_is_forbidden_prefix_blocks_broad_git_prefix():
     """A broad 'git' prefix must be rejected by _is_forbidden_prefix
     because it would permit dangerous git subcommands."""
-    from tools import _is_forbidden_prefix  # noqa: F401
+    from tools import _sanitized_terminal_env
+from tools import _is_forbidden_prefix  # noqa: F401
 
     assert _is_forbidden_prefix("git") is True
     assert _is_forbidden_prefix("rm") is True
