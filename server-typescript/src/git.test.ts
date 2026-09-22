@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { __setProjectRootForTests, getProjectRoot, runWithAllowedReadPaths } from "./security.js";
 import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus, runIsolatedGit } from "./git.js";
@@ -92,7 +92,7 @@ test("runIsolatedGit ignores inherited Git repository and transport environment"
   try {
     const result = await runIsolatedGit(["rev-parse", "--show-toplevel"]);
     assert.equal(result.code, 0);
-    assert.equal(result.stdout.trim(), getProjectRoot());
+    assert.equal(result.stdout.trim(), resolve(process.cwd(), ".."));
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete process.env[key];
