@@ -382,7 +382,7 @@ describe("gitFetch", () => {
     setProjectRoot(repoDir);
 
     try {
-      const result = await gitFetch("--upload-pack=evil");
+      const result = await gitFetch("--upload-pack=evil", true);
       expect(result.error).toBeDefined();
       expect(String(result.error)).toMatch(/cannot start with '-'|option injection/i);
     } finally {
@@ -399,7 +399,7 @@ describe("gitFetch", () => {
     setProjectRoot(repoDir);
 
     try {
-      const result = await gitFetch("origin@evil");
+      const result = await gitFetch("origin@evil", true);
       expect(result.error).toBeDefined();
       expect(String(result.error)).toContain("Invalid remote name");
     } finally {
