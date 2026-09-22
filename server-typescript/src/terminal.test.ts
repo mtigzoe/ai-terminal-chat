@@ -298,6 +298,28 @@ test("isCommandAllowed: shell operators embedded in the command string are token
   assert.equal(isCommandAllowed("npm test; rm -rf /"), false);
 });
 
+for (const command of [
+  "git diff --output=generated.txt",
+  "git diff --output generated.txt",
+  "git diff -ogenerated.txt",
+  "git log --output=generated.txt",
+  "git show --output=generated.txt HEAD",
+]) {
+  test(`${command} cannot redirect allowlisted Git inspection output to a file`, async () => {
+    const outputPath = join(gitShowTestDir, "generated.txt");
+    writeFileSync(outputPath, "do not overwrite\n");
+
+    const result = await runCommand(command);
+
+    assert.ok(isToolError(result), "Git inspection output redirection must be blocked");
+    assert.match(String(result.error), /redirected/i);
+    assert.equal(
+      require("node:fs").readFileSync(outputPath, "utf8"),
+      "do not overwrite\n",
+    );
+  });
+}
+
 test("runCommand rejects chained/pipe/redirect commands even when the first token is allowlisted", async () => {
   const r1 = await runCommand("git status && whoami");
   assert.ok(isToolError(r1), "&& chain must be rejected");
