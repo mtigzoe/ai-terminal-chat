@@ -1258,7 +1258,12 @@ def _dynamic_git_config_overrides() -> list[str]:
                 match = re.match(r"^([^=]+)=", line)
                 if match and section:
                     key = f"{section}.{match.group(1).strip().lower()}"
-                    if DYNAMIC_GIT_CONFIG_KEY_RE.fullmatch(key):
+                    dynamic_match = DYNAMIC_GIT_CONFIG_KEY_RE.fullmatch(key) or (
+                        key.startswith("remote.") and key.endswith((".uploadpack", ".receivepack"))
+                    ) or (
+                        key.startswith("hook.") and key.endswith((".command", ".event", ".enabled", ".parallel", ".jobs"))
+                    )
+                    if dynamic_match:
                         overrides.extend(["-c", f"{key}="])
         except (OSError, UnicodeDecodeError):
             continue
@@ -2161,7 +2166,8 @@ def git_commit(message: str, confirm: bool = False) -> dict:
         }
 
     try:
-        result = _run_git(["commit", "-m", message], timeout=GIT_COMMIT_TIMEOUT)
+        with _sanitized_git_config():
+            result = _run_git(["commit", "-m", message], timeout=GIT_COMMIT_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:
