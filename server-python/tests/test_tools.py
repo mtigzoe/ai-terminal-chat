@@ -334,6 +334,23 @@ def test_write_file_refuses_sensitive_targets(project_root):
     assert not (project_root / ".env").exists()
 
 
+def test_write_file_refuses_hard_linked_target(project_root, tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n")
+    linked = project_root / "linked.txt"
+    try:
+        os.link(outside, linked)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"hard links unavailable: {exc}")
+
+    result = tools.write_file("linked.txt", "changed\n", confirm=True)
+
+    assert "error" in result
+    assert "hard links" in result["error"].lower()
+    assert outside.read_text() == "outside\n"
+    assert linked.read_text() == "outside\n"
+
+
 def test_create_file_refuses_sensitive_targets(project_root):
     result = tools.create_file("credentials.json", "{}", confirm=True)
     assert "error" in result
