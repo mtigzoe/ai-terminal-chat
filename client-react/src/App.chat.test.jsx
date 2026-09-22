@@ -210,7 +210,8 @@ describe('non-streaming chat lifecycle', () => {
       expect(confirmPayload?.request_id).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('link', { name: /new chat/i }));
+    const newChatLink = await screen.findByRole('link', { name: /new chat/i });
+    fireEvent.click(newChatLink);
 
     await waitFor(() => {
       expect(confirmConfig.signal.aborted).toBe(true);
