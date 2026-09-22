@@ -375,10 +375,29 @@ def confirm_action():
         return {"error": "Only pending write actions can be confirmed."}, 400
 
     resume = action.resume
+    if resume is not None:
+        saved_root = resume.get("project_root")
+        if saved_root:
+            try:
+                if os.path.abspath(str(saved_root)) != os.path.abspath(str(get_project_root())):
+                    return {
+                        "error": (
+                            "Cannot confirm this action because the active "
+                            "project root differs from the project root that "
+                            "created the pending action."
+                        )
+                    }, 409
+            except (OSError, TypeError):
+                return {
+                    "error": "Cannot confirm this action because the saved project root is invalid."
+                }, 409
+
     if resume is None or resume.get("provider_fingerprint") != provider_fingerprint(provider):
         # No saved loop state (or the active provider changed since this
         # action was created, and its saved `contents` are that provider's
         # native objects) — fall back to a single, isolated execution.
+        # A saved project root was checked above so this fallback can never
+        # execute a confirmation against a different project.
         return _confirm_legacy(action, action_id, confirmed)
 
     base_response = {"confirmed": confirmed, "action_id": action_id, "tool": action.tool_name}
