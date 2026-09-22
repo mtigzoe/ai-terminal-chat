@@ -1098,8 +1098,11 @@ function executionPathPermissionError(command: string): string | null {
       "--userconfig",
       "--globalconfig",
       "--script-shell",
+      "--git",
+      "--node-gyp",
+      "--cache",
+      "--logs-dir",
     ]);
-    const nodeOptions = new Set(["--node-options"]);
 
     for (let i = 1; i < tokens.length; i += 1) {
       const token = tokens[i];
@@ -1125,16 +1128,11 @@ function executionPathPermissionError(command: string): string | null {
         }
       }
 
-      for (const option of nodeOptions) {
-        const nodeValue = token === option
-          ? tokens[i + 1]
-          : token.startsWith(`${option}=`) ? token.slice(option.length + 1) : undefined;
-        if (nodeValue === undefined) continue;
-        if (nodeValue.includes("--require=")) {
-          const value = nodeValue.split("--require=", 2)[1];
-          const error = executionPathError(root, value);
-          if (error) return error;
-        }
+      if (
+        token === "--node-options" ||
+        token.startsWith("--node-options=")
+      ) {
+        return "Access denied: --node-options is not allowed for npm execution.";
       }
     }
   }
