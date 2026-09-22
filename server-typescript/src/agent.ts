@@ -132,6 +132,7 @@ const WRITE_TOOL_NAMES = new Set([
 const GIT_CONFIRM_TOOL_NAMES = new Set([
   "git_add",
   "git_pull",
+  "git_fetch",
   "git_restore",
   "git_commit",
   "git_push",
