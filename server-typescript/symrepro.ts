@@ -1,0 +1,25 @@
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
+import { gitRestore } from "./src/git.ts";
+import { runWithAllowedReadPaths, setProjectRoot } from "./src/security.ts";
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "symrepro-"));
+setProjectRoot(root);
+execFileSync("git", ["init", "-q"], { cwd: root });
+fs.writeFileSync(path.join(root, "target.txt"), "target\\n");
+fs.symlinkSync("target.txt", path.join(root, "link.txt"));
+execFileSync("git", ["add", "target.txt", "link.txt"], { cwd: root });
+execFileSync("git", ["commit", "-q", "-m", "initial"], { cwd: root, env: { ...process.env, GIT_AUTHOR_NAME: "T", GIT_AUTHOR_EMAIL: "t@e.c", GIT_COMMITTER_NAME: "T", GIT_COMMITTER_EMAIL: "t@e.c" } });
+fs.rmSync(path.join(root, "link.txt"));
+fs.writeFileSync(path.join(root, "link.txt"), "changed\\n");
+console.log("before:", fs.lstatSync(path.join(root, "link.txt")).isSymbolicLink());
+const result = await runWithAllowedReadPaths(["link.txt"], () => gitRestore("link.txt", false, true));
+console.log("result:", JSON.stringify(result));
+const st = fs.lstatSync(path.join(root, "link.txt"));
+console.log("after isSymlink:", st.isSymbolicLink(), "size:", st.size);
+console.log("content:", JSON.stringify(fs.readFileSync(path.join(root, "link.txt"), "utf8")));
+execFileSync("git", ["ls-files", "-s"], { cwd: root, stdio: "inherit" });
+console.log("repo core.symlinks:", execFileSync("git", ["config", "core.symlinks"], { cwd: root }).toString().trim() || "(unset)");
+console.log("root:", root);
