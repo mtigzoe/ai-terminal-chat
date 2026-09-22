@@ -1092,10 +1092,17 @@ function executionPathPermissionError(command: string): string | null {
   }
 
   if (executable === "npm") {
+    const pathOptions = new Set([
+      "--prefix",
+      "--workspace",
+      "--userconfig",
+      "--globalconfig",
+    ]);
+
     for (let i = 1; i < tokens.length; i += 1) {
       const token = tokens[i];
 
-      if (token === "--prefix" || token === "--workspace") {
+      if (pathOptions.has(token)) {
         const value = tokens[i + 1];
 
         if (value) {
@@ -1107,13 +1114,11 @@ function executionPathPermissionError(command: string): string | null {
         continue;
       }
 
-      for (const option of ["--prefix", "--workspace"]) {
+      for (const option of pathOptions) {
         if (token.startsWith(`${option}=`)) {
-          const error = executionPathError(
-            root,
-            token.slice(option.length + 1),
-          );
-
+          const value = token.slice(option.length + 1);
+          if (!value) continue;
+          const error = executionPathError(root, value);
           if (error) return error;
         }
       }
