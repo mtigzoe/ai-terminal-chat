@@ -16,6 +16,7 @@ import {
   DANGEROUS_COMMAND_CHARACTERS,
   isCommandAllowed,
   runCommand,
+  sanitizedTerminalEnv,
   tokenizeCommand,
   getAllowedCommands,
 } from "./terminal.ts";
@@ -26,6 +27,27 @@ void DANGEROUS_COMMAND_CHARACTERS;
 
 // Restore the default allowlist after every test so mutations do not leak
 // into other test files that share the same process/module cache.
+test("sanitizedTerminalEnv strips execution-injection variables", () => {
+  const original = { ...process.env };
+  process.env.NODE_OPTIONS = "--require ./outside.js";
+  process.env.PYTEST_PLUGINS = "outside.plugin";
+  process.env.PYTEST_ADDOPTS = "--override-ini=cache_dir=../outside";
+  process.env.PYTHONPATH = "../outside";
+  process.env.NPM_CONFIG_USERCONFIG = "../outside/.npmrc";
+  process.env.NPM_CONFIG_NODE_OPTIONS = "--require ./outside.js";
+  process.env.NORMAL_TERMINAL_VALUE = "kept";
+  try {
+    const env = sanitizedTerminalEnv();
+    for (const key of ["NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS"]) {
+      assert.equal(env[key], undefined);
+    }
+    assert.equal(env.NORMAL_TERMINAL_VALUE, "kept");
+  } finally {
+    for (const key of ["NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS", "NORMAL_TERMINAL_VALUE"]) delete process.env[key];
+    for (const [key, value] of Object.entries(original)) process.env[key] = value;
+  }
+});
+
 test.afterEach(() => {
   // Write the known-good defaults back to disk so a stale config file
   // from a previous test run cannot pollute subsequent test files,
