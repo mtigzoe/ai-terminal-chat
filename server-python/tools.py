@@ -1066,11 +1066,17 @@ def _execution_path_permission_error(command: str) -> dict | None:
                     return {"error": error}
 
     if executable == "npm":
-        path_options = {"--prefix", "--workspace", "--userconfig", "--globalconfig", "--script-shell"}
-        # npm accepts arbitrary config keys as CLI options. node-options is
-        # especially security-sensitive because npm passes it to Node when
-        # lifecycle scripts run. Reject path-bearing Node options outside root.
-        node_options = {"--node-options"}
+        path_options = {
+            "--prefix", "--workspace", "--userconfig", "--globalconfig",
+            "--script-shell", "--git", "--node-gyp", "--cache", "--logs-dir",
+        }
+        # npm passes node-options through to Node.js for lifecycle scripts.
+        # It can carry multiple code-loading mechanisms (--require, --import,
+        # --loader, etc.), so parsing only one of them is unsafe. Reject the
+        # override entirely rather than attempting an incomplete path parser.
+        if any(token == "--node-options" or token.startswith("--node-options=")
+               for token in tokens[1:]):
+            return {"error": "Access denied: --node-options is not allowed for npm execution."}
         for index in range(1, len(tokens)):
             token = tokens[index]
             if token in path_options:
