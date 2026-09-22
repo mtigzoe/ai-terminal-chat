@@ -1,3 +1,62 @@
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+# app.py is in the parent directory of this test package.
+SERVER_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SERVER_DIR))
+
+os.environ.setdefault("GOOGLE_API_KEY", "test-key")
+
+import app  # noqa: E402
+import security  # noqa: E402
+import tools  # noqa: E402
+
+
+@pytest.fixture
+def git_repo(tmp_path, monkeypatch):
+    """A throwaway git repository used as PROJECT_ROOT for a test.
+
+    security.py and tools.py each import PROJECT_ROOT by value at
+    module load time, so both module-level names have to be patched
+    for safe_path()/is_sensitive_path() (in security.py) and the
+    git_add subprocess calls (in tools.py) to agree on the same root.
+    """
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(tools, "PROJECT_ROOT", tmp_path)
+    return tmp_path
+
+
+def _git_porcelain(repo_path):
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+@pytest.fixture
+def project_root(tmp_path, monkeypatch):
+    """A throwaway project directory used as PROJECT_ROOT, without git.
+
+    Same PROJECT_ROOT-patching concern as git_repo above, but for tests
+    that exercise the plain filesystem tools (read_file, write_file,
+    create_file, delete_file) rather than git_add.
     """
 
     monkeypatch.setattr(security, "PROJECT_ROOT", tmp_path)
@@ -90,7 +149,8 @@ def test_command_allowlist_quoted_arguments_preserved():
 def test_is_forbidden_prefix_blocks_broad_git_prefix():
     """A broad 'git' prefix must be rejected by _is_forbidden_prefix
     because it would permit dangerous git subcommands."""
-    from tools import _is_forbidden_prefix
+    from tools import _sanitized_terminal_env
+from tools import _is_forbidden_prefix  # noqa: F401
 
     assert _is_forbidden_prefix("git") is True
     assert _is_forbidden_prefix("rm") is True
@@ -834,3 +894,220 @@ def test_execution_path_inside_project_still_requires_confirmation(tmp_path, mon
 # repeated space kept a command allowlisted while making it invisible to the
 # confirmation and read-permission checks.
 # ---------------------------------------------------------------------------
+
+# Spellings that tokenize to an allowlisted execution-risk command.
+EXECUTION_RISK_EVASIONS = [
+    "npm  install",
+    "npm\tinstall",
+    "npm \tci",
+    "pytest\t-x",
+    "python  -m  pytest",
+]
+
+
+@pytest.mark.parametrize("command", EXECUTION_RISK_EVASIONS)
+def test_execution_risk_confirmation_is_not_bypassed(command):
+    # The evasion is only meaningful while the command stays allowlisted.
+    assert tools.is_command_allowed(command) is True
+    assert tools.is_execution_risk_command(command) is True
+
+
+@pytest.mark.parametrize("command", EXECUTION_RISK_EVASIONS)
+def test_run_command_requires_confirmation_for_evasions(command):
+    result = tools.run_command(command)
+    assert result.get("requires_confirmation") is True, (
+        f"{command!r} must prompt for confirmation instead of executing"
+    )
+
+
+def test_whitespace_does_not_change_command_classification():
+    for spelling in ["npm install", "npm  install", "npm\tinstall"]:
+        assert tools.is_command_allowed(spelling) == tools.is_command_allowed(
+            "npm install"
+        )
+        assert tools.is_execution_risk_command(
+            spelling
+        ) == tools.is_execution_risk_command("npm install")
+
+
+def test_near_miss_prefixes_are_not_execution_risk():
+    assert tools.is_execution_risk_command("git status") is False
+    assert tools.is_execution_risk_command("git  log") is False
+    assert tools.is_execution_risk_command("npm installer") is False
+    assert tools.is_execution_risk_command("pytestx") is False
+
+
+@pytest.fixture
+def git_repo_with_history(git_repo):
+    """A git repository with one commit containing two distinct files."""
+
+    (git_repo / "README.md").write_text("# README\n")
+    (git_repo / "other.md").write_text("# Other\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=git_repo, check=True)
+    return git_repo
+
+
+# ---------------------------------------------------------------------------
+# git log read-permission regression tests
+#
+# "git log" is allowlisted by default but was absent from the content-reading
+# command set, so "git log -p" dumped every tracked file's body regardless of
+# the Project-page selection.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("command", ["git log", "git log -n 5"])
+def test_git_log_metadata_is_allowed_while_restricted(git_repo_with_history, command):
+    security.set_allowed_read_paths([])
+    try:
+        result = tools.run_command(command)
+        assert "error" not in result, (
+            f"{command!r} shows commit metadata only: {result.get('error')}"
+        )
+    finally:
+        security.clear_allowed_read_paths()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log -p",
+        "git log --patch",
+        "git log -U3",
+        "git log --patch-with-stat",
+        "git log --unified=5",
+        "git  log -p",
+    ],
+)
+def test_git_log_patch_output_is_denied_when_nothing_selected(
+    git_repo_with_history, command
+):
+    security.set_allowed_read_paths([])
+    try:
+        result = tools.run_command(command)
+        assert "error" in result, f"{command!r} exposes file contents and must be denied"
+        assert "Access denied" in result["error"]
+    finally:
+        security.clear_allowed_read_paths()
+
+
+def test_git_log_patch_scoped_to_selected_file_is_allowed(git_repo_with_history):
+    security.set_allowed_read_paths(["README.md"])
+    try:
+        result = tools.run_command("git log -p -- README.md")
+        assert "error" not in result, result.get("error")
+    finally:
+        security.clear_allowed_read_paths()
+
+
+def test_git_log_patch_scoped_to_unselected_file_is_denied(git_repo_with_history):
+    security.set_allowed_read_paths(["other.md"])
+    try:
+        result = tools.run_command("git log -p -- README.md")
+        assert "error" in result
+    finally:
+        security.clear_allowed_read_paths()
+
+
+def test_git_log_patch_does_not_leak_unselected_file_contents(git_repo_with_history):
+    security.set_allowed_read_paths(["other.md"])
+    try:
+        result = tools.run_command("git log -p")
+        assert "# README" not in result.get("stdout", "")
+    finally:
+        security.clear_allowed_read_paths()
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git  show HEAD:README.md", "git  show HEAD", "git  diff", "git  log -p"],
+)
+def test_whitespace_does_not_evade_read_permission_gate(git_repo_with_history, command):
+    # The evasion is only meaningful while the command stays allowlisted.
+    assert tools.is_command_allowed(command) is True
+    security.set_allowed_read_paths([])
+    try:
+        result = tools.run_command(command)
+        assert "error" in result, f"{command!r} must still be permission-checked"
+        assert "Access denied" in result["error"]
+    finally:
+        security.clear_allowed_read_paths()
+
+
+# ---------------------------------------------------------------------------
+# Sensitive-path protection for run_command arguments
+#
+# run_command previously relied only on BLOCKED_COMMAND_PATTERNS (.env,
+# credential, id_rsa), so *.pem, *.key, id_ed25519 and .git/ stayed reachable
+# through allowlisted readers such as `git show <rev>:<path>`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git show HEAD:server.key",
+        "git show HEAD:certs/private.pem",
+        "git show HEAD:id_ed25519",
+        "git show HEAD:config/secrets.json",
+        "git log -- app.key",
+        "dir .git",
+        "git show HEAD:.git/config",
+    ],
+)
+def test_run_command_refuses_sensitive_paths(command):
+    result = tools.run_command(command)
+    assert "error" in result, f"{command!r} targets protected data and must be refused"
+
+
+def test_sensitive_path_check_allows_ordinary_arguments():
+    assert tools._command_sensitive_path_error("git show HEAD:README.md") is None
+    assert tools._command_sensitive_path_error("git log") is None
+    assert tools._command_sensitive_path_error("npm run lint") is None
+    assert tools._command_sensitive_path_error("pip install -r requirements.txt") is None
+    # .gitignore must not match the .git directory rule.
+    assert tools._command_sensitive_path_error("git show HEAD:.gitignore") is None
+
+
+# ---------------------------------------------------------------------------
+# Git subcommand allowlist
+#
+# FORBIDDEN_ALLOWED_COMMAND_PREFIXES does not enumerate config/checkout/
+# worktree/rebase/bisect, each of which defeats the Git isolation boundary.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "git config",
+        "git checkout",
+        "git switch",
+        "git worktree",
+        "git rebase",
+        "git bisect",
+        "git submodule",
+        "git apply",
+        "git filter-branch",
+    ],
+)
+def test_non_isolated_git_prefixes_cannot_be_allowlisted(prefix):
+    assert tools._is_forbidden_prefix(prefix) is True
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["git status", "git log", "git diff", "git show", "git branch --list", "git remote -v"],
+)
+def test_read_only_git_prefixes_remain_allowlistable(prefix):
+    assert tools._is_forbidden_prefix(prefix) is False
+
+
+def test_non_isolated_git_subcommand_refused_even_if_allowlist_widened(monkeypatch):
+    """Simulates a config file that predates the subcommand allowlist."""
+
+    monkeypatch.setattr(tools, "ALLOWED_COMMAND_PREFIXES", ["git config"])
+    result = tools.run_command("git config --list")
+    assert "error" in result
+    assert "subcommand not allowed" in result["error"].lower()
