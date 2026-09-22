@@ -68,20 +68,31 @@ test("gitAdd rejects paths outside the allowed read selection", async () => {
 });
 
 
-test("runIsolatedGit ignores inherited Git transport and TLS overrides", async () => {
+test("runIsolatedGit ignores inherited Git repository and transport environment", async () => {
   const original = {
+    GIT_DIR: process.env.GIT_DIR,
+    GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+    GIT_INDEX_FILE: process.env.GIT_INDEX_FILE,
+    GIT_CONFIG_PARAMETERS: process.env.GIT_CONFIG_PARAMETERS,
     GIT_SSH: process.env.GIT_SSH,
     GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND,
     GIT_SSH_VARIANT: process.env.GIT_SSH_VARIANT,
     GIT_SSL_NO_VERIFY: process.env.GIT_SSL_NO_VERIFY,
+    GIT_PROXY_COMMAND: process.env.GIT_PROXY_COMMAND,
   };
+  process.env.GIT_DIR = join(process.cwd(), "definitely-not-this-repository");
+  process.env.GIT_WORK_TREE = join(process.cwd(), "outside-worktree");
+  process.env.GIT_INDEX_FILE = join(process.cwd(), "outside-index");
+  process.env.GIT_CONFIG_PARAMETERS = "'core.fsmonitor=true'";
   process.env.GIT_SSH = "outside-ssh";
   process.env.GIT_SSH_COMMAND = "outside-ssh-command";
   process.env.GIT_SSH_VARIANT = "simple";
   process.env.GIT_SSL_NO_VERIFY = "1";
+  process.env.GIT_PROXY_COMMAND = "outside-proxy";
   try {
-    const result = await runIsolatedGit(["--version"]);
+    const result = await runIsolatedGit(["rev-parse", "--show-toplevel"]);
     assert.equal(result.code, 0);
+    assert.equal(result.stdout.trim(), getProjectRoot());
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete process.env[key];
