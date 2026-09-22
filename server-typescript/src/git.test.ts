@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 
 import { __setProjectRootForTests, getProjectRoot, runWithAllowedReadPaths } from "./security.js";
-import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus } from "./git.js";
+import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus, runIsolatedGit } from "./git.js";
 
 let originalProjectRoot: string;
 
@@ -65,4 +65,27 @@ test("gitAdd rejects paths outside the allowed read selection", async () => {
       assert.ok(errorMessage.toLowerCase().includes("not selected"), `unexpected error: ${errorMessage}`);
     }
   });
+});
+
+
+test("runIsolatedGit ignores inherited Git transport and TLS overrides", async () => {
+  const original = {
+    GIT_SSH: process.env.GIT_SSH,
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND,
+    GIT_SSH_VARIANT: process.env.GIT_SSH_VARIANT,
+    GIT_SSL_NO_VERIFY: process.env.GIT_SSL_NO_VERIFY,
+  };
+  process.env.GIT_SSH = "outside-ssh";
+  process.env.GIT_SSH_COMMAND = "outside-ssh-command";
+  process.env.GIT_SSH_VARIANT = "simple";
+  process.env.GIT_SSL_NO_VERIFY = "1";
+  try {
+    const result = await runIsolatedGit(["--version"]);
+    assert.equal(result.code, 0);
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
