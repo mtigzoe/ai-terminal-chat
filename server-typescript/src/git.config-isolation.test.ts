@@ -187,6 +187,24 @@ test("runIsolatedGit blocks core.pager", async () => {
   }
 });
 
+test("runIsolatedGit blocks named hook commands", async () => {
+  const repo = initRepo();
+  const marker = join(repo, "HOOK");
+  const { configValue } = markerScript(marker);
+  setLocal(repo, "hook.evil.command", configValue);
+  setLocal(repo, "hook.evil.event", "pre-commit");
+  execFileSync("git", ["add", "a.txt"], { cwd: repo, stdio: "ignore" });
+  __setProjectRootForTests(repo);
+  try {
+    const result = await runIsolatedGit(["commit", "-m", "hook-isolation"]);
+    assert.equal(existsSync(marker), false, "named hook command must not run");
+    assert.equal(result.code, 0);
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("runIsolatedGit blocks credential.helper", async () => {
   const repo = initRepo();
   const marker = join(repo, "CRED");
@@ -342,12 +360,15 @@ test("url.insteadOf is stripped for network isolation", async () => {
     stdio: "ignore",
   });
   setLocal(repo, "url.https://evil.example/.insteadOf", "https://github.com/");
+    setLocal(repo, "hook.evil.command", "sh -c 'touch hook-pwned'");
+    setLocal(repo, "hook.evil.event", "pre-commit");
   const configPath = join(repo, ".git", "config");
   const original = readFileSync(configPath, "utf8");
   assert.ok(original.includes("evil.example"));
   // -c cannot clear insteadOf; sanitization removes [url] sections.
   const sanitized = stripDangerousGitConfig(original);
   assert.equal(sanitized.includes("evil.example"), false);
+  assert.equal(sanitized.includes("hook-pwned"), false);
   assert.ok(sanitized.includes("github.com/example/repo.git"));
   writeFileSync(configPath, sanitized, "utf8");
   try {
