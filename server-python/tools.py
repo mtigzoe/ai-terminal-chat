@@ -885,6 +885,156 @@ def _command_sensitive_path_error(command: str) -> dict | None:
     return None
 
 
+def _execution_path_permission_error(args: list[str]) -> dict | None:
+    """Constrain package-manager/test-tool filesystem and config paths."""
+
+    if not args:
+        return None
+
+    executable = Path(args[0]).name.lower()
+
+    def path_error(raw: str) -> dict | None:
+        value = str(raw).strip()
+        if not value:
+            return {"error": "Access denied: missing execution path."}
+        if re.match(r"^[a-z][a-z0-9+.-]*://", value, flags=re.IGNORECASE):
+            return {"error": f"Access denied: external execution path is not allowed: {raw}"}
+        try:
+            candidate = safe_path(value)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not is_path_within_project(candidate):
+            return {"error": f"Access denied: execution path is outside the project root: {raw}"}
+        return None
+
+    def is_path_like(value: str) -> bool:
+        return (
+            value.startswith(("/", "\\", "./", "../", ".\\", "..\\", "~"))
+            or re.match(r"^[A-Za-z]:[\\/]", value) is not None
+            or "/" in value
+            or "\\" in value
+            or value.lower().startswith("file:")
+        )
+
+    if executable in {"pytest", "black", "ruff", "flake8"} or (
+        executable in {"python", "python3", "python.exe", "python3.exe"}
+        and len(args) >= 3
+        and args[1] in {"-m", "--module"}
+        and args[2].lower() == "pytest"
+    ):
+        path_options = {
+            "-c", "--confcutdir", "--rootdir", "--basetemp",
+            "--config", "--append-config", "--output-file", "--cache-dir",
+        }
+        start = 3 if executable.startswith("python") and len(args) >= 3 and args[1] in {"-m", "--module"} else 1
+        i = start
+        while i < len(args):
+            token = args[i]
+            option = next((candidate for candidate in path_options if token == candidate or token.startswith(candidate + "=")), None)
+            if option:
+                if token == option:
+                    if i + 1 >= len(args):
+                        return {"error": f"Access denied: missing path for {option}."}
+                    value = args[i + 1]
+                    err = path_error(value)
+                    if err:
+                        return err
+                    i += 2
+                    continue
+                err = path_error(token[len(option) + 1:])
+                if err:
+                    return err
+                i += 1
+                continue
+            if not token.startswith("-"):
+                target = token.split("::", 1)[0]
+                if is_path_like(target):
+                    err = path_error(target)
+                    if err:
+                        return err
+            i += 1
+
+    if executable == "npm":
+        blocked = {"-g", "--global", "--userconfig", "--globalconfig", "--cache", "--logs-dir"}
+        path_options = {"--prefix", "--workspace"}
+        i = 1
+        while i < len(args):
+            token = args[i]
+            if token in blocked or any(token.startswith(opt + "=") for opt in blocked):
+                return {"error": f"Access denied: npm option '{token}' is not permitted by the project execution boundary."}
+            option = next((candidate for candidate in path_options if token == candidate or token.startswith(candidate + "=")), None)
+            if option:
+                if token == option:
+                    if i + 1 >= len(args):
+                        return {"error": f"Access denied: missing path for {option}."}
+                    value = args[i + 1]
+                    err = path_error(value)
+                    if err:
+                        return err
+                    i += 2
+                    continue
+                err = path_error(token[len(option) + 1:])
+                if err:
+                    return err
+                i += 1
+                continue
+            if i > 0 and not token.startswith("-") and is_path_like(token):
+                err = path_error(token)
+                if err:
+                    return err
+            i += 1
+
+    if executable in {"pip", "pip3"}:
+        blocked = {
+            "--user", "--python", "--cert", "--client-cert", "--trusted-host",
+            "--proxy", "--cache-dir", "--report", "--download", "--build",
+        }
+        path_options = {
+            "-r", "--requirement", "-e", "--editable", "-t", "--target",
+            "--prefix", "--root", "--src", "-f", "--find-links",
+            "-c", "--constraint", "--build-constraint",
+            "--requirements-from-script", "--log",
+        }
+        i = 1
+        while i < len(args):
+            token = args[i]
+            blocked_option = next((candidate for candidate in blocked if token == candidate or token.startswith(candidate + "=")), None)
+            if blocked_option:
+                return {"error": f"Access denied: pip option '{token}' is not permitted by the project execution boundary."}
+            option = next((candidate for candidate in path_options if token == candidate or token.startswith(candidate + "=")), None)
+            if option:
+                if token == option:
+                    if i + 1 >= len(args):
+                        return {"error": f"Access denied: missing path for {option}."}
+                    value = args[i + 1]
+                    err = path_error(value)
+                    if err:
+                        return err
+                    i += 2
+                    continue
+                err = path_error(token[len(option) + 1:])
+                if err:
+                    return err
+                i += 1
+                continue
+            if not token.startswith("-") and is_path_like(token):
+                err = path_error(token)
+                if err:
+                    return err
+            i += 1
+
+    return None
+
+
+def is_path_within_project(path: Path) -> bool:
+    """Return whether a resolved path remains under PROJECT_ROOT."""
+    try:
+        path.resolve().relative_to(PROJECT_ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def _validate_directory_command_paths(command: str, args: list[str]) -> dict | None:
     """Keep directory-inspection commands inside PROJECT_ROOT.
 
@@ -1244,6 +1394,10 @@ def run_command(command: str, confirm: bool = False) -> dict:
         boundary_error = _validate_directory_command_paths(canonical, args)
         if boundary_error is not None:
             return boundary_error
+
+        execution_path_error = _execution_path_permission_error(args)
+        if execution_path_error is not None:
+            return execution_path_error
 
         if args and args[0].lower() == "git":
             subcommand = args[1].lower() if len(args) > 1 else ""
