@@ -69,6 +69,63 @@ def test_safe_path_accepts_project_relative_path():
     assert path == (app.PROJECT_ROOT / "server-python").resolve()
 
 
+def test_confirmed_file_writes_require_handle_relative_posix_operations(project_root):
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("POSIX O_NOFOLLOW/dir_fd primitives are required")
+
+    target = project_root / "nested" / "file.txt"
+    result = tools.create_file("nested/file.txt", "hello", confirm=True)
+    assert result["created"] is True
+    assert target.read_text(encoding="utf-8") == "hello"
+
+    result = tools.write_file("nested/file.txt", "updated", confirm=True)
+    assert result["overwritten"] is True
+    assert target.read_text(encoding="utf-8") == "updated"
+
+
+def test_confirmed_file_write_rejects_final_symlink(project_root):
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("POSIX O_NOFOLLOW/dir_fd primitives are required")
+
+    outside = project_root.parent / "outside-write.txt"
+    outside.write_text("unchanged", encoding="utf-8")
+    target = project_root / "link.txt"
+    target.symlink_to(outside)
+
+    result = tools.write_file("link.txt", "should-not-write", confirm=True)
+    assert "error" in result
+    assert outside.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_confirmed_file_delete_does_not_follow_final_symlink(project_root):
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("POSIX O_NOFOLLOW/dir_fd primitives are required")
+
+    target = project_root / "real-target.txt"
+    target.write_text("keep", encoding="utf-8")
+    link = project_root / "link.txt"
+    link.symlink_to(target)
+
+    result = tools.delete_file("link.txt", confirm=True)
+    assert result["deleted"] is True
+    assert not link.exists()
+    assert target.read_text(encoding="utf-8") == "keep"
+
+
+def test_confirmed_file_write_rejects_hard_link(project_root):
+    if os.name == "nt":
+        pytest.skip("Hard-link inode protection test requires POSIX semantics")
+
+    outside = project_root.parent / "outside-hardlink.txt"
+    outside.write_text("unchanged", encoding="utf-8")
+    target = project_root / "linked.txt"
+    os.link(outside, target)
+
+    result = tools.write_file("linked.txt", "should-not-write", confirm=True)
+    assert "error" in result
+    assert outside.read_text(encoding="utf-8") == "unchanged"
+
+
 @pytest.mark.parametrize(
     "filename",
     [".env", ".env.local", "credentials.json", "private.key", "server.pem"],
@@ -326,6 +383,45 @@ def test_read_file_refuses_git_internals(project_root):
     result = tools.read_file(".git/config")
     assert "error" in result
     assert "contents" not in result
+
+
+def test_search_files_rejects_final_symlink_escape(project_root):
+    outside = project_root.parent / "outside-search.txt"
+    outside.write_text("secret outside project", encoding="utf-8")
+    link = project_root / "link.txt"
+    link.symlink_to(outside)
+
+    result = tools.search_files("secret")
+
+    assert result["matches"] == []
+
+
+def test_read_file_rejects_hard_link_escape(project_root):
+    outside = project_root.parent / "outside-hardlink-read.txt"
+    outside.write_text("secret outside project", encoding="utf-8")
+    link = project_root / "linked.txt"
+    try:
+        link.hardlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Hard links are unavailable on this platform")
+
+    result = tools.read_file("linked.txt")
+
+    assert "error" in result
+    assert "contents" not in result
+
+
+def test_read_file_rejects_final_symlink_escape(project_root):
+    outside = project_root.parent / "outside-read.txt"
+    outside.write_text("secret outside project", encoding="utf-8")
+    link = project_root / "link.txt"
+    link.symlink_to(outside)
+
+    result = tools.read_file("link.txt")
+
+    assert "error" in result
+    assert "contents" not in result
+    assert "outside" in result["error"].lower()
 
 
 def test_write_file_refuses_sensitive_targets(project_root):

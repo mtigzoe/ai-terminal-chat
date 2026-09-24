@@ -663,9 +663,13 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
   } finally {
     fs.closeSync(fd);
   }
-  const hashInput = path.join(tmpdir(), `git-add-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+  // Keep the temporary Git input inside a private mkdtemp directory and
+  // create it exclusively. A predictable shared /tmp pathname could otherwise
+  // be pre-created as a symlink by another local process before writeFileSync.
+  const hashInputDir = fs.mkdtempSync(path.join(tmpdir(), "git-add-"));
+  const hashInput = path.join(hashInputDir, "input.tmp");
   try {
-    fs.writeFileSync(hashInput, payload, { mode: 0o600 });
+    fs.writeFileSync(hashInput, payload, { mode: 0o600, flag: "wx" });
     const hashed = runGit(["hash-object", "-w", "--no-filters", hashInput]);
     if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
     const oid = hashed.stdout.trim();
@@ -673,7 +677,7 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
     const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
     if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
   } finally {
-    try { fs.unlinkSync(hashInput); } catch { /* best effort */ }
+    try { fs.rmSync(hashInputDir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 }
 

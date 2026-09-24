@@ -90,10 +90,10 @@ def test_create_file_reports_filesystem_error_without_crashing(project_root, mon
     an {"error": ...} dict, not propagate as an unhandled exception.
     """
 
-    def boom(self, *args, **kwargs):
+    def boom(*args, **kwargs):
         raise OSError("Permission denied")
 
-    monkeypatch.setattr(Path, "write_text", boom)
+    monkeypatch.setattr(tools, "_safe_confirmed_create", boom)
 
     result = tools.create_file("blocked.txt", "x", confirm=True)
 
@@ -153,10 +153,10 @@ def test_write_file_refuses_to_target_a_directory(project_root):
 
 
 def test_write_file_reports_filesystem_error_without_crashing(project_root, monkeypatch):
-    def boom(self, *args, **kwargs):
+    def boom(*args, **kwargs):
         raise OSError("Disk full")
 
-    monkeypatch.setattr(Path, "write_text", boom)
+    monkeypatch.setattr(tools, "_safe_confirmed_write", boom)
 
     result = tools.write_file("newfile.txt", "x", confirm=True)
 
