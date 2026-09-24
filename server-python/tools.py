@@ -103,7 +103,7 @@ def read_file(path: str) -> dict:
     """
 
     try:
-        file_path = safe_write_path(path)
+        file_path = safe_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
