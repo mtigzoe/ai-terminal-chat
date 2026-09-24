@@ -274,6 +274,37 @@ def set_project_root(path: str) -> Path:
     return candidate
 
 
+def safe_write_path(path: str) -> Path:
+    """Validate a write/delete path without resolving its final component.
+
+    Parent components are resolved and must remain inside PROJECT_ROOT. The
+    final component is kept lexical so a confirmed POSIX dirfd operation can
+    reject or remove a symlink itself rather than silently operating on its
+    target. This is intentionally separate from safe_path(), whose resolving
+    behavior is appropriate for read/containment checks.
+    """
+
+    if not path or not str(path).strip():
+        raise ValueError("A path is required.")
+    raw = str(path)
+    if "\x00" in raw:
+        raise ValueError("Path contains an invalid null byte.")
+    if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).is_absolute():
+        raise ValueError(
+            "Absolute paths are not allowed. Use a path relative to the project root."
+        )
+
+    root = get_project_root()
+    lexical = (root / raw).absolute()
+    parent = lexical.parent.resolve()
+    try:
+        parent.relative_to(root)
+    except ValueError:
+        raise ValueError("Access outside the project directory is not allowed.")
+
+    return lexical
+
+
 def safe_path(path: str) -> Path:
     """Resolve a path while keeping it inside the configured project.
 
