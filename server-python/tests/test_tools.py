@@ -385,6 +385,19 @@ def test_read_file_refuses_git_internals(project_root):
     assert "contents" not in result
 
 
+def test_read_file_rejects_final_symlink_escape(project_root):
+    outside = project_root.parent / "outside-read.txt"
+    outside.write_text("secret outside project", encoding="utf-8")
+    link = project_root / "link.txt"
+    link.symlink_to(outside)
+
+    result = tools.read_file("link.txt")
+
+    assert "error" in result
+    assert "contents" not in result
+    assert "outside" in result["error"].lower()
+
+
 def test_write_file_refuses_sensitive_targets(project_root):
     result = tools.write_file(".env", "OVERWRITTEN=true", confirm=True)
     assert "error" in result
