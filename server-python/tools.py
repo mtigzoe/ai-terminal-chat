@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 from child_process import SubprocessCancelled, run_cancellable
 import tempfile
@@ -2626,6 +2627,127 @@ def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
 # File-modification tools
 # ---------------------------------------------------------
 
+# POSIX dirfd operations let confirmed writes/deletes stay anchored to
+# directories that were opened without following symlinks. This closes the
+# validation-to-use race left by safe_path() when a same-user process swaps a
+# parent directory or final path component after validation.
+
+def _open_project_parent_fd(file_path: Path):
+    """Open the target's parent directory without following symlinks.
+
+    Returns a directory fd on POSIX systems that provide dir_fd/O_NOFOLLOW,
+    or None on platforms where this handle-relative primitive is unavailable.
+    Callers must close the returned fd.
+    """
+
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        return None
+    if os.open not in getattr(os, "supports_dir_fd", set()):
+        return None
+
+    relative = file_path.relative_to(PROJECT_ROOT)
+    parts = relative.parts[:-1]
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+
+    fd = os.open(PROJECT_ROOT, flags)
+    try:
+        for component in parts:
+            next_fd = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _safe_confirmed_write(file_path: Path, contents: str) -> bool:
+    """Write through a pinned parent directory on hardened POSIX systems.
+
+    Returns whether an existing regular file was overwritten. Refuses hard
+    links (nlink > 1) so a project pathname cannot be used to overwrite a
+    different same-filesystem file through a shared inode.
+    """
+
+    parent_fd = _open_project_parent_fd(file_path)
+    if parent_fd is None:
+        raise RuntimeError(
+            "Safe handle-relative file writes are unavailable on this platform."
+        )
+
+    name = file_path.name
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+        existed = file_path.exists()
+        if existed:
+            flags |= os.O_TRUNC
+        else:
+            flags |= os.O_EXCL
+
+        fd = os.open(name, flags, 0o666, dir_fd=parent_fd)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise RuntimeError("Refusing to write a non-regular file.")
+            if info.st_nlink > 1:
+                raise RuntimeError("Refusing to write a hard-linked file.")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = None
+                handle.write(contents)
+        finally:
+            if fd is not None:
+                os.close(fd)
+        return existed
+    finally:
+        os.close(parent_fd)
+
+
+def _safe_confirmed_create(file_path: Path, contents: str) -> None:
+    """Create a new regular file using a pinned parent directory."""
+
+    parent_fd = _open_project_parent_fd(file_path)
+    if parent_fd is None:
+        raise RuntimeError(
+            "Safe handle-relative file creation is unavailable on this platform."
+        )
+
+    fd = None
+    try:
+        fd = os.open(
+            file_path.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o666,
+            dir_fd=parent_fd,
+        )
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("Refusing to create a non-regular file.")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
+            handle.write(contents)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(parent_fd)
+
+
+def _safe_confirmed_delete(file_path: Path) -> None:
+    """Delete a file relative to a pinned, non-symlink parent directory."""
+
+    parent_fd = _open_project_parent_fd(file_path)
+    if parent_fd is None:
+        raise RuntimeError(
+            "Safe handle-relative file deletion is unavailable on this platform."
+        )
+    try:
+        # unlinkat-style deletion removes the directory entry itself and never
+        # follows a final symlink. The parent fd also prevents a parent-path
+        # replacement race from redirecting the operation elsewhere.
+        os.unlink(file_path.name, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
 # Character cap for contents/diffs shown back to the model in a
 # confirmation preview, so a huge file doesn't blow up the context
 # window before anything has even been written.
@@ -2685,9 +2807,9 @@ def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
 
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(contents, encoding="utf-8")
+        _safe_confirmed_create(file_path, contents)
     except Exception as exc:
-        return {"error": f"Could not create file: {exc}"}
+        return {"error": f"Could not create file safely: {exc}"}
 
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
@@ -2764,13 +2886,13 @@ def write_file(path: str, contents: str, confirm: bool = False) -> dict:
 
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(contents, encoding="utf-8")
+        overwritten = _safe_confirmed_write(file_path, contents)
     except Exception as exc:
-        return {"error": f"Could not write file: {exc}"}
+        return {"error": f"Could not write file safely: {exc}"}
 
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
-        "overwritten": existed,
+        "overwritten": overwritten,
         "bytes_written": len(contents.encode("utf-8")),
     }
 
@@ -2824,9 +2946,9 @@ def delete_file(path: str, confirm: bool = False) -> dict:
         }
 
     try:
-        file_path.unlink()
+        _safe_confirmed_delete(file_path)
     except Exception as exc:
-        return {"error": f"Could not delete file: {exc}"}
+        return {"error": f"Could not delete file safely: {exc}"}
 
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),

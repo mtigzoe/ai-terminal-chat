@@ -69,6 +69,62 @@ def test_safe_path_accepts_project_relative_path():
     assert path == (app.PROJECT_ROOT / "server-python").resolve()
 
 
+def test_confirmed_file_writes_require_handle_relative_posix_operations(project_root):
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("POSIX O_NOFOLLOW/dir_fd primitives are required")
+
+    target = project_root / "nested" / "file.txt"
+    result = tools.create_file("nested/file.txt", "hello", confirm=True)
+    assert result["created"] is True
+    assert target.read_text(encoding="utf-8") == "hello"
+
+    result = tools.write_file("nested/file.txt", "updated", confirm=True)
+    assert result["overwritten"] is True
+    assert target.read_text(encoding="utf-8") == "updated"
+
+
+def test_confirmed_file_write_rejects_final_symlink(project_root):
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("POSIX O_NOFOLLOW/dir_fd primitives are required")
+
+    outside = project_root.parent / "outside-write.txt"
+    outside.write_text("unchanged", encoding="utf-8")
+    target = project_root / "link.txt"
+    target.symlink_to(outside)
+
+    result = tools.write_file("link.txt", "should-not-write", confirm=True)
+    assert "error" in result
+    assert outside.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_confirmed_file_delete_does_not_follow_final_symlink(project_root):
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("POSIX O_NOFOLLOW/dir_fd primitives are required")
+
+    outside = project_root.parent / "outside-delete.txt"
+    outside.write_text("keep", encoding="utf-8")
+    target = project_root / "link.txt"
+    target.symlink_to(outside)
+
+    result = tools.delete_file("link.txt", confirm=True)
+    assert result["deleted"] is True
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_confirmed_file_write_rejects_hard_link(project_root):
+    if os.name == "nt":
+        pytest.skip("Hard-link inode protection test requires POSIX semantics")
+
+    outside = project_root.parent / "outside-hardlink.txt"
+    outside.write_text("unchanged", encoding="utf-8")
+    target = project_root / "linked.txt"
+    os.link(outside, target)
+
+    result = tools.write_file("linked.txt", "should-not-write", confirm=True)
+    assert "error" in result
+    assert outside.read_text(encoding="utf-8") == "unchanged"
+
+
 @pytest.mark.parametrize(
     "filename",
     [".env", ".env.local", "credentials.json", "private.key", "server.pem"],

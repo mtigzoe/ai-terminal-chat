@@ -126,3 +126,10 @@ Treat this document as the permanent audit record. Re-audit only when security-s
 The earlier local-test counts recorded above were stale; these GitHub Actions results are the independently verified counts for this branch tip.
 
 **Integration note:** PR #173 remains open and unmerged. PRs #169 and #170 are also open and address overlapping Python execution-path/npm-config areas. No merge was performed; those overlaps must be reconciled during the final PR review rather than assuming the changes are independent.
+
+
+## 2026-09-24 — Python filesystem write/delete TOCTOU hardening
+
+The remaining Python filesystem hardening item was addressed on the audit branch. Confirmed `create_file`, `write_file`, and `delete_file` operations now use POSIX directory-file-descriptor operations with `O_NOFOLLOW` where those primitives are available. Parent directories are pinned before the final operation, final symlinks are not followed, and existing hard-linked write targets are rejected. Platforms without the required handle-relative primitives fail closed for confirmed file writes/creates/deletes rather than falling back to the old pathname-based operation.
+
+Regression coverage was added for safe create/write, final-component symlink protection, symlink-safe deletion, and hard-linked write targets. Python's `os` documentation confirms that `dir_fd` operations are relative to an open directory descriptor and that `O_NOFOLLOW` is available as a POSIX extension where supported. citeturn0search0turn0search1
