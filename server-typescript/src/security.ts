@@ -1301,41 +1301,66 @@ export function unlinkWithinProject(inputPath: string): { resolvedPath: string }
   try {
     const lexicalStat = lstatSync(lexicalPath);
     if (lexicalStat.isSymbolicLink()) {
-      // Pin the parent directory before deleting the link entry. Deleting
-      // through the original lexical path would let a concurrent parent
-      // directory -> symlink/junction swap redirect rmSync outside the
-      // project between lstat() and unlink().
+      // Pin the parent directory before deleting the symlink entry. A
+      // realpath() check alone is not sufficient: another process can replace
+      // the parent pathname with a junction/symlink before rmSync().
       const parentPath = dirname(lexicalPath);
-      let parentReal: string;
+      const dirFlags =
+        fsConstants.O_RDONLY |
+        (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
+        noFollowFlag();
+
+      let parentFd: number;
+      let parentOpenPath = parentPath;
       try {
-        parentReal = realpathSync(parentPath);
-      } catch {
-        throw new SecurityValidationError(
-          "Parent directory disappeared before deletion.",
-        );
-      }
-      if (!isPathWithinRoot(root, parentReal)) {
-        throw new SecurityValidationError(
-          "Access outside the project directory is not allowed.",
-        );
-      }
-      const pinnedPath = join(parentReal, basename(lexicalPath));
-      let pinnedStat;
-      try {
-        pinnedStat = lstatSync(pinnedPath);
+        parentFd = openSync(parentPath, dirFlags);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          throw new SecurityValidationError("File disappeared before deletion.");
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ELOOP" || code === "EINVAL") {
+          const parentReal = realpathSync(parentPath);
+          if (!isPathWithinRoot(root, parentReal)) {
+            throw new SecurityValidationError(
+              "Access outside the project directory is not allowed.",
+            );
+          }
+          parentFd = openSync(parentReal, dirFlags);
+          parentOpenPath = parentReal;
+        } else {
+          throw err;
         }
-        throw err;
       }
-      if (!pinnedStat.isSymbolicLink()) {
-        throw new SecurityValidationError(
-          "File was replaced before deletion; refusing to delete.",
-        );
+
+      try {
+        assertOpenedWithinProject(parentFd, parentOpenPath);
+
+        if (process.platform === "win32") {
+          // There is no Node unlinkat equivalent and the native Windows
+          // handle-relative helper currently exposes open/mkdir only. Fail
+          // closed rather than reintroducing an unpinned pathname delete.
+          throw new SecurityValidationError(
+            "Deleting symbolic links is not supported on Windows because the deletion target cannot be pinned safely.",
+          );
+        }
+
+        const pinnedPath =
+          process.platform === "linux"
+            ? `/proc/self/fd/${parentFd}/${basename(lexicalPath)}`
+            : join(assertOpenedWithinProject(parentFd, parentOpenPath), basename(lexicalPath));
+
+        const pinnedStat = lstatSync(pinnedPath);
+        if (!pinnedStat.isSymbolicLink()) {
+          throw new SecurityValidationError(
+            "File was replaced before deletion; refusing to delete.",
+          );
+        }
+
+        rmSync(pinnedPath);
+        // Report the user-facing project path, not the internal /proc/self/fd
+        // anchor used to make the deletion race-resistant.
+        return { resolvedPath: lexicalPath };
+      } finally {
+        closeSync(parentFd);
       }
-      rmSync(pinnedPath);
-      return { resolvedPath: pinnedPath };
     }
   } catch (err) {
     if (err instanceof SecurityValidationError) throw err;
