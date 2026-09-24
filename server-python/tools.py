@@ -2637,9 +2637,8 @@ def _ensure_project_parent_dirs(file_path: Path) -> None:
     """Create missing parent directories without following path links."""
 
     if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
-        raise RuntimeError(
-            "Safe handle-relative directory creation is unavailable on this platform."
-        )
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        return
     if os.mkdir not in getattr(os, "supports_dir_fd", set()):
         raise RuntimeError(
             "Safe handle-relative directory creation is unavailable on this platform."
@@ -2701,9 +2700,11 @@ def _safe_confirmed_write(file_path: Path, contents: str) -> bool:
 
     parent_fd = _open_project_parent_fd(file_path)
     if parent_fd is None:
-        raise RuntimeError(
-            "Safe handle-relative file writes are unavailable on this platform."
-        )
+        if file_path.is_symlink() or getattr(file_path, "is_junction", lambda: False)():
+            raise RuntimeError("Refusing to write through a symbolic link or junction.")
+        existed = file_path.exists()
+        file_path.write_text(contents, encoding="utf-8")
+        return existed
 
     name = file_path.name
     try:
@@ -2741,9 +2742,11 @@ def _safe_confirmed_create(file_path: Path, contents: str) -> None:
 
     parent_fd = _open_project_parent_fd(file_path)
     if parent_fd is None:
-        raise RuntimeError(
-            "Safe handle-relative file creation is unavailable on this platform."
-        )
+        if file_path.exists() or file_path.is_symlink() or getattr(file_path, "is_junction", lambda: False)():
+            raise FileExistsError(str(file_path))
+        with file_path.open("x", encoding="utf-8") as handle:
+            handle.write(contents)
+        return
 
     fd = None
     try:
@@ -2770,9 +2773,12 @@ def _safe_confirmed_delete(file_path: Path) -> None:
 
     parent_fd = _open_project_parent_fd(file_path)
     if parent_fd is None:
-        raise RuntimeError(
-            "Safe handle-relative file deletion is unavailable on this platform."
-        )
+        # Path.unlink removes the directory entry itself, including a final
+        # symlink, rather than following it. Parent-path replacement remains
+        # a documented Windows TOCTOU limitation until handle-relative
+        # directory operations are available there.
+        file_path.unlink()
+        return
     try:
         # unlinkat-style deletion removes the directory entry itself and never
         # follows a final symlink. The parent fd also prevents a parent-path
