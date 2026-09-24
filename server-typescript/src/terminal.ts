@@ -1140,6 +1140,14 @@ function executionPathPermissionError(command: string): string | null {
         continue;
       }
 
+      // npm accepts local directories, archives, and file: specs as package
+      // arguments. A confirmed install must not import/execute a package from
+      // outside the project boundary.
+      if (!token.startsWith("-") && looksLikeLocalPath(token)) {
+        const error = executionPathError(root, token);
+        if (error) return error;
+      }
+
       for (const option of ["--prefix", "--workspace"]) {
         if (token.startsWith(`${option}=`)) {
           const error = executionPathError(
