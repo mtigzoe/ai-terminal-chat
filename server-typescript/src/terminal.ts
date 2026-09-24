@@ -1104,8 +1104,29 @@ function executionPathPermissionError(command: string): string | null {
   }
 
   if (executable === "npm") {
+    // npm install -g/--global installs into the user's/global prefix rather
+    // than the project. npm also accepts --userconfig/--globalconfig and
+    // --cache/--logs-dir overrides that can read or write outside the project.
+    // A confirmed npm command must not turn those CLI options into a second
+    // filesystem/configuration boundary.
+    const blockedOptions = new Set([
+      "-g",
+      "--global",
+      "--userconfig",
+      "--globalconfig",
+      "--cache",
+      "--logs-dir",
+    ]);
+
     for (let i = 1; i < tokens.length; i += 1) {
       const token = tokens[i];
+
+      if (
+        blockedOptions.has(token) ||
+        [...blockedOptions].some((option) => token.startsWith(option + "="))
+      ) {
+        return `Access denied: npm option '${token}' is not permitted outside the project execution boundary.`;
+      }
 
       if (token === "--prefix" || token === "--workspace") {
         const value = tokens[i + 1];
@@ -1145,6 +1166,31 @@ function executionPathPermissionError(command: string): string | null {
     // validated the same lenient way as every other option below (a
     // non-path value harmlessly resolves to a fake project-relative
     // segment and never trips the boundary check).
+    // These options either select a different Python installation/user
+    // environment or override TLS/configuration outside the project. They
+    // cannot be made project-relative safely by resolving a single path.
+    const blockedPipOptions = new Set([
+      "--user",
+      "--python",
+      "--cert",
+      "--client-cert",
+      "--trusted-host",
+      "--proxy",
+      "--cache-dir",
+      "--report",
+    ]);
+
+    for (let i = 1; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      const option = [...blockedPipOptions].find(
+        (candidate) => token === candidate || token.startsWith(candidate + "="),
+      );
+
+      if (option) {
+        return `Access denied: pip option '${token}' is not permitted by the project execution boundary.`;
+      }
+    }
+
     const pipPathOptions: Record<string, string> = {
       "-r": "--requirement",
       "--requirement": "--requirement",
