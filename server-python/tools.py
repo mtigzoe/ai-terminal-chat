@@ -947,6 +947,45 @@ def is_command_allowed(command: str) -> bool:
     )
 
 
+def _trusted_executable(command_name: str) -> str:
+    """Resolve a bare executable to an absolute PATH entry outside PROJECT_ROOT.
+
+    Never let the subprocess cwd or a project-local executable win command
+    resolution. Relative PATH entries are ignored because they are cwd-sensitive.
+    """
+    name = str(command_name or "").strip()
+    if not name or os.path.basename(name) != name or os.path.dirname(name):
+        raise ValueError(f"Path-qualified executable is not allowed: {name}")
+
+    root = os.path.realpath(str(PROJECT_ROOT))
+    path_value = os.environ.get("PATH", "")
+    path_entries = [p for p in path_value.split(os.pathsep) if p and os.path.isabs(p)]
+
+    extensions = [""]
+    if os.name == "nt":
+        raw_exts = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        extensions = [ext.strip() for ext in raw_exts.split(";") if ext.strip()]
+        if os.path.splitext(name)[1]:
+            extensions = [""]
+
+    for directory in path_entries:
+        candidates = [os.path.join(directory, name + ext) for ext in extensions]
+        for candidate in candidates:
+            try:
+                resolved = os.path.realpath(candidate)
+                if not os.path.isfile(resolved):
+                    continue
+                if os.path.commonpath((root, resolved)) == root:
+                    continue
+                if os.name != "nt" and not os.access(resolved, os.X_OK):
+                    continue
+                return resolved
+            except (OSError, ValueError):
+                continue
+
+    raise ValueError(f"Executable '{name}' is not installed on a trusted PATH entry.")
+
+
 # ---------------------------------------------------------
 # Sanitized subprocess environment for non-Git terminal commands
 # ---------------------------------------------------------
@@ -1216,16 +1255,18 @@ def run_command(command: str, confirm: bool = False) -> dict:
                     )
                 }
 
-        # `pwd` is not a standalone executable on Windows.
-        # Translate to `cmd /c cd`, which prints the current directory.
+        # Resolve the executable before spawning. Windows CreateProcess can
+        # otherwise prefer the cwd over PATH, allowing a project-controlled
+        # python.exe/node.exe/npm.cmd/etc. to hijack an allowlisted command.
+        # Relative PATH entries are also excluded by _trusted_executable().
         if os.name == "nt" and args and args[0].lower() == "pwd":
-            args = ["cmd", "/c", "cd"]
-        
-        # `ls` is a PowerShell alias on Windows, not an executable.
-        # Use the native cmd.exe directory command while preserving
-        # `ls` as the cross-platform command exposed to the agent.
-        if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
-            args = ["cmd", "/c", "dir", *args[1:]]
+            executable = _trusted_executable("cmd")
+            args = [executable, "/c", "cd"]
+        elif os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
+            executable = _trusted_executable("cmd")
+            args = [executable, "/c", "dir", *args[1:]]
+        elif args and args[0].lower() != "git":
+            args[0] = _trusted_executable(args[0])
 
         try:
             with _sanitized_terminal_env() as sanitized_env:
