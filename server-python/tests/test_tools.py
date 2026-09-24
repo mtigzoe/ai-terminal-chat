@@ -396,6 +396,21 @@ def test_search_files_rejects_final_symlink_escape(project_root):
     assert result["matches"] == []
 
 
+def test_read_file_rejects_hard_link_escape(project_root):
+    outside = project_root.parent / "outside-hardlink-read.txt"
+    outside.write_text("secret outside project", encoding="utf-8")
+    link = project_root / "linked.txt"
+    try:
+        link.hardlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Hard links are unavailable on this platform")
+
+    result = tools.read_file("linked.txt")
+
+    assert "error" in result
+    assert "contents" not in result
+
+
 def test_read_file_rejects_final_symlink_escape(project_root):
     outside = project_root.parent / "outside-read.txt"
     outside.write_text("secret outside project", encoding="utf-8")
