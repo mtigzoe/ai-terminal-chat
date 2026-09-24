@@ -1355,7 +1355,9 @@ export function unlinkWithinProject(inputPath: string): { resolvedPath: string }
         }
 
         rmSync(pinnedPath);
-        return { resolvedPath: pinnedPath };
+        // Report the user-facing project path, not the internal /proc/self/fd
+        // anchor used to make the deletion race-resistant.
+        return { resolvedPath: lexicalPath };
       } finally {
         closeSync(parentFd);
       }
