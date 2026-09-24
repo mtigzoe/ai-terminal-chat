@@ -1166,14 +1166,8 @@ function executionPathPermissionError(command: string): string | null {
     // from, or writes to. Left unchecked, a confirmed `pip install` could
     // place installed files or a log outside the project root even though
     // the command itself was allowlisted for in-project dependency
-    // installation. `--config-settings`/`-C`, `--build-constraint`, and
-    // `--requirements-from-script` are included defensively: the first is
-    // usually a KEY=VALUE build-backend setting rather than a bare path,
-    // and the latter two were not confirmed present in the pip version
-    // audited here, but a value that does resolve to a path is still
-    // validated the same lenient way as every other option below (a
-    // non-path value harmlessly resolves to a fake project-relative
-    // segment and never trips the boundary check).
+    // installation. `--build-constraint` and `--requirements-from-script`
+    // are included defensively for newer pip versions.
     // These options either select a different Python installation/user
     // environment or override TLS/configuration outside the project. They
     // cannot be made project-relative safely by resolving a single path.
@@ -1215,8 +1209,6 @@ function executionPathPermissionError(command: string): string | null {
       "--constraint": "--constraint",
       "--build-constraint": "--build-constraint",
       "--requirements-from-script": "--requirements-from-script",
-      "-C": "--config-settings",
-      "--config-settings": "--config-settings",
       "--log": "--log",
     };
 
