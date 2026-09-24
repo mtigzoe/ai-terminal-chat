@@ -701,6 +701,10 @@ def _has_patch_producing_flag(args: list[str]) -> bool:
             return True
         if re.fullmatch(r"-U\d+", arg):
             return True
+        if arg == "-L" or arg.startswith("-L"):
+            return True
+        if arg.startswith("--diff-merges=") and arg.split("=", 1)[1].lower() not in {"off", "none"}:
+            return True
     return False
 
 
