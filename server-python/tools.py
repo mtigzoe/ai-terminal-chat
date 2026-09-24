@@ -31,6 +31,7 @@ from security import (
     is_sensitive_path,
     require_read_allowed,
     safe_path,
+    safe_write_path,
 )
 
 # ---------------------------------------------------------
@@ -102,7 +103,7 @@ def read_file(path: str) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2040,7 +2041,7 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
 
     if path:
         try:
-            file_path = safe_path(path)
+            file_path = safe_write_path(path)
         except ValueError as exc:
             return {"error": str(exc)}
 
@@ -2206,7 +2207,7 @@ def git_add(path: str, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2435,7 +2436,7 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2709,7 +2710,9 @@ def _safe_confirmed_write(file_path: Path, contents: str) -> bool:
         flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
         existed = file_path.exists()
         if existed:
-            flags |= os.O_TRUNC
+            # Do not truncate until the opened inode has passed the hard-link
+            # and regular-file checks below.
+            pass
         else:
             flags |= os.O_EXCL
 
@@ -2720,6 +2723,8 @@ def _safe_confirmed_write(file_path: Path, contents: str) -> bool:
                 raise RuntimeError("Refusing to write a non-regular file.")
             if info.st_nlink > 1:
                 raise RuntimeError("Refusing to write a hard-linked file.")
+            if existed:
+                os.ftruncate(fd, 0)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 fd = None
                 handle.write(contents)
@@ -2803,7 +2808,7 @@ def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2869,7 +2874,7 @@ def write_file(path: str, contents: str, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2942,7 +2947,7 @@ def delete_file(path: str, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 

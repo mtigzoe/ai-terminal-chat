@@ -101,14 +101,15 @@ def test_confirmed_file_delete_does_not_follow_final_symlink(project_root):
     if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
         pytest.skip("POSIX O_NOFOLLOW/dir_fd primitives are required")
 
-    outside = project_root.parent / "outside-delete.txt"
-    outside.write_text("keep", encoding="utf-8")
-    target = project_root / "link.txt"
-    target.symlink_to(outside)
+    target = project_root / "real-target.txt"
+    target.write_text("keep", encoding="utf-8")
+    link = project_root / "link.txt"
+    link.symlink_to(target)
 
     result = tools.delete_file("link.txt", confirm=True)
     assert result["deleted"] is True
-    assert outside.read_text(encoding="utf-8") == "keep"
+    assert not link.exists()
+    assert target.read_text(encoding="utf-8") == "keep"
 
 
 def test_confirmed_file_write_rejects_hard_link(project_root):
