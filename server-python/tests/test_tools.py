@@ -385,6 +385,17 @@ def test_read_file_refuses_git_internals(project_root):
     assert "contents" not in result
 
 
+def test_search_files_rejects_final_symlink_escape(project_root):
+    outside = project_root.parent / "outside-search.txt"
+    outside.write_text("secret outside project", encoding="utf-8")
+    link = project_root / "link.txt"
+    link.symlink_to(outside)
+
+    result = tools.search_files("secret")
+
+    assert result["matches"] == []
+
+
 def test_read_file_rejects_final_symlink_escape(project_root):
     outside = project_root.parent / "outside-read.txt"
     outside.write_text("secret outside project", encoding="utf-8")
