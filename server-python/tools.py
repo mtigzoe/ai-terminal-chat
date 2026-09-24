@@ -2632,6 +2632,35 @@ def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
 # validation-to-use race left by safe_path() when a same-user process swaps a
 # parent directory or final path component after validation.
 
+def _ensure_project_parent_dirs(file_path: Path) -> None:
+    """Create missing parent directories without following path links."""
+
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError(
+            "Safe handle-relative directory creation is unavailable on this platform."
+        )
+    if os.mkdir not in getattr(os, "supports_dir_fd", set()):
+        raise RuntimeError(
+            "Safe handle-relative directory creation is unavailable on this platform."
+        )
+
+    relative = file_path.relative_to(PROJECT_ROOT)
+    parts = relative.parts[:-1]
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    fd = os.open(PROJECT_ROOT, flags)
+    try:
+        for component in parts:
+            try:
+                os.mkdir(component, 0o777, dir_fd=fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+    finally:
+        os.close(fd)
+
+
 def _open_project_parent_fd(file_path: Path):
     """Open the target's parent directory without following symlinks.
 
@@ -2806,7 +2835,7 @@ def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
         }
 
     try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_project_parent_dirs(file_path)
         _safe_confirmed_create(file_path, contents)
     except Exception as exc:
         return {"error": f"Could not create file safely: {exc}"}
@@ -2885,7 +2914,7 @@ def write_file(path: str, contents: str, confirm: bool = False) -> dict:
         }
 
     try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_project_parent_dirs(file_path)
         overwritten = _safe_confirmed_write(file_path, contents)
     except Exception as exc:
         return {"error": f"Could not write file safely: {exc}"}
