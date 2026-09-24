@@ -130,22 +130,16 @@ def read_file(path: str) -> dict:
     # Prevent accidentally sending extremely large files to the model.
     max_size = 200_000
 
-    if file_path.stat().st_size > max_size:
-        return {
-            "error": (
-                f"File is too large to read. "
-                f"Maximum size is {max_size} bytes."
-            )
-        }
-
     try:
-        contents = file_path.read_text(
-            encoding="utf-8"
-        )
+        contents = _safe_read_text(file_path, max_size)
     except UnicodeDecodeError:
         return {
             "error": "The file is not a UTF-8 text file."
         }
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except (OSError, RuntimeError) as exc:
+        return {"error": str(exc)}
 
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
@@ -223,11 +217,11 @@ def search_files(query: str, path: str = ".") -> dict:
                 continue
 
             try:
-                if file_path.stat().st_size > max_file_size:
-                    continue
-                text = file_path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                # Skip binary files and unreadable files.
+                text = _safe_read_text(file_path, max_file_size)
+            except (UnicodeDecodeError, OSError, RuntimeError, ValueError):
+                # Skip binary files, oversized files, hard links, and
+                # files that cannot be opened safely without crossing the
+                # project boundary.
                 continue
 
             for line_number, line in enumerate(text.splitlines(), start=1):
@@ -2693,6 +2687,67 @@ def _open_project_parent_fd(file_path: Path):
     except Exception:
         os.close(fd)
         raise
+
+
+def _safe_read_text(file_path: Path, max_size: int) -> str:
+    """Read a project file through a pinned parent and no-follow final open.
+
+    On hardened POSIX systems the parent directory is pinned with a dirfd,
+    then the final component is opened relative to that descriptor with
+    O_NOFOLLOW. This closes the validation-then-read race and refuses
+    multi-link files so a project pathname cannot expose an inode also linked
+    outside the project.
+
+    Platforms without the required handle-relative primitives retain the
+    existing lexical/symlink checks; the final open still uses O_NOFOLLOW
+    where available.
+    """
+
+    parent_fd = _open_project_parent_fd(file_path)
+    if parent_fd is not None:
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(file_path.name, flags, dir_fd=parent_fd)
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise RuntimeError("Refusing to read a non-regular file.")
+                if info.st_nlink > 1:
+                    raise RuntimeError("Refusing to read a hard-linked file.")
+                if info.st_size > max_size:
+                    raise ValueError(
+                        f"File is too large to read. Maximum size is {max_size} bytes."
+                    )
+                with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                    fd = None
+                    return handle.read()
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        finally:
+            os.close(parent_fd)
+
+    if file_path.is_symlink() or getattr(file_path, "is_junction", lambda: False)():
+        raise RuntimeError("Refusing to read through a symbolic link or junction.")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(file_path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("Refusing to read a non-regular file.")
+        if info.st_nlink > 1:
+            raise RuntimeError("Refusing to read a hard-linked file.")
+        if info.st_size > max_size:
+            raise ValueError(
+                f"File is too large to read. Maximum size is {max_size} bytes."
+            )
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = None
+            return handle.read()
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _safe_confirmed_write(file_path: Path, contents: str) -> bool:
