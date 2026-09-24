@@ -214,6 +214,11 @@ def search_files(query: str, path: str = ".") -> dict:
                 continue
 
             file_path = Path(root) / filename
+            try:
+                relative_path = file_path.relative_to(PROJECT_ROOT)
+                file_path = safe_path(str(relative_path))
+            except (ValueError, OSError):
+                continue
             if not is_read_allowed(file_path):
                 continue
 
