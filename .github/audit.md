@@ -98,3 +98,31 @@ Treat this document as the permanent audit record. Re-audit only when security-s
 
 \- Non-Git commands invoked via `run_command()`/`runCommand()` — including a raw `git <subcommand>` string typed through that same generic tool rather than the dedicated `git_status`/`git_diff`/etc. tools — now also receive this sanitized environment as a side effect of the shared call site. This is a strict improvement and consistent with the isolation already applied to the dedicated Git tools, not a scope change to this audit.
 
+
+## 2026-09-24 — Subprocess execution-boundary continuation and filesystem TOCTOU review
+
+**Scope:** continuation of the non-Git execution audit on branch bug-hunt-subprocess-env-isolation, including executable resolution, npm/pip CLI path/config overrides, final-component symlink deletion, and regression/CI verification.
+
+**Additional findings and fixes:**
+
+- **Python executable-resolution hijacking:** the Python terminal runner previously passed bare allowlisted executable names to subprocess.Popen(). On Windows, command resolution can prefer the current working directory, so a project-controlled python.exe, node.exe, npm.cmd, or similar executable could become the process that ran. The runner now resolves bare executables through absolute PATH entries, ignores relative PATH entries, and skips anything resolving inside the project root. A regression test verifies a project-local Python shim is not selected.
+- **npm global/config/cache escapes:** allowlisted npm commands could still request global mode or select external npm configuration/cache/log locations through CLI options. The TypeScript and Python execution-boundary checks now reject -g/--global, --userconfig, --globalconfig, --cache, and --logs-dir, while retaining project-root validation for --prefix/--workspace.
+- **npm local package-path escape:** npm accepts local package directories/file specifications. A confirmed npm install ../outside-package could otherwise import a package outside the project and execute its package lifecycle. The TypeScript and Python boundary checks now reject local filesystem package paths outside the project.
+- **pip installation/configuration escapes:** CLI options such as --target, --prefix, --root, --src, --find-links, requirements/constraint paths, and log/report paths are constrained or rejected; --user, --python, certificate/proxy overrides, cache/report overrides, and other configuration that would select an external execution/configuration boundary are rejected. --config-settings/-C is intentionally not treated as a filesystem path because pip defines it as KEY=VALUE build-backend configuration.
+- **Final-component symlink deletion TOCTOU:** TypeScript's symlink-delete path previously performed a real-path check and then deleted through an ordinary pathname. It now pins the parent directory and, on Linux/POSIX paths with the available directory-handle mechanism, deletes the symlink entry through the pinned parent. Windows currently fails closed for final-component symlink deletion rather than using an unsafe unpinned pathname delete.
+- **Python filesystem limitation:** the Python create_file/write_file/delete_file implementation still relies on pathname-based Path operations after safe_path() validation. This leaves a lower-level same-user concurrent filesystem-race limitation compared with the descriptor/handle-based TypeScript implementation. The limitation is not silently classified as fixed; it remains a follow-up hardening item if the Python backend must defend against a concurrent local filesystem attacker.
+
+**CI verification for commit a619a29dcd4cc3e06424342f92c6f2c66662e453:**
+
+- GitHub Actions CI run #941 completed with all five jobs successful.
+- TypeScript unit tests: 353 passed.
+- TypeScript Vitest suite: 625 passed across 27 test files.
+- Python suite: 682 passed, 5 skipped.
+- Windows TypeScript security regression suite: passed.
+- Electron security regression suite: passed.
+- Client React tests/build: passed.
+- TypeScript typecheck and Windows test-runtime build: passed.
+
+The earlier local-test counts recorded above were stale; these GitHub Actions results are the independently verified counts for this branch tip.
+
+**Integration note:** PR #173 remains open and unmerged. PRs #169 and #170 are also open and address overlapping Python execution-path/npm-config areas. No merge was performed; those overlaps must be reconciled during the final PR review rather than assuming the changes are independent.
