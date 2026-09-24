@@ -246,7 +246,7 @@ test("blocks npm global/config/cache overrides and pip external targets", async 
   const npmConfig = await runCommand("npm install --userconfig /tmp/evil.npmrc example", true);
   assert.match(JSON.stringify(npmConfig), /not permitted/i);
 
-  const npmLocal = await runCommand("npm install ./outside-package", true);
+  const npmLocal = await runCommand("npm install ../outside-package", true);
   assert.match(JSON.stringify(npmLocal), /outside the project|execution boundary/i);
 
   const pipTarget = await runCommand("pip install -r requirements.txt --target /tmp/evil", true);
