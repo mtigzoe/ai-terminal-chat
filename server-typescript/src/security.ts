@@ -263,13 +263,12 @@ function writeConfigFile(targetFile: string, payload: Record<string, unknown>): 
         throw renameErr;
       }
     }
-  } catch (err) {
+  } finally {
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch {
-      // Best-effort cleanup; the original error is what matters.
+      // Best-effort cleanup; preserve the write/rename result or error.
     }
-    throw err;
   }
 }
 
