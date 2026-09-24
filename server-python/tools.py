@@ -685,6 +685,10 @@ _GIT_PATCH_FLAGS = frozenset(
         "--unified",
         "--cc",
         "--full-diff",
+        "-c",
+        "-m",
+        "--dd",
+        "--remerge-diff",
     }
 )
 
