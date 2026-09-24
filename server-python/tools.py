@@ -219,6 +219,7 @@ def search_files(query: str, path: str = ".") -> dict:
     max_matches = 200
     max_file_size = 500_000
     query_lower = query.lower()
+    dir_rel = directory.relative_to(PROJECT_ROOT).as_posix()
 
     matches = []
     truncated = False
@@ -293,29 +294,24 @@ def search_files(query: str, path: str = ".") -> dict:
                     continue
 
                 for line_number, line in enumerate(text.splitlines(), start=1):
-                if query_lower in line.lower():
-                    matches.append(
-                        {
-                            "path": str(
-                                file_path.relative_to(PROJECT_ROOT)
-                            ),
-                            "line": line_number,
-                            "text": line.strip()[:300],
-                        }
-                    )
+                    if query_lower in line.lower():
+                        matches.append(
+                            {
+                                "path": item_rel,
+                                "line": line_number,
+                                "text": line.strip()[:300],
+                            }
+                        )
 
-                    if len(matches) >= max_matches:
-                        truncated = True
-                        break
+                        if len(matches) >= max_matches:
+                            truncated = True
+                            break
 
-            if truncated:
-                break
+                if truncated:
+                    break
 
             if truncated:
                 break
-
-        if truncated:
-            break
     finally:
         if root_fd is not None:
             os.close(root_fd)
