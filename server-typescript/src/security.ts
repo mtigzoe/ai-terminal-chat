@@ -29,6 +29,7 @@ import {
   existsSync,
   fstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   closeSync,
   readFileSync,
