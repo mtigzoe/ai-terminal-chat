@@ -10,6 +10,8 @@ import { runChildProcess } from "./child-process.ts";
 import { loadAppConfig, persistAppConfig } from "./config.js";
 import type { RunCommandResult } from "./types.js";
    import { basename, join } from "node:path";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   getAllowedReadPaths,
   getProjectRoot,
@@ -1043,6 +1045,16 @@ function executionPathPermissionError(command: string): string | null {
       "--rootdir",
       "--basetemp",
       "--config",
+      // Flake8: a second config file merged on top of --config, and the
+      // report destination. Both were previously unchecked, so a confirmed
+      // `flake8 --output-file ../outside.log` could write outside the
+      // project even though `git diff --output=...` and similar Git write
+      // paths are blocked elsewhere.
+      "--append-config",
+      "--output-file",
+      // Ruff: cache directory. Lower severity than a report destination,
+      // but still a write target outside the project if left unchecked.
+      "--cache-dir",
     ]);
 
     const startIndex =
@@ -1121,19 +1133,48 @@ function executionPathPermissionError(command: string): string | null {
   }
 
   if (executable === "pip" || executable === "pip3") {
+    // Options whose value is a filesystem path pip installs into, reads
+    // from, or writes to. Left unchecked, a confirmed `pip install` could
+    // place installed files or a log outside the project root even though
+    // the command itself was allowlisted for in-project dependency
+    // installation. `--config-settings`/`-C`, `--build-constraint`, and
+    // `--requirements-from-script` are included defensively: the first is
+    // usually a KEY=VALUE build-backend setting rather than a bare path,
+    // and the latter two were not confirmed present in the pip version
+    // audited here, but a value that does resolve to a path is still
+    // validated the same lenient way as every other option below (a
+    // non-path value harmlessly resolves to a fake project-relative
+    // segment and never trips the boundary check).
+    const pipPathOptions: Record<string, string> = {
+      "-r": "--requirement",
+      "--requirement": "--requirement",
+      "-e": "--editable",
+      "--editable": "--editable",
+      "-t": "--target",
+      "--target": "--target",
+      "--prefix": "--prefix",
+      "--root": "--root",
+      "--src": "--src",
+      "-f": "--find-links",
+      "--find-links": "--find-links",
+      "-c": "--constraint",
+      "--constraint": "--constraint",
+      "--build-constraint": "--build-constraint",
+      "--requirements-from-script": "--requirements-from-script",
+      "-C": "--config-settings",
+      "--config-settings": "--config-settings",
+      "--log": "--log",
+    };
+
     for (let i = 1; i < tokens.length; i += 1) {
       const token = tokens[i];
 
-      if (
-        token === "-r" ||
-        token === "--requirement" ||
-        token === "-e" ||
-        token === "--editable"
-      ) {
+      if (token in pipPathOptions) {
+        const canonicalOption = pipPathOptions[token];
         const value = tokens[i + 1];
 
         if (!value) {
-          return `Access denied: missing path for ${token}.`;
+          return `Access denied: missing path for ${canonicalOption}.`;
         }
 
         const error = executionPathError(root, value);
@@ -1143,22 +1184,20 @@ function executionPathPermissionError(command: string): string | null {
         continue;
       }
 
-      for (const option of [
-        "--requirement",
-        "--editable",
-        "-r",
-        "-e",
-      ]) {
-        if (token.startsWith(`${option}=`)) {
-          const value = token.slice(option.length + 1);
+      const equalsOption = Object.keys(pipPathOptions).find(
+        (candidate) => candidate.length > 2 && token.startsWith(`${candidate}=`),
+      );
 
-          if (!value) {
-            return `Access denied: missing path for ${option}.`;
-          }
+      if (equalsOption) {
+        const value = token.slice(equalsOption.length + 1);
 
-          const error = executionPathError(root, value);
-          if (error) return error;
+        if (!value) {
+          return `Access denied: missing path for ${pipPathOptions[equalsOption]}.`;
         }
+
+        const error = executionPathError(root, value);
+        if (error) return error;
+        continue;
       }
 
       if (!token.startsWith("-") && looksLikeLocalPath(token)) {
@@ -1259,8 +1298,118 @@ const SENSITIVE_ENV_VAR_NAMES = new Set([
   "NODE_AUTH_TOKEN",
 ]);
 
-function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
+/** Interpreter/runtime variables that change what code executes or where
+ * modules/config are loaded from, independent of any credential value.
+ * A project script cannot be trusted not to inherit these from the server
+ * process: e.g. NODE_OPTIONS="--require=/tmp/x.js" runs arbitrary code in
+ * every Node subprocess npm spawns, and PYTHONPATH/PYTHONSTARTUP can do the
+ * same for Python. NODE_TLS_REJECT_UNAUTHORIZED disables TLS certificate
+ * validation for any Node subprocess, which is a material security change
+ * even though it is not one of the explicitly named NODE_* variables. */
+const EXECUTION_ALTERING_ENV_VAR_NAMES = new Set([
+  // Python interpreter/module loading.
+  "PYTHONPATH",
+  "PYTHONHOME",
+  "PYTHONSTARTUP",
+  "PYTHONUSERBASE",
+  "PYTHONBREAKPOINT",
+  "PYTHONPYCACHEPREFIX",
+  "PYTHONPRESITE",
+  // Node runtime/module loading.
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_V8_COVERAGE",
+  "NODE_ICU_DATA",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
+]);
+
+/** Environment-variable namespaces used by npm/pip/pytest/Ruff to override
+ * their own configuration discovery. Every name in these namespaces is
+ * removed rather than enumerating individual variables, since each tool
+ * documents many of them and new ones are added over time (the same
+ * "prefer centralized fixes" reasoning already used for Git config
+ * isolation). `npm_package_*` and `npm_lifecycle_*` are npm's own lifecycle
+ * metadata (not configuration) and must be preserved, so only the
+ * `npm_config_*`/`NPM_CONFIG_*` namespace is stripped, not all `npm_`-
+ * prefixed variables. */
+const STRIPPED_ENV_VAR_PREFIXES = [
+  "npm_config_",
+  "NPM_CONFIG_",
+  "PIP_",
+  "PYTEST_",
+  "RUFF_",
+] as const;
+
+/** Network/TLS variables that can silently redirect subprocess traffic
+ * through an attacker-influenced proxy or certificate store during
+ * `npm install`/`pip install`. This mirrors the proxy isolation already
+ * applied to Git operations (isolated GIT_PROXY_COMMAND/http.proxy) and to
+ * the server's own outbound fetches (disabled environment proxy discovery
+ * in the SSRF-safe transport) - the same "no environment-controlled
+ * proxying" policy applied consistently across every execution surface. */
+const NETWORK_ENV_VAR_NAMES = new Set([
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+]);
+
+export interface SanitizedTerminalEnv {
+  env: NodeJS.ProcessEnv;
+  /** Removes the isolated HOME directory created for this invocation.
+   * Always call after the subprocess has exited. */
+  cleanup: () => void;
+}
+
+/**
+ * Build the environment terminal subprocesses (npm/pip/pytest/Ruff/Black/
+ * Flake8/etc.) run with.
+ *
+ * SECURITY: this is the ONLY environment non-Git terminal commands may run
+ * with. The confirmation prompt shown for execution-risk commands is a
+ * user-visible gate on *whether* a command runs, not on *what environment*
+ * it runs with - a confirmed command must still get this sanitized
+ * environment rather than the full server environment, or confirmation
+ * would provide a false sense of isolation.
+ *
+ * Policy applied here, in order:
+ *  1. Known provider/service credentials, plus a generic
+ *     `*_API_KEY`/`*_SECRET`/`*_TOKEN`/`*PASSWORD*` sweep.
+ *  2. Interpreter/runtime variables that change what code executes
+ *     (PYTHONPATH, NODE_OPTIONS, etc.) rather than just holding a value.
+ *  3. Whole configuration-override namespaces for npm/pip/pytest/Ruff
+ *     (`npm_config_*`, `PIP_*`, `PYTEST_*`, `RUFF_*`), while explicitly
+ *     preserving npm's own `npm_package_*`/`npm_lifecycle_*` runtime
+ *     metadata, which project scripts legitimately rely on.
+ *  4. Proxy/TLS variables that could redirect or intercept subprocess
+ *     network traffic.
+ *  5. HOME/USERPROFILE/APPDATA/XDG_CONFIG_HOME are redirected to a fresh,
+ *     empty, per-invocation temporary directory (mirroring the isolated
+ *     GIT_CONFIG directory already used for Git operations) so a tool
+ *     cannot silently read the real user's global config (`~/.npmrc`,
+ *     `~/.pip/pip.conf`, `~/.condarc`, ...). The directory still exists so
+ *     tools that need *a* home directory for cache/temp files continue to
+ *     work; it is discarded via `cleanup()` once the subprocess exits.
+ *     XDG_CONFIG_DIRS (system-wide config search path) is removed outright
+ *     since there is no project-relative equivalent to redirect it to.
+ *
+ * This does not blindly strip every inherited variable: anything not
+ * matched by the policy above (PATH, LANG, TERM, TMPDIR, application
+ * variables the project itself needs, ...) is left untouched so normal
+ * command execution keeps working.
+ */
+export function buildSanitizedTerminalEnv(): SanitizedTerminalEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
+
   for (const name of SENSITIVE_ENV_VAR_NAMES) {
     delete env[name];
   }
@@ -1275,7 +1424,50 @@ function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
       delete env[key];
     }
   }
-  return env;
+
+  for (const name of EXECUTION_ALTERING_ENV_VAR_NAMES) {
+    delete env[name];
+  }
+
+  for (const key of Object.keys(env)) {
+    if (STRIPPED_ENV_VAR_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete env[key];
+    }
+  }
+
+  for (const name of NETWORK_ENV_VAR_NAMES) {
+    delete env[name];
+  }
+
+  const isolatedHome = mkdtempSync(join(tmpdir(), "ai-terminal-chat-home-"));
+  const xdgConfigHome = join(isolatedHome, ".config");
+  mkdirSync(xdgConfigHome, { recursive: true });
+
+  env.HOME = isolatedHome;
+  env.USERPROFILE = isolatedHome;
+  env.XDG_CONFIG_HOME = xdgConfigHome;
+  delete env.XDG_CONFIG_DIRS;
+
+  if (process.platform === "win32") {
+    const appData = join(isolatedHome, "AppData", "Roaming");
+    const localAppData = join(isolatedHome, "AppData", "Local");
+    mkdirSync(appData, { recursive: true });
+    mkdirSync(localAppData, { recursive: true });
+    env.APPDATA = appData;
+    env.LOCALAPPDATA = localAppData;
+  }
+
+  return {
+    env,
+    cleanup: () => {
+      try {
+        rmSync(isolatedHome, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup; a leftover empty temp directory is not a
+        // security issue and must not fail the command that already ran.
+      }
+    },
+  };
 }
 
 /** Execute one allowlisted command in the configured project root. */
@@ -1446,6 +1638,9 @@ export async function runCommand(
     }
   }
 
+  const { env: sanitizedEnv, cleanup: cleanupSanitizedEnv } =
+    buildSanitizedTerminalEnv();
+
   try {
     const { stdout, stderr, code } = await runChildProcess(
       file,
@@ -1455,7 +1650,7 @@ export async function runCommand(
         timeout: COMMAND_TIMEOUT_MS,
         signal,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
-        env: sanitizedTerminalEnv(),
+        env: sanitizedEnv,
       },
     );
 
@@ -1532,6 +1727,8 @@ export async function runCommand(
           error.message ?? String(err)
         }`,
     };
+  } finally {
+    cleanupSanitizedEnv();
   }
 }
 

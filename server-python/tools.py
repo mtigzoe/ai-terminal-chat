@@ -13,6 +13,7 @@ import difflib
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from child_process import SubprocessCancelled, run_cancellable
 import tempfile
@@ -946,6 +947,185 @@ def is_command_allowed(command: str) -> bool:
     )
 
 
+# ---------------------------------------------------------
+# Sanitized subprocess environment for non-Git terminal commands
+# ---------------------------------------------------------
+#
+# Mirrors server-typescript/src/terminal.ts: buildSanitizedTerminalEnv().
+# Before this, `run_command()` passed no `env=` to run_cancellable(), so
+# subprocess.Popen(env=None) inherited the *entire* server process
+# environment - every provider API key, plus PYTHONPATH/NODE_OPTIONS/proxy
+# variables that can change what a "python -m pytest" or "npm test"
+# actually executes.
+
+# Known provider/service credentials, mirrored from providers.py's env
+# lookups. Combined with the generic *_API_KEY/*_SECRET/*_TOKEN/*PASSWORD*
+# sweep below so a project script cannot observe them.
+_SENSITIVE_ENV_VAR_NAMES = frozenset({
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "XAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "KILO_API_KEY",
+    "API_AUTH_TOKEN",
+    "AI_TERMINAL_CHAT_HEALTH_TOKEN",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SESSION_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+})
+
+# Interpreter/runtime variables that change what code executes or where
+# modules/config are loaded from, independent of any credential value.
+# NODE_TLS_REJECT_UNAUTHORIZED disables TLS certificate validation for any
+# Node subprocess and is included alongside the explicitly named NODE_*
+# variables for the same reason: it materially changes execution/network
+# behavior, not just a value a script reads.
+_EXECUTION_ALTERING_ENV_VAR_NAMES = frozenset({
+    # Python interpreter/module loading.
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    "PYTHONUSERBASE",
+    "PYTHONBREAKPOINT",
+    "PYTHONPYCACHEPREFIX",
+    "PYTHONPRESITE",
+    # Node runtime/module loading (this server's own subprocess tree is
+    # Python, but an allowlisted `npm test`/`npm install` command spawns
+    # Node, so these must not reach it either).
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_V8_COVERAGE",
+    "NODE_ICU_DATA",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+})
+
+# Configuration-override namespaces for npm/pip/pytest/Ruff. Every variable
+# in these namespaces is removed rather than enumerated individually, since
+# each tool documents many of them and adds more over time (same
+# "prefer centralized fixes" reasoning as the Git config isolation above).
+# npm's own `npm_package_*`/`npm_lifecycle_*` runtime metadata is NOT a
+# configuration namespace and must be preserved, so only
+# `npm_config_*`/`NPM_CONFIG_*` is stripped, not every `npm_`-prefixed name.
+_STRIPPED_ENV_VAR_PREFIXES = (
+    "npm_config_",
+    "NPM_CONFIG_",
+    "PIP_",
+    "PYTEST_",
+    "RUFF_",
+)
+
+# Network/TLS variables that can silently redirect subprocess traffic
+# through an attacker-influenced proxy or certificate store during
+# `npm install`/`pip install`. Mirrors the proxy isolation already applied
+# to Git operations and to this server's own outbound fetches (safe_fetch's
+# disabled environment proxy discovery) - the same "no environment-
+# controlled proxying" policy applied to every execution surface.
+_NETWORK_ENV_VAR_NAMES = frozenset({
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+})
+
+
+@contextmanager
+def _sanitized_terminal_env():
+    """Yield an environment dict safe to pass to non-Git terminal commands.
+
+    SECURITY: this is the ONLY environment non-Git terminal commands may
+    run with. The confirmation prompt shown for execution-risk commands
+    gates *whether* a command runs, not *what environment* it runs with -
+    a confirmed command must still get this sanitized environment rather
+    than the full server environment, or confirmation would provide a
+    false sense of isolation.
+
+    Policy (mirrors server-typescript's buildSanitizedTerminalEnv()):
+      1. Known provider/service credentials, plus a generic
+         *_API_KEY/*_SECRET/*_TOKEN/*PASSWORD* sweep.
+      2. Interpreter/runtime variables that change what code executes
+         (PYTHONPATH, NODE_OPTIONS, etc.), not just what value it reads.
+      3. Whole configuration-override namespaces for npm/pip/pytest/Ruff,
+         while preserving npm's own lifecycle metadata.
+      4. Proxy/TLS variables that could redirect or intercept subprocess
+         network traffic.
+      5. HOME/USERPROFILE/APPDATA/XDG_CONFIG_HOME are redirected to a
+         fresh, empty, per-invocation temporary directory (mirroring the
+         isolated GIT_CONFIG directory already used for `_run_git`) so a
+         tool cannot silently read the real user's global config
+         (~/.npmrc, ~/.pip/pip.conf, ~/.condarc, ...). The directory still
+         exists so tools that need *a* home directory for cache/temp files
+         keep working; it is removed on exit from this context manager.
+         XDG_CONFIG_DIRS (system-wide config search path) is removed
+         outright since there is no project-relative equivalent for it.
+
+    This does not blindly strip every inherited variable: anything not
+    matched by the policy above (PATH, LANG, TERM, TMPDIR, application
+    variables the project itself needs, ...) is left untouched so normal
+    command execution keeps working.
+    """
+
+    env = os.environ.copy()
+
+    for name in _SENSITIVE_ENV_VAR_NAMES:
+        env.pop(name, None)
+    for key in list(env):
+        upper = key.upper()
+        if (
+            upper.endswith("_API_KEY")
+            or upper.endswith("_SECRET")
+            or upper.endswith("_TOKEN")
+            or "PASSWORD" in upper
+        ):
+            env.pop(key, None)
+
+    for name in _EXECUTION_ALTERING_ENV_VAR_NAMES:
+        env.pop(name, None)
+
+    for key in list(env):
+        if key.startswith(_STRIPPED_ENV_VAR_PREFIXES):
+            env.pop(key, None)
+
+    for name in _NETWORK_ENV_VAR_NAMES:
+        env.pop(name, None)
+
+    isolated_home = tempfile.mkdtemp(prefix="ai-terminal-chat-home-")
+    try:
+        xdg_config_home = os.path.join(isolated_home, ".config")
+        os.makedirs(xdg_config_home, exist_ok=True)
+
+        env["HOME"] = isolated_home
+        env["USERPROFILE"] = isolated_home
+        env["XDG_CONFIG_HOME"] = xdg_config_home
+        env.pop("XDG_CONFIG_DIRS", None)
+
+        if os.name == "nt":
+            appdata = os.path.join(isolated_home, "AppData", "Roaming")
+            localappdata = os.path.join(isolated_home, "AppData", "Local")
+            os.makedirs(appdata, exist_ok=True)
+            os.makedirs(localappdata, exist_ok=True)
+            env["APPDATA"] = appdata
+            env["LOCALAPPDATA"] = localappdata
+
+        yield env
+    finally:
+        shutil.rmtree(isolated_home, ignore_errors=True)
+
+
 def run_command(command: str, confirm: bool = False) -> dict:
     """Run an allowlisted development command in the project directory.
 
@@ -1048,11 +1228,13 @@ def run_command(command: str, confirm: bool = False) -> dict:
             args = ["cmd", "/c", "dir", *args[1:]]
 
         try:
-            result = run_cancellable(
-                args,
-                cwd=PROJECT_ROOT,
-                timeout=60,
-            )
+            with _sanitized_terminal_env() as sanitized_env:
+                result = run_cancellable(
+                    args,
+                    cwd=PROJECT_ROOT,
+                    timeout=60,
+                    env=sanitized_env,
+                )
         except SubprocessCancelled:
             return {"error": "Command cancelled.", "cancelled": True}
 
