@@ -238,6 +238,22 @@ test("strips proxy/TLS variables", async () => {
   );
 });
 
+
+test("blocks npm global/config/cache overrides and pip external targets", async () => {
+  const npmGlobal = await runCommand("npm install --global example", true);
+  assert.match(String(npmGlobal.error), /not permitted/i);
+
+  const npmConfig = await runCommand("npm install --userconfig /tmp/evil.npmrc example", true);
+  assert.match(String(npmConfig.error), /not permitted/i);
+
+  const pipTarget = await runCommand("pip install --target /tmp/evil example", true);
+  assert.match(String(pipTarget.error), /outside the project|execution boundary/i);
+
+  const pipUser = await runCommand("pip install --user example", true);
+  assert.match(String(pipUser.error), /not permitted/i);
+});
+
+
 test("isolates HOME/USERPROFILE/XDG_CONFIG_HOME to a fresh empty directory and cleans up", () => {
   const { env, cleanup } = buildSanitizedTerminalEnv();
   const home = env.HOME;
