@@ -125,6 +125,39 @@ def test_strips_config_namespaces_but_preserves_npm_lifecycle_vars(monkeypatch):
         assert env["npm_lifecycle_event"] == "test"
 
 
+
+def test_trusted_executable_skips_project_local_hijacks(project_root, monkeypatch):
+    local_bin = project_root / "bin"
+    local_bin.mkdir()
+    local_exe = local_bin / ("python.exe" if os.name == "nt" else "python")
+    local_exe.write_text("not a real executable", encoding="utf-8")
+    if os.name != "nt":
+        local_exe.chmod(0o755)
+
+    monkeypatch.setenv("PATH", os.pathsep.join([str(local_bin), os.environ.get("PATH", "")]))
+    resolved = tools._trusted_executable("python")
+    assert Path(resolved).resolve() != local_exe.resolve()
+
+
+def test_execution_path_boundary_blocks_external_package_manager_targets(project_root):
+    assert tools._execution_path_permission_error(
+        ["npm", "install", "--global", "example"]
+    ) is not None
+    assert tools._execution_path_permission_error(
+        ["npm", "install", "--userconfig", "/tmp/evil.npmrc", "example"]
+    ) is not None
+    assert tools._execution_path_permission_error(
+        ["pip", "install", "--target", "/tmp/evil", "example"]
+    ) is not None
+    assert tools._execution_path_permission_error(
+        ["pip", "install", "--user", "example"]
+    ) is not None
+    assert tools._execution_path_permission_error(
+        ["pip", "install", str(Path("/tmp/outside-package"))]
+    ) is not None
+
+
+
 def test_strips_proxy_tls_variables(monkeypatch):
     names = [
         "HTTP_PROXY",
