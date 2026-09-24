@@ -35,6 +35,23 @@ from security import (
 # Filesystem tools
 # ---------------------------------------------------------
 
+def _open_pinned_directory(directory: Path):
+    """Open a directory without following a final symlink on POSIX.
+
+    The returned descriptor pins the directory object, so callers can
+    enumerate it without a pathname-based directory-replacement race.
+    Windows keeps the existing pathname fallback; the POSIX hardening is
+    deliberately isolated because Python's stdlib does not expose a portable
+    Windows openat/readdir-by-handle equivalent.
+    """
+    if os.name != "posix":
+        return None
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    return os.open(directory, flags)
+
+
 def list_files(path: str = ".") -> dict:
     """List files and directories inside the application project.
 
@@ -60,28 +77,33 @@ def list_files(path: str = ".") -> dict:
     entries = []
     allowed = get_allowed_read_paths()
     dir_rel = directory.relative_to(PROJECT_ROOT).as_posix()
+    dir_fd = None
+    try:
+        dir_fd = _open_pinned_directory(directory)
+        if dir_fd is not None:
+            iterator = os.scandir(dir_fd)
+        else:
+            iterator = os.scandir(directory)
 
-    for item in sorted(
-        directory.iterdir(),
-        key=lambda p: p.name.lower()
-    ):
-        if allowed is not None:
-            item_rel = (
-                f"{dir_rel}/{item.name}" if dir_rel not in (".", "") else item.name
-            )
-            if item.is_dir():
-                prefix = item_rel.rstrip("/") + "/"
-                if not any(a == item_rel or a.startswith(prefix) for a in allowed):
-                    continue
-            else:
-                if item_rel not in allowed:
-                    continue
-        entries.append(
-            {
-                "name": item.name,
-                "type": "directory" if item.is_dir() else "file",
-            }
-        )
+        with iterator:
+            for item in sorted(iterator, key=lambda p: p.name.lower()):
+                item_rel = (
+                    f"{dir_rel}/{item.name}" if dir_rel not in (".", "") else item.name
+                )
+                is_dir = item.is_dir(follow_symlinks=False)
+                if allowed is not None:
+                    if is_dir:
+                        prefix = item_rel.rstrip("/") + "/"
+                        if not any(a == item_rel or a.startswith(prefix) for a in allowed):
+                            continue
+                    elif item_rel not in allowed:
+                        continue
+                entries.append({"name": item.name, "type": "directory" if is_dir else "file"})
+    except OSError as exc:
+        return {"error": f"Could not list directory: {exc}"}
+    finally:
+        if dir_fd is not None:
+            os.close(dir_fd)
 
     return {
         "path": str(directory.relative_to(PROJECT_ROOT)),
@@ -201,28 +223,76 @@ def search_files(query: str, path: str = ".") -> dict:
     matches = []
     truncated = False
 
-    for root, dirnames, filenames in os.walk(directory):
-        dirnames[:] = sorted(
-            d for d in dirnames if d not in SEARCH_EXCLUDED_DIR_NAMES
-        )
+    # On POSIX, anchor the recursive walk to an already-open root
+    # directory and use fwalk's directory descriptors for file opens. This
+    # prevents a concurrent replacement of the validated root or a traversed
+    # child directory from redirecting the search outside PROJECT_ROOT.
+    root_fd = _open_pinned_directory(directory)
+    walk_root = directory
+    if root_fd is not None and os.path.isdir("/proc/self/fd"):
+        walk_root = Path(f"/proc/self/fd/{root_fd}")
 
-        for filename in sorted(filenames):
-            if is_sensitive_filename(filename):
-                continue
+    try:
+        if root_fd is not None:
+            walker = os.fwalk(
+                walk_root,
+                topdown=True,
+                follow_symlinks=False,
+            )
+        else:
+            walker = os.walk(directory)
 
-            file_path = Path(root) / filename
-            if not is_read_allowed(file_path):
-                continue
+        for root, dirnames, filenames, dir_fd in walker:
+            dirnames[:] = sorted(
+                d for d in dirnames if d not in SEARCH_EXCLUDED_DIR_NAMES
+            )
+            if root_fd is not None:
+                rel_root = os.path.relpath(root, os.fspath(walk_root))
+                rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
+            else:
+                rel_root = os.path.relpath(root, os.fspath(directory))
+                rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
 
-            try:
-                if file_path.stat().st_size > max_file_size:
+            for filename in sorted(filenames):
+                if is_sensitive_filename(filename):
                     continue
-                text = file_path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                # Skip binary files and unreadable files.
-                continue
 
-            for line_number, line in enumerate(text.splitlines(), start=1):
+                item_rel = f"{dir_rel}/{rel_root}/{filename}".replace("//", "/") if rel_root else (
+                    f"{dir_rel}/{filename}" if dir_rel not in (".", "") else filename
+                )
+                if not is_read_allowed(item_rel):
+                    continue
+
+                try:
+                    if root_fd is not None:
+                        stat_result = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
+                        if not stat_result.is_file() or stat_result.st_size > max_file_size:
+                            continue
+                        fd = os.open(
+                            filename,
+                            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                            dir_fd=dir_fd,
+                        )
+                        try:
+                            opened = os.fstat(fd)
+                            if not opened.is_file() or opened.st_nlink > 1 or opened.st_size > max_file_size:
+                                continue
+                            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                                fd = None
+                                text = handle.read()
+                        finally:
+                            if fd is not None:
+                                os.close(fd)
+                    else:
+                        file_path = Path(root) / filename
+                        if file_path.stat().st_size > max_file_size:
+                            continue
+                        text = file_path.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    # Skip binary files and unreadable files.
+                    continue
+
+                for line_number, line in enumerate(text.splitlines(), start=1):
                 if query_lower in line.lower():
                     matches.append(
                         {
@@ -241,8 +311,14 @@ def search_files(query: str, path: str = ".") -> dict:
             if truncated:
                 break
 
+            if truncated:
+                break
+
         if truncated:
             break
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
 
     return {
         "query": query,
