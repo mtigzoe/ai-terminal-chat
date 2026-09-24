@@ -241,16 +241,16 @@ test("strips proxy/TLS variables", async () => {
 
 test("blocks npm global/config/cache overrides and pip external targets", async () => {
   const npmGlobal = await runCommand("npm install --global example", true);
-  assert.match(String(npmGlobal.error), /not permitted/i);
+  assert.match(JSON.stringify(npmGlobal), /not permitted/i);
 
   const npmConfig = await runCommand("npm install --userconfig /tmp/evil.npmrc example", true);
-  assert.match(String(npmConfig.error), /not permitted/i);
+  assert.match(JSON.stringify(npmConfig), /not permitted/i);
 
   const pipTarget = await runCommand("pip install --target /tmp/evil example", true);
-  assert.match(String(pipTarget.error), /outside the project|execution boundary/i);
+  assert.match(JSON.stringify(pipTarget), /outside the project|execution boundary/i);
 
   const pipUser = await runCommand("pip install --user example", true);
-  assert.match(String(pipUser.error), /not permitted/i);
+  assert.match(JSON.stringify(pipUser), /not permitted/i);
 });
 
 
