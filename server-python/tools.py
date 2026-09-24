@@ -13,6 +13,8 @@ import difflib
 import os
 import re
 import shlex
+import shutil
+import stat
 import subprocess
 from child_process import SubprocessCancelled, run_cancellable
 import tempfile
@@ -29,6 +31,7 @@ from security import (
     is_sensitive_path,
     require_read_allowed,
     safe_path,
+    safe_write_path,
 )
 
 # ---------------------------------------------------------
@@ -100,7 +103,7 @@ def read_file(path: str) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -884,6 +887,156 @@ def _command_sensitive_path_error(command: str) -> dict | None:
     return None
 
 
+def _execution_path_permission_error(args: list[str]) -> dict | None:
+    """Constrain package-manager/test-tool filesystem and config paths."""
+
+    if not args:
+        return None
+
+    executable = Path(args[0]).name.lower()
+
+    def path_error(raw: str) -> dict | None:
+        value = str(raw).strip()
+        if not value:
+            return {"error": "Access denied: missing execution path."}
+        if re.match(r"^[a-z][a-z0-9+.-]*://", value, flags=re.IGNORECASE):
+            return {"error": f"Access denied: external execution path is not allowed: {raw}"}
+        try:
+            candidate = safe_path(value)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not is_path_within_project(candidate):
+            return {"error": f"Access denied: execution path is outside the project root: {raw}"}
+        return None
+
+    def is_path_like(value: str) -> bool:
+        return (
+            value.startswith(("/", "\\", "./", "../", ".\\", "..\\", "~"))
+            or re.match(r"^[A-Za-z]:[\\/]", value) is not None
+            or "/" in value
+            or "\\" in value
+            or value.lower().startswith("file:")
+        )
+
+    if executable in {"pytest", "black", "ruff", "flake8"} or (
+        executable in {"python", "python3", "python.exe", "python3.exe"}
+        and len(args) >= 3
+        and args[1] in {"-m", "--module"}
+        and args[2].lower() == "pytest"
+    ):
+        path_options = {
+            "-c", "--confcutdir", "--rootdir", "--basetemp",
+            "--config", "--append-config", "--output-file", "--cache-dir",
+        }
+        start = 3 if executable.startswith("python") and len(args) >= 3 and args[1] in {"-m", "--module"} else 1
+        i = start
+        while i < len(args):
+            token = args[i]
+            option = next((candidate for candidate in path_options if token == candidate or token.startswith(candidate + "=")), None)
+            if option:
+                if token == option:
+                    if i + 1 >= len(args):
+                        return {"error": f"Access denied: missing path for {option}."}
+                    value = args[i + 1]
+                    err = path_error(value)
+                    if err:
+                        return err
+                    i += 2
+                    continue
+                err = path_error(token[len(option) + 1:])
+                if err:
+                    return err
+                i += 1
+                continue
+            if not token.startswith("-"):
+                target = token.split("::", 1)[0]
+                if is_path_like(target):
+                    err = path_error(target)
+                    if err:
+                        return err
+            i += 1
+
+    if executable == "npm":
+        blocked = {"-g", "--global", "--userconfig", "--globalconfig", "--cache", "--logs-dir"}
+        path_options = {"--prefix", "--workspace"}
+        i = 1
+        while i < len(args):
+            token = args[i]
+            if token in blocked or any(token.startswith(opt + "=") for opt in blocked):
+                return {"error": f"Access denied: npm option '{token}' is not permitted by the project execution boundary."}
+            option = next((candidate for candidate in path_options if token == candidate or token.startswith(candidate + "=")), None)
+            if option:
+                if token == option:
+                    if i + 1 >= len(args):
+                        return {"error": f"Access denied: missing path for {option}."}
+                    value = args[i + 1]
+                    err = path_error(value)
+                    if err:
+                        return err
+                    i += 2
+                    continue
+                err = path_error(token[len(option) + 1:])
+                if err:
+                    return err
+                i += 1
+                continue
+            if i > 0 and not token.startswith("-") and is_path_like(token):
+                err = path_error(token)
+                if err:
+                    return err
+            i += 1
+
+    if executable in {"pip", "pip3"}:
+        blocked = {
+            "--user", "--python", "--cert", "--client-cert", "--trusted-host",
+            "--proxy", "--cache-dir", "--report", "--download", "--build",
+        }
+        path_options = {
+            "-r", "--requirement", "-e", "--editable", "-t", "--target",
+            "--prefix", "--root", "--src", "-f", "--find-links",
+            "-c", "--constraint", "--build-constraint",
+            "--requirements-from-script", "--log",
+        }
+        i = 1
+        while i < len(args):
+            token = args[i]
+            blocked_option = next((candidate for candidate in blocked if token == candidate or token.startswith(candidate + "=")), None)
+            if blocked_option:
+                return {"error": f"Access denied: pip option '{token}' is not permitted by the project execution boundary."}
+            option = next((candidate for candidate in path_options if token == candidate or token.startswith(candidate + "=")), None)
+            if option:
+                if token == option:
+                    if i + 1 >= len(args):
+                        return {"error": f"Access denied: missing path for {option}."}
+                    value = args[i + 1]
+                    err = path_error(value)
+                    if err:
+                        return err
+                    i += 2
+                    continue
+                err = path_error(token[len(option) + 1:])
+                if err:
+                    return err
+                i += 1
+                continue
+            if not token.startswith("-") and is_path_like(token):
+                err = path_error(token)
+                if err:
+                    return err
+            i += 1
+
+    return None
+
+
+def is_path_within_project(path: Path) -> bool:
+    """Return whether a resolved path remains under PROJECT_ROOT."""
+    try:
+        path.resolve().relative_to(PROJECT_ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def _validate_directory_command_paths(command: str, args: list[str]) -> dict | None:
     """Keep directory-inspection commands inside PROJECT_ROOT.
 
@@ -944,6 +1097,224 @@ def is_command_allowed(command: str) -> bool:
         normalized == prefix or normalized.startswith(prefix + " ")
         for prefix in ALLOWED_COMMAND_PREFIXES
     )
+
+
+def _trusted_executable(command_name: str) -> str:
+    """Resolve a bare executable to an absolute PATH entry outside PROJECT_ROOT.
+
+    Never let the subprocess cwd or a project-local executable win command
+    resolution. Relative PATH entries are ignored because they are cwd-sensitive.
+    """
+    name = str(command_name or "").strip()
+    if not name or os.path.basename(name) != name or os.path.dirname(name):
+        raise ValueError(f"Path-qualified executable is not allowed: {name}")
+
+    root = os.path.realpath(str(PROJECT_ROOT))
+    path_value = os.environ.get("PATH", "")
+    path_entries = [p for p in path_value.split(os.pathsep) if p and os.path.isabs(p)]
+
+    extensions = [""]
+    if os.name == "nt":
+        raw_exts = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        extensions = [ext.strip() for ext in raw_exts.split(";") if ext.strip()]
+        if os.path.splitext(name)[1]:
+            extensions = [""]
+
+    for directory in path_entries:
+        candidates = [os.path.join(directory, name + ext) for ext in extensions]
+        for candidate in candidates:
+            try:
+                resolved = os.path.realpath(candidate)
+                if not os.path.isfile(resolved):
+                    continue
+                if os.path.commonpath((root, resolved)) == root:
+                    continue
+                if os.name != "nt" and not os.access(resolved, os.X_OK):
+                    continue
+                return resolved
+            except (OSError, ValueError):
+                continue
+
+    raise ValueError(f"Executable '{name}' is not installed on a trusted PATH entry.")
+
+
+# ---------------------------------------------------------
+# Sanitized subprocess environment for non-Git terminal commands
+# ---------------------------------------------------------
+#
+# Mirrors server-typescript/src/terminal.ts: buildSanitizedTerminalEnv().
+# Before this, `run_command()` passed no `env=` to run_cancellable(), so
+# subprocess.Popen(env=None) inherited the *entire* server process
+# environment - every provider API key, plus PYTHONPATH/NODE_OPTIONS/proxy
+# variables that can change what a "python -m pytest" or "npm test"
+# actually executes.
+
+# Known provider/service credentials, mirrored from providers.py's env
+# lookups. Combined with the generic *_API_KEY/*_SECRET/*_TOKEN/*PASSWORD*
+# sweep below so a project script cannot observe them.
+_SENSITIVE_ENV_VAR_NAMES = frozenset({
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "XAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "KILO_API_KEY",
+    "API_AUTH_TOKEN",
+    "AI_TERMINAL_CHAT_HEALTH_TOKEN",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SESSION_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+})
+
+# Interpreter/runtime variables that change what code executes or where
+# modules/config are loaded from, independent of any credential value.
+# NODE_TLS_REJECT_UNAUTHORIZED disables TLS certificate validation for any
+# Node subprocess and is included alongside the explicitly named NODE_*
+# variables for the same reason: it materially changes execution/network
+# behavior, not just a value a script reads.
+_EXECUTION_ALTERING_ENV_VAR_NAMES = frozenset({
+    # Python interpreter/module loading.
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    "PYTHONUSERBASE",
+    "PYTHONBREAKPOINT",
+    "PYTHONPYCACHEPREFIX",
+    "PYTHONPRESITE",
+    # Node runtime/module loading (this server's own subprocess tree is
+    # Python, but an allowlisted `npm test`/`npm install` command spawns
+    # Node, so these must not reach it either).
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_V8_COVERAGE",
+    "NODE_ICU_DATA",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+})
+
+# Configuration-override namespaces for npm/pip/pytest/Ruff. Every variable
+# in these namespaces is removed rather than enumerated individually, since
+# each tool documents many of them and adds more over time (same
+# "prefer centralized fixes" reasoning as the Git config isolation above).
+# npm's own `npm_package_*`/`npm_lifecycle_*` runtime metadata is NOT a
+# configuration namespace and must be preserved, so only
+# `npm_config_*`/`NPM_CONFIG_*` is stripped, not every `npm_`-prefixed name.
+_STRIPPED_ENV_VAR_PREFIXES = (
+    "npm_config_",
+    "NPM_CONFIG_",
+    "PIP_",
+    "PYTEST_",
+    "RUFF_",
+)
+
+# Network/TLS variables that can silently redirect subprocess traffic
+# through an attacker-influenced proxy or certificate store during
+# `npm install`/`pip install`. Mirrors the proxy isolation already applied
+# to Git operations and to this server's own outbound fetches (safe_fetch's
+# disabled environment proxy discovery) - the same "no environment-
+# controlled proxying" policy applied to every execution surface.
+_NETWORK_ENV_VAR_NAMES = frozenset({
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+})
+
+
+@contextmanager
+def _sanitized_terminal_env():
+    """Yield an environment dict safe to pass to non-Git terminal commands.
+
+    SECURITY: this is the ONLY environment non-Git terminal commands may
+    run with. The confirmation prompt shown for execution-risk commands
+    gates *whether* a command runs, not *what environment* it runs with -
+    a confirmed command must still get this sanitized environment rather
+    than the full server environment, or confirmation would provide a
+    false sense of isolation.
+
+    Policy (mirrors server-typescript's buildSanitizedTerminalEnv()):
+      1. Known provider/service credentials, plus a generic
+         *_API_KEY/*_SECRET/*_TOKEN/*PASSWORD* sweep.
+      2. Interpreter/runtime variables that change what code executes
+         (PYTHONPATH, NODE_OPTIONS, etc.), not just what value it reads.
+      3. Whole configuration-override namespaces for npm/pip/pytest/Ruff,
+         while preserving npm's own lifecycle metadata.
+      4. Proxy/TLS variables that could redirect or intercept subprocess
+         network traffic.
+      5. HOME/USERPROFILE/APPDATA/XDG_CONFIG_HOME are redirected to a
+         fresh, empty, per-invocation temporary directory (mirroring the
+         isolated GIT_CONFIG directory already used for `_run_git`) so a
+         tool cannot silently read the real user's global config
+         (~/.npmrc, ~/.pip/pip.conf, ~/.condarc, ...). The directory still
+         exists so tools that need *a* home directory for cache/temp files
+         keep working; it is removed on exit from this context manager.
+         XDG_CONFIG_DIRS (system-wide config search path) is removed
+         outright since there is no project-relative equivalent for it.
+
+    This does not blindly strip every inherited variable: anything not
+    matched by the policy above (PATH, LANG, TERM, TMPDIR, application
+    variables the project itself needs, ...) is left untouched so normal
+    command execution keeps working.
+    """
+
+    env = os.environ.copy()
+
+    for name in _SENSITIVE_ENV_VAR_NAMES:
+        env.pop(name, None)
+    for key in list(env):
+        upper = key.upper()
+        if (
+            upper.endswith("_API_KEY")
+            or upper.endswith("_SECRET")
+            or upper.endswith("_TOKEN")
+            or "PASSWORD" in upper
+        ):
+            env.pop(key, None)
+
+    for name in _EXECUTION_ALTERING_ENV_VAR_NAMES:
+        env.pop(name, None)
+
+    for key in list(env):
+        if key.startswith(_STRIPPED_ENV_VAR_PREFIXES):
+            env.pop(key, None)
+
+    for name in _NETWORK_ENV_VAR_NAMES:
+        env.pop(name, None)
+
+    isolated_home = tempfile.mkdtemp(prefix="ai-terminal-chat-home-")
+    try:
+        xdg_config_home = os.path.join(isolated_home, ".config")
+        os.makedirs(xdg_config_home, exist_ok=True)
+
+        env["HOME"] = isolated_home
+        env["USERPROFILE"] = isolated_home
+        env["XDG_CONFIG_HOME"] = xdg_config_home
+        env.pop("XDG_CONFIG_DIRS", None)
+
+        if os.name == "nt":
+            appdata = os.path.join(isolated_home, "AppData", "Roaming")
+            localappdata = os.path.join(isolated_home, "AppData", "Local")
+            os.makedirs(appdata, exist_ok=True)
+            os.makedirs(localappdata, exist_ok=True)
+            env["APPDATA"] = appdata
+            env["LOCALAPPDATA"] = localappdata
+
+        yield env
+    finally:
+        shutil.rmtree(isolated_home, ignore_errors=True)
 
 
 def run_command(command: str, confirm: bool = False) -> dict:
@@ -1026,6 +1397,10 @@ def run_command(command: str, confirm: bool = False) -> dict:
         if boundary_error is not None:
             return boundary_error
 
+        execution_path_error = _execution_path_permission_error(args)
+        if execution_path_error is not None:
+            return execution_path_error
+
         if args and args[0].lower() == "git":
             subcommand = args[1].lower() if len(args) > 1 else ""
             if subcommand not in ISOLATED_GIT_SUBCOMMANDS:
@@ -1036,23 +1411,27 @@ def run_command(command: str, confirm: bool = False) -> dict:
                     )
                 }
 
-        # `pwd` is not a standalone executable on Windows.
-        # Translate to `cmd /c cd`, which prints the current directory.
+        # Resolve the executable before spawning. Windows CreateProcess can
+        # otherwise prefer the cwd over PATH, allowing a project-controlled
+        # python.exe/node.exe/npm.cmd/etc. to hijack an allowlisted command.
+        # Relative PATH entries are also excluded by _trusted_executable().
         if os.name == "nt" and args and args[0].lower() == "pwd":
-            args = ["cmd", "/c", "cd"]
-        
-        # `ls` is a PowerShell alias on Windows, not an executable.
-        # Use the native cmd.exe directory command while preserving
-        # `ls` as the cross-platform command exposed to the agent.
-        if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
-            args = ["cmd", "/c", "dir", *args[1:]]
+            executable = _trusted_executable("cmd")
+            args = [executable, "/c", "cd"]
+        elif os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
+            executable = _trusted_executable("cmd")
+            args = [executable, "/c", "dir", *args[1:]]
+        elif args and args[0].lower() != "git":
+            args[0] = _trusted_executable(args[0])
 
         try:
-            result = run_cancellable(
-                args,
-                cwd=PROJECT_ROOT,
-                timeout=60,
-            )
+            with _sanitized_terminal_env() as sanitized_env:
+                result = run_cancellable(
+                    args,
+                    cwd=PROJECT_ROOT,
+                    timeout=60,
+                    env=sanitized_env,
+                )
         except SubprocessCancelled:
             return {"error": "Command cancelled.", "cancelled": True}
 
@@ -1662,7 +2041,7 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
 
     if path:
         try:
-            file_path = safe_path(path)
+            file_path = safe_write_path(path)
         except ValueError as exc:
             return {"error": str(exc)}
 
@@ -1828,7 +2207,7 @@ def git_add(path: str, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2057,7 +2436,7 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2249,6 +2628,166 @@ def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
 # File-modification tools
 # ---------------------------------------------------------
 
+# POSIX dirfd operations let confirmed writes/deletes stay anchored to
+# directories that were opened without following symlinks. This closes the
+# validation-to-use race left by safe_path() when a same-user process swaps a
+# parent directory or final path component after validation.
+
+def _ensure_project_parent_dirs(file_path: Path) -> None:
+    """Create missing parent directories without following path links."""
+
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        return
+    if os.mkdir not in getattr(os, "supports_dir_fd", set()):
+        raise RuntimeError(
+            "Safe handle-relative directory creation is unavailable on this platform."
+        )
+
+    relative = file_path.relative_to(PROJECT_ROOT)
+    parts = relative.parts[:-1]
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    fd = os.open(PROJECT_ROOT, flags)
+    try:
+        for component in parts:
+            try:
+                os.mkdir(component, 0o777, dir_fd=fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+    finally:
+        os.close(fd)
+
+
+def _open_project_parent_fd(file_path: Path):
+    """Open the target's parent directory without following symlinks.
+
+    Returns a directory fd on POSIX systems that provide dir_fd/O_NOFOLLOW,
+    or None on platforms where this handle-relative primitive is unavailable.
+    Callers must close the returned fd.
+    """
+
+    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
+        return None
+    if os.open not in getattr(os, "supports_dir_fd", set()):
+        return None
+
+    relative = file_path.relative_to(PROJECT_ROOT)
+    parts = relative.parts[:-1]
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+
+    fd = os.open(PROJECT_ROOT, flags)
+    try:
+        for component in parts:
+            next_fd = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _safe_confirmed_write(file_path: Path, contents: str) -> bool:
+    """Write through a pinned parent directory on hardened POSIX systems.
+
+    Returns whether an existing regular file was overwritten. Refuses hard
+    links (nlink > 1) so a project pathname cannot be used to overwrite a
+    different same-filesystem file through a shared inode.
+    """
+
+    parent_fd = _open_project_parent_fd(file_path)
+    if parent_fd is None:
+        if file_path.is_symlink() or getattr(file_path, "is_junction", lambda: False)():
+            raise RuntimeError("Refusing to write through a symbolic link or junction.")
+        existed = file_path.exists()
+        file_path.write_text(contents, encoding="utf-8")
+        return existed
+
+    name = file_path.name
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+        existed = file_path.exists()
+        if existed:
+            # Do not truncate until the opened inode has passed the hard-link
+            # and regular-file checks below.
+            pass
+        else:
+            flags |= os.O_EXCL
+
+        fd = os.open(name, flags, 0o666, dir_fd=parent_fd)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise RuntimeError("Refusing to write a non-regular file.")
+            if info.st_nlink > 1:
+                raise RuntimeError("Refusing to write a hard-linked file.")
+            if existed:
+                os.ftruncate(fd, 0)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = None
+                handle.write(contents)
+        finally:
+            if fd is not None:
+                os.close(fd)
+        return existed
+    finally:
+        os.close(parent_fd)
+
+
+def _safe_confirmed_create(file_path: Path, contents: str) -> None:
+    """Create a new regular file using a pinned parent directory."""
+
+    parent_fd = _open_project_parent_fd(file_path)
+    if parent_fd is None:
+        if file_path.exists() or file_path.is_symlink() or getattr(file_path, "is_junction", lambda: False)():
+            raise FileExistsError(str(file_path))
+        with file_path.open("x", encoding="utf-8") as handle:
+            handle.write(contents)
+        return
+
+    fd = None
+    try:
+        fd = os.open(
+            file_path.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o666,
+            dir_fd=parent_fd,
+        )
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("Refusing to create a non-regular file.")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
+            handle.write(contents)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(parent_fd)
+
+
+def _safe_confirmed_delete(file_path: Path) -> None:
+    """Delete a file relative to a pinned, non-symlink parent directory."""
+
+    parent_fd = _open_project_parent_fd(file_path)
+    if parent_fd is None:
+        # Path.unlink removes the directory entry itself, including a final
+        # symlink, rather than following it. Parent-path replacement remains
+        # a documented Windows TOCTOU limitation until handle-relative
+        # directory operations are available there.
+        file_path.unlink()
+        return
+    try:
+        # unlinkat-style deletion removes the directory entry itself and never
+        # follows a final symlink. The parent fd also prevents a parent-path
+        # replacement race from redirecting the operation elsewhere.
+        os.unlink(file_path.name, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
 # Character cap for contents/diffs shown back to the model in a
 # confirmation preview, so a huge file doesn't blow up the context
 # window before anything has even been written.
@@ -2275,7 +2814,7 @@ def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2307,10 +2846,10 @@ def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
         }
 
     try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(contents, encoding="utf-8")
+        _ensure_project_parent_dirs(file_path)
+        _safe_confirmed_create(file_path, contents)
     except Exception as exc:
-        return {"error": f"Could not create file: {exc}"}
+        return {"error": f"Could not create file safely: {exc}"}
 
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
@@ -2341,7 +2880,7 @@ def write_file(path: str, contents: str, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2386,14 +2925,14 @@ def write_file(path: str, contents: str, confirm: bool = False) -> dict:
         }
 
     try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(contents, encoding="utf-8")
+        _ensure_project_parent_dirs(file_path)
+        overwritten = _safe_confirmed_write(file_path, contents)
     except Exception as exc:
-        return {"error": f"Could not write file: {exc}"}
+        return {"error": f"Could not write file safely: {exc}"}
 
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
-        "overwritten": existed,
+        "overwritten": overwritten,
         "bytes_written": len(contents.encode("utf-8")),
     }
 
@@ -2414,7 +2953,7 @@ def delete_file(path: str, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2447,9 +2986,9 @@ def delete_file(path: str, confirm: bool = False) -> dict:
         }
 
     try:
-        file_path.unlink()
+        _safe_confirmed_delete(file_path)
     except Exception as exc:
-        return {"error": f"Could not delete file: {exc}"}
+        return {"error": f"Could not delete file safely: {exc}"}
 
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
