@@ -313,6 +313,67 @@ def test_is_sensitive_path_blocks_env_and_credential_files(project_root):
         assert security.is_sensitive_path(project_root / name) is True
 
 
+@pytest.mark.skipif(os.name != "posix", reason="directory-handle hardening is POSIX-only")
+def test_list_files_uses_pinned_directory_after_path_replacement(project_root, monkeypatch):
+    target = project_root / "target"
+    target.mkdir()
+    (target / "inside.txt").write_text("inside")
+    outside = project_root.parent / "outside-list"
+    outside.mkdir()
+    (outside / "outside.txt").write_text("outside")
+
+    original_scandir = os.scandir
+    replaced = False
+
+    def replacing_scandir(path):
+        nonlocal replaced
+        if isinstance(path, int) and not replaced:
+            target.rename(project_root / "target-old")
+            outside_target = project_root / "target"
+            outside_target.symlink_to(outside, target_is_directory=True)
+            replaced = True
+        return original_scandir(path)
+
+    monkeypatch.setattr(tools.os, "scandir", replacing_scandir)
+    result = tools.list_files("target")
+
+    assert replaced is True
+    assert result["entries"] == [{"name": "inside.txt", "type": "file"}]
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not os.path.isdir("/proc/self/fd"),
+    reason="pinned recursive directory walking requires POSIX /proc fd paths",
+)
+def test_search_files_uses_pinned_directory_after_path_replacement(project_root, monkeypatch):
+    target = project_root / "target"
+    target.mkdir()
+    (target / "inside.txt").write_text("inside needle")
+    outside = project_root.parent / "outside-search"
+    outside.mkdir()
+    (outside / "outside.txt").write_text("outside needle")
+
+    original_fwalk = os.fwalk
+    replaced = False
+
+    def replacing_fwalk(path, *args, **kwargs):
+        nonlocal replaced
+        if not replaced:
+            target.rename(project_root / "target-old")
+            outside_target = project_root / "target"
+            outside_target.symlink_to(outside, target_is_directory=True)
+            replaced = True
+        return original_fwalk(path, *args, **kwargs)
+
+    monkeypatch.setattr(tools.os, "fwalk", replacing_fwalk)
+    result = tools.search_files("needle", "target")
+
+    assert replaced is True
+    assert result["matches"] == [
+        {"path": "target/inside.txt", "line": 1, "text": "inside needle"}
+    ]
+
+
 def test_read_file_refuses_env_file_contents(project_root):
     (project_root / ".env").write_text("GOOGLE_API_KEY=super-secret")
     result = tools.read_file(".env")
