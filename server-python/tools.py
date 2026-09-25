@@ -13,6 +13,7 @@ import difflib
 import os
 import re
 import shlex
+import stat
 import subprocess
 from child_process import SubprocessCancelled, run_cancellable
 import tempfile
@@ -266,7 +267,7 @@ def search_files(query: str, path: str = ".") -> dict:
                 try:
                     if root_fd is not None:
                         stat_result = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
-                        if not stat_result.is_file() or stat_result.st_size > max_file_size:
+                        if not stat.S_ISREG(stat_result.st_mode) or stat_result.st_size > max_file_size:
                             continue
                         fd = os.open(
                             filename,
@@ -275,7 +276,7 @@ def search_files(query: str, path: str = ".") -> dict:
                         )
                         try:
                             opened = os.fstat(fd)
-                            if not opened.is_file() or opened.st_nlink > 1 or opened.st_size > max_file_size:
+                            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink > 1 or opened.st_size > max_file_size:
                                 continue
                             with os.fdopen(fd, "r", encoding="utf-8") as handle:
                                 fd = None
