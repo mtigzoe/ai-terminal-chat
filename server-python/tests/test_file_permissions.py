@@ -386,9 +386,8 @@ def test_git_show_name_status_patch_allowed(project_root):
     assert "error" not in result
 
 
-def test_persist_config_survives_windows_permission_error(monkeypatch, tmp_path):
-    """If os.replace raises PermissionError (Windows file lock), the
-    fallback direct write must still persist the configuration."""
+def test_persist_config_fails_closed_on_replace_permission_error(monkeypatch, tmp_path):
+    """A replacement failure must not fall back to an unsafe direct write."""
 
     from security import _persist_config
 
@@ -409,8 +408,8 @@ def test_persist_config_survives_windows_permission_error(monkeypatch, tmp_path)
     monkeypatch.setattr(os, "replace", mock_replace)
 
     payload = {"provider": "gemini", "model": "gemini-2.0-flash"}
-    _persist_config(payload)
+    with pytest.raises(PermissionError):
+        _persist_config(payload)
 
-    data = json.loads(config_file.read_text(encoding="utf-8"))
-    assert data["provider"] == "gemini"
-    assert data["model"] == "gemini-2.0-flash"
+    assert not config_file.exists()
+    assert not list(tmp_path.glob("config-*.tmp"))
