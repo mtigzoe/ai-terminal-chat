@@ -1035,26 +1035,37 @@ def run_command(command: str, confirm: bool = False) -> dict:
                         f"Allowed subcommands: {sorted(ISOLATED_GIT_SUBCOMMANDS)}"
                     )
                 }
+            # Route generic git through the same isolation boundary as dedicated
+            # git_* tools (config/SSH/pager overrides). Plain run_cancellable
+            # would honor repo-local hooks, filters, and credential helpers.
+            try:
+                result = _run_git(args[1:], timeout=60)
+            except SubprocessCancelled:
+                return {"error": "Command cancelled.", "cancelled": True}
+            except FileNotFoundError:
+                return {"error": "git is not installed or not on PATH."}
+            except subprocess.TimeoutExpired:
+                return {"error": "Command timed out after 60 seconds."}
+        else:
+            # `pwd` is not a standalone executable on Windows.
+            # Translate to `cmd /c cd`, which prints the current directory.
+            if os.name == "nt" and args and args[0].lower() == "pwd":
+                args = ["cmd", "/c", "cd"]
 
-        # `pwd` is not a standalone executable on Windows.
-        # Translate to `cmd /c cd`, which prints the current directory.
-        if os.name == "nt" and args and args[0].lower() == "pwd":
-            args = ["cmd", "/c", "cd"]
-        
-        # `ls` is a PowerShell alias on Windows, not an executable.
-        # Use the native cmd.exe directory command while preserving
-        # `ls` as the cross-platform command exposed to the agent.
-        if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
-            args = ["cmd", "/c", "dir", *args[1:]]
+            # `ls` is a PowerShell alias on Windows, not an executable.
+            # Use the native cmd.exe directory command while preserving
+            # `ls` as the cross-platform command exposed to the agent.
+            if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
+                args = ["cmd", "/c", "dir", *args[1:]]
 
-        try:
-            result = run_cancellable(
-                args,
-                cwd=PROJECT_ROOT,
-                timeout=60,
-            )
-        except SubprocessCancelled:
-            return {"error": "Command cancelled.", "cancelled": True}
+            try:
+                result = run_cancellable(
+                    args,
+                    cwd=PROJECT_ROOT,
+                    timeout=60,
+                )
+            except SubprocessCancelled:
+                return {"error": "Command cancelled.", "cancelled": True}
 
         # Cap output so a noisy command can't blow up the context window.
         max_output = 20_000
