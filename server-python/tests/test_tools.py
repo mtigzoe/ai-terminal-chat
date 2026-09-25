@@ -683,6 +683,38 @@ def test_git_commit_requires_confirmation(git_repo):
     assert result.get("commit_message") == "update file"
 
 
+def test_git_commit_rejects_staged_file_outside_selected_paths(git_repo_with_history):
+    """A commit must revalidate the staged set after the confirmation boundary."""
+
+    security.set_allowed_read_paths(["README.md"])
+    try:
+        subprocess.run(["git", "add", "README.md", "other.md"], cwd=git_repo_with_history, check=True)
+        result = tools.git_commit("commit both", confirm=True)
+        assert "error" in result
+        assert "outside the agent selected paths" in result["error"]
+        assert subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=git_repo_with_history,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip().splitlines() == ["README.md", "other.md"]
+    finally:
+        security.clear_allowed_read_paths()
+
+
+def test_git_commit_rejects_sensitive_staged_file(git_repo_with_history):
+    (git_repo_with_history / "secrets.txt").write_text("secret\n")
+    subprocess.run(["git", "add", "secrets.txt"], cwd=git_repo_with_history, check=True)
+    security.set_allowed_read_paths(["secrets.txt"])
+    try:
+        result = tools.git_commit("commit secret", confirm=True)
+        assert "error" in result
+        assert "sensitive" in result["error"].lower()
+    finally:
+        security.clear_allowed_read_paths()
+
+
 def test_git_commit_confirm_true_commits(git_repo):
     (git_repo / "file.txt").write_text("hello\n")
     subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
