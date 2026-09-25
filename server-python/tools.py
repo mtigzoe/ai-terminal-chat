@@ -2128,7 +2128,10 @@ def _validate_commit_scope() -> dict | None:
     """
 
     allowed = get_allowed_read_paths()
-    if allowed is None:
+    # An empty selection is the existing unrestricted commit mode: the
+    # Project page sends [] when no files are actively selected. Preserve
+    # that behavior while enforcing scope whenever paths are selected.
+    if not allowed:
         return None
 
     try:
