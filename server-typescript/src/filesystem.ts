@@ -111,7 +111,15 @@ export function listFiles(inputPath = "."): ListFilesResult {
       );
     }
 
-    const readTarget = directoryFd ?? directory;
+    // Node's readdirSync typings/runtime accept path-like values rather than
+    // raw directory FDs. On Linux, /proc/self/fd/<fd> names the already-open
+    // directory object, so enumeration remains pinned to that object. On
+    // other POSIX platforms, use the validated pathname (the same limitation
+    // as the Python fallback on platforms without handle-relative APIs).
+    const readTarget =
+      directoryFd !== undefined && process.platform === "linux"
+        ? `/proc/self/fd/${directoryFd}`
+        : directory;
     entries = readdirSync(readTarget, { withFileTypes: true })
       .map((dirent): FileEntry | null => {
         let isDirectory: boolean;
