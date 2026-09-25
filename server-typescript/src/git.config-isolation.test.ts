@@ -547,15 +547,11 @@ test("atomic Git config replacement does not follow a raced symlink", () => {
   const target = join(dir, "config");
   const sentinel = join(dir, "sentinel");
   try {
-    writeFileSync(sentinel, "sentinel
-", "utf8");
+    writeFileSync(sentinel, "sentinel\\n", "utf8");
     symlinkSync(sentinel, target);
-    atomicReplaceTextForTests(target, "safe
-");
-    assert.equal(readFileSync(target, "utf8"), "safe
-");
-    assert.equal(readFileSync(sentinel, "utf8"), "sentinel
-");
+    atomicReplaceTextForTests(target, "safe\\n");
+    assert.equal(readFileSync(target, "utf8"), "safe\\n");
+    assert.equal(readFileSync(sentinel, "utf8"), "sentinel\\n");
     assert.equal(lstatSync(target).isSymbolicLink(), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
