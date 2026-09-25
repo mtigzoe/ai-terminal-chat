@@ -452,10 +452,38 @@ export async function gitRestore(path: string, staged = false, confirm = false):
 async function validateCommitScope(): Promise<Record<string, unknown> | null> {
   const allowed = getAllowedReadPaths();
   if (allowed === undefined) return null;
-  const result = await runGit(["diff", "--cached", "--name-only", "-z"], GIT_COMMIT_TIMEOUT_MS);
+  // `--name-only` collapses an exact-content rename into a single record
+  // containing only the destination path. Git detects exact-content renames
+  // by default (no -M required - verified empirically), so a staged rename
+  // that moves a sensitive or out-of-scope file to an innocuous new name
+  // would never surface its original path here: is_sensitive_path()/
+  // isReadAllowed() would only ever see the harmless-looking new name,
+  // letting the original file's content be committed under a new identity.
+  // `--name-status -z` instead reports a 3-field record ("R100", oldPath,
+  // newPath) for renames and copies, so both sides of the move can be
+  // validated below.
+  const result = await runGit(["diff", "--cached", "--name-status", "-z"], GIT_COMMIT_TIMEOUT_MS);
   if (result.code !== 0) return { error: result.stderr.trim() || "Could not inspect staged files." };
-  const staged = result.stdout.split("\0").filter(Boolean);
-  for (const stagedPath of staged) {
+  const fields = result.stdout.split("\0").filter((field) => field.length > 0);
+  const stagedPaths = new Set<string>();
+  for (let i = 0; i < fields.length; ) {
+    const status = fields[i];
+    if (status === undefined) break;
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const oldPath = fields[i + 1];
+      const newPath = fields[i + 2];
+      if (oldPath === undefined || newPath === undefined) return { error: "Could not parse staged rename/copy entry." };
+      stagedPaths.add(oldPath);
+      stagedPaths.add(newPath);
+      i += 3;
+    } else {
+      const path = fields[i + 1];
+      if (path === undefined) return { error: "Could not parse staged file entry." };
+      stagedPaths.add(path);
+      i += 2;
+    }
+  }
+  for (const stagedPath of stagedPaths) {
     if (!isReadAllowed(stagedPath)) return { error: "Refusing to commit staged file outside the agent selected paths: " + stagedPath };
     try { if (isSensitivePath(safePath(stagedPath))) return { error: "Refusing to commit sensitive file: " + stagedPath }; } catch { return { error: "Refusing to commit invalid staged path: " + stagedPath }; }
   }

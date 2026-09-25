@@ -229,4 +229,68 @@ describe("git tool security", () => {
         "Refusing to commit staged file outside the agent selected paths: secret.txt",
     });
   });
+
+  it("refuses a commit that renames a sensitive file into an innocuous, in-scope name", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, ".env"), "API_KEY=super-secret\\n");
+    execFileSync("git", ["add", ".env"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+
+    // Staged by a plain `git mv` - an exact-content rename, which Git
+    // detects by default. Both the old (sensitive) and new (innocuous)
+    // names are within the agent's selected scope, isolating the check to
+    // sensitivity rather than scope.
+    execFileSync("git", ["mv", ".env", "notes.txt"], { cwd: root });
+
+    const result = await runWithAllowedReadPaths([".env", "notes.txt"], () =>
+      gitCommit("test commit", false),
+    );
+
+    expect(result).toEqual({
+      error: "Refusing to commit sensitive file: .env",
+    });
+
+    // The rename must still be sitting in the index, unmerged into history.
+    const log = execFileSync("git", ["log", "--oneline"], { cwd: root, encoding: "utf8" });
+    expect(log.trim().split(/\r?\n/)).toHaveLength(1);
+  });
+
+  it("refuses a commit that renames a file from outside the agent selection into an in-scope name", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, "unselected.txt"), "not authorized for the agent to read\\n");
+    execFileSync("git", ["add", "unselected.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+
+    // Rename a file the agent was never granted read access to into a name
+    // that *is* in scope. Neither name looks sensitive, isolating the check
+    // to scope enforcement rather than sensitivity.
+    execFileSync("git", ["mv", "unselected.txt", "renamed-in-scope.txt"], { cwd: root });
+
+    const result = await runWithAllowedReadPaths(["renamed-in-scope.txt"], () =>
+      gitCommit("test commit", false),
+    );
+
+    expect(result).toEqual({
+      error:
+        "Refusing to commit staged file outside the agent selected paths: unselected.txt",
+    });
+  });
 });
