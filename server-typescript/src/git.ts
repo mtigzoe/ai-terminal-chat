@@ -259,13 +259,13 @@ export function stripDangerousGitConfig(content: string): string {
 
 function atomicReplaceText(targetPath: string, content: string): void {
   const dir = dirname(targetPath);
-  const tempPath = join(dir, `.git-config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+  const tempDir = mkdtempSync(join(dir, ".git-config-tmp-"));
+  const tempPath = join(tempDir, "config.tmp");
   try {
     writeFileSync(tempPath, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
     renameSync(tempPath, targetPath);
-  } catch (error) {
-    try { rmSync(tempPath, { force: true }); } catch { /* best effort */ }
-    throw error;
+  } finally {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 }
 
