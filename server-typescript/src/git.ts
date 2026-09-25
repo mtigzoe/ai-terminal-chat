@@ -6,7 +6,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -257,6 +257,18 @@ export function stripDangerousGitConfig(content: string): string {
   return out2.join("\n");
 }
 
+function atomicReplaceText(targetPath: string, content: string): void {
+  const dir = dirname(targetPath);
+  const tempPath = join(dir, `.git-config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+  try {
+    writeFileSync(tempPath, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    renameSync(tempPath, targetPath);
+  } catch (error) {
+    try { rmSync(tempPath, { force: true }); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
 async function withSanitizedGitConfig<T>(fn: () => Promise<T>): Promise<T> {
   return gitOperationMutex.runExclusive(() => withSanitizedGitConfigUnlocked(fn));
 }
@@ -301,7 +313,7 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
     }
     const changed = originals.filter((entry) => entry.sanitized !== entry.content);
     if (changed.length === 0) return fn();
-    for (const entry of changed) writeFileSync(entry.path, entry.sanitized, "utf8");
+    for (const entry of changed) atomicReplaceText(entry.path, entry.sanitized);
     try { return await fn(); }
     finally {
       for (const entry of changed) {
@@ -317,7 +329,7 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
           }
           const current = readFileSync(entry.path, "utf8");
           if (current !== entry.sanitized) continue;
-          writeFileSync(entry.path, entry.content, "utf8");
+          atomicReplaceText(entry.path, entry.content);
         } catch {
           // Preserve the current file if it cannot be safely restored.
         }
