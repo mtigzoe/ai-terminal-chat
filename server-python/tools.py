@@ -720,7 +720,10 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     """
 
     allowed = get_allowed_read_paths()
-    if allowed is None:
+    # An empty selection is the existing unrestricted commit mode: the
+    # Project page sends [] when no files are actively selected. Preserve
+    # that behavior while enforcing scope whenever paths are selected.
+    if not allowed:
         return None
 
     if not _command_reads_file_contents(command):
@@ -1880,34 +1883,40 @@ def git_add(path: str, confirm: bool = False) -> dict:
         }
 
     try:
-        # Never invoke `git add` here: repository .gitattributes can attach
+        # Never invoke git add here: repository .gitattributes can attach
         # arbitrary filter.clean/filter.process commands. Hash the exact file
         # bytes with --no-filters and update the index directly instead.
-        mode = "100755" if (file_path.stat().st_mode & 0o111) else "100644"
-        payload = file_path.read_bytes()
-        hashed = _run_git(
-            ["hash-object", "-w", "--stdin", "--no-filters"],
-            timeout=15,
-            input_text=payload.decode("utf-8", errors="surrogateescape"),
-        )
-        if hashed.returncode != 0:
-            return {"error": f"git add failed: {hashed.stderr.strip() or hashed.stdout.strip()}"}
-        oid = hashed.stdout.strip()
-        if not re.fullmatch(r"[0-9a-f]{40,64}", oid, re.IGNORECASE):
-            return {"error": "git add failed: unexpected hash-object output."}
-        indexed = _run_git(
-            ["update-index", "--add", "--cacheinfo", f"{mode},{oid},{rel_path}"],
-            timeout=15,
-        )
-        if indexed.returncode != 0:
-            return {"error": f"git add failed: {indexed.stderr.strip() or indexed.stdout.strip()}"}
-    except FileNotFoundError:
-        return {"error": "git is not installed or not on PATH."}
-    except subprocess.TimeoutExpired:
-        return {"error": "Staging the file timed out."}
-    except Exception as exc:
-        return {"error": f"Could not stage file: {exc}"}
-
+        # Serialize the index mutation with confirmed commit scope validation
+        # so an in-process concurrent git_add cannot race a commit.
+        with _GIT_OPERATION_LOCK:
+            # Never invoke `git add` here: repository .gitattributes can attach
+            # arbitrary filter.clean/filter.process commands. Hash the exact file
+            # bytes with --no-filters and update the index directly instead.
+            mode = "100755" if (file_path.stat().st_mode & 0o111) else "100644"
+            payload = file_path.read_bytes()
+            hashed = _run_git(
+                ["hash-object", "-w", "--stdin", "--no-filters"],
+                timeout=15,
+                input_text=payload.decode("utf-8", errors="surrogateescape"),
+            )
+            if hashed.returncode != 0:
+                return {"error": f"git add failed: {hashed.stderr.strip() or hashed.stdout.strip()}"}
+            oid = hashed.stdout.strip()
+            if not re.fullmatch(r"[0-9a-f]{40,64}", oid, re.IGNORECASE):
+                return {"error": "git add failed: unexpected hash-object output."}
+            indexed = _run_git(
+                ["update-index", "--add", "--cacheinfo", f"{mode},{oid},{rel_path}"],
+                timeout=15,
+            )
+            if indexed.returncode != 0:
+                return {"error": f"git add failed: {indexed.stderr.strip() or indexed.stdout.strip()}"}
+        except FileNotFoundError:
+            return {"error": "git is not installed or not on PATH."}
+        except subprocess.TimeoutExpired:
+            return {"error": "Staging the file timed out."}
+        except Exception as exc:
+            return {"error": f"Could not stage file: {exc}"}
+    
     return {"path": rel_path, "staged": True}
 
 
@@ -2184,9 +2193,35 @@ def git_commit(message: str, confirm: bool = False) -> dict:
     message = message.strip()
 
     if confirm:
-        scope_error = _validate_commit_scope()
-        if scope_error is not None:
-            return scope_error
+        # Keep staged-scope validation and the commit itself in one critical
+        # section. git_add uses the same lock around its index mutation, so
+        # concurrent in-process tool calls cannot add an out-of-scope path
+        # between validation and commit.
+        with _GIT_OPERATION_LOCK:
+            scope_error = _validate_commit_scope()
+            if scope_error is not None:
+                return scope_error
+
+            try:
+                result = _run_git(["commit", "-m", message], timeout=GIT_COMMIT_TIMEOUT)
+            except FileNotFoundError:
+                return {"error": "git is not installed or not on PATH."}
+            except subprocess.TimeoutExpired:
+                return {
+                    "error": (
+                        f"git commit timed out after {GIT_COMMIT_TIMEOUT} seconds."
+                    )
+                }
+            except Exception as exc:
+                return {"error": f"Could not create commit: {exc}"}
+
+            if result.returncode != 0:
+                return {"error": result.stderr.strip() or result.stdout.strip()}
+
+            return {
+                "committed": True,
+                "output": result.stdout.strip(),
+            }
 
     if not confirm:
         diff_result = git_diff(staged=True)
@@ -2212,23 +2247,7 @@ def git_commit(message: str, confirm: bool = False) -> dict:
             ),
         }
 
-    try:
-        result = _run_git(["commit", "-m", message], timeout=GIT_COMMIT_TIMEOUT)
-    except FileNotFoundError:
-        return {"error": "git is not installed or not on PATH."}
-    except subprocess.TimeoutExpired:
-        return {
-            "error": (
-                f"git commit timed out after {GIT_COMMIT_TIMEOUT} seconds."
-            )
-        }
-    except Exception as exc:
-        return {"error": f"Could not run git commit: {exc}"}
 
-    if result.returncode != 0:
-        return {"error": result.stderr.strip() or "git commit failed."}
-
-    output = result.stdout or ""
     return {
         "output": output[:GIT_COMMIT_MAX_CHARS],
         "commit_message": message,
