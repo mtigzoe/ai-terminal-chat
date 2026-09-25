@@ -114,11 +114,11 @@ def _load_config() -> dict:
 def _persist_config(payload: dict) -> None:
     """Persist the full configuration dict atomically outside the project.
 
-    On Windows, ``os.replace`` can raise ``PermissionError`` when the
-    target is briefly locked by another process (antivirus, indexer, or
-    a lingering file handle). In that case we fall back to a direct
-    write so config saves still succeed. Atomicity is a durability
-    optimization, not a correctness requirement here.
+    If ``os.replace`` fails (including a transient Windows lock), the
+    save fails closed rather than falling back to a pathname-based write.
+    The configuration contains authorization-sensitive settings, so
+    preserving the atomic replacement boundary is more important than
+    bypassing a target-file lock.
     """
 
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
