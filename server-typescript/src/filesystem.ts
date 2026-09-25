@@ -266,8 +266,9 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
     } catch {
       return;
     } finally {
-      // Keep the FD open until readdirSync has completed. Recursive child
-      // directories are independently pinned when walk() enters them.
+      if (directoryFd !== undefined) {
+        closeSync(directoryFd);
+      }
     }
 
     const { subdirs, files } = planWalk(dir, dirents);
@@ -331,9 +332,6 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
       if (truncated) break;
     }
 
-    if (directoryFd !== undefined) {
-      closeSync(directoryFd);
-    }
   };
 
   walk(directory);
