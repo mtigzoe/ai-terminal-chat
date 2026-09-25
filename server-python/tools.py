@@ -1135,6 +1135,26 @@ def _git_config_files() -> list[Path]:
     return paths
 
 
+def _atomic_replace_text(path: Path, content: str) -> None:
+    """Replace a file without following a raced symlink at the target path."""
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
 def _strip_dangerous_git_config(content: str) -> str:
     """Remove URL/filter/include sections before network Git operations."""
     out: list[str] = []
@@ -1159,13 +1179,13 @@ def _sanitized_git_config():
                 original = path.read_text(encoding="utf-8")
                 sanitized = _strip_dangerous_git_config(original)
                 if sanitized != original:
-                    path.write_text(sanitized, encoding="utf-8")
+                    _atomic_replace_text(path, sanitized)
                     backups.append((path, original))
             yield
         finally:
             for path, original in reversed(backups):
                 try:
-                    path.write_text(original, encoding="utf-8")
+                    _atomic_replace_text(path, original)
                 except OSError:
                     pass
 
