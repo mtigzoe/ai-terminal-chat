@@ -720,10 +720,7 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     """
 
     allowed = get_allowed_read_paths()
-    # An empty selection is the existing unrestricted commit mode: the
-    # Project page sends [] when no files are actively selected. Preserve
-    # that behavior while enforcing scope whenever paths are selected.
-    if not allowed:
+    if allowed is None:
         return None
 
     if not _command_reads_file_contents(command):
@@ -1883,15 +1880,12 @@ def git_add(path: str, confirm: bool = False) -> dict:
         }
 
     try:
-        # Never invoke git add here: repository .gitattributes can attach
+        # Never invoke `git add` here: repository .gitattributes can attach
         # arbitrary filter.clean/filter.process commands. Hash the exact file
         # bytes with --no-filters and update the index directly instead.
         # Serialize the index mutation with confirmed commit scope validation
         # so an in-process concurrent git_add cannot race a commit.
         with _GIT_OPERATION_LOCK:
-            # Never invoke `git add` here: repository .gitattributes can attach
-            # arbitrary filter.clean/filter.process commands. Hash the exact file
-            # bytes with --no-filters and update the index directly instead.
             mode = "100755" if (file_path.stat().st_mode & 0o111) else "100644"
             payload = file_path.read_bytes()
             hashed = _run_git(
@@ -1910,13 +1904,13 @@ def git_add(path: str, confirm: bool = False) -> dict:
             )
             if indexed.returncode != 0:
                 return {"error": f"git add failed: {indexed.stderr.strip() or indexed.stdout.strip()}"}
-        except FileNotFoundError:
-            return {"error": "git is not installed or not on PATH."}
-        except subprocess.TimeoutExpired:
-            return {"error": "Staging the file timed out."}
-        except Exception as exc:
-            return {"error": f"Could not stage file: {exc}"}
-    
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"error": "Staging the file timed out."}
+    except Exception as exc:
+        return {"error": f"Could not stage file: {exc}"}
+
     return {"path": rel_path, "staged": True}
 
 
@@ -2247,12 +2241,6 @@ def git_commit(message: str, confirm: bool = False) -> dict:
             ),
         }
 
-
-    return {
-        "output": output[:GIT_COMMIT_MAX_CHARS],
-        "commit_message": message,
-        "committed": True,
-    }
 
 
 def git_push(remote: str = "", branch: str = "", confirm: bool = False) -> dict:
