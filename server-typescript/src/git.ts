@@ -257,6 +257,10 @@ export function stripDangerousGitConfig(content: string): string {
   return out2.join("\n");
 }
 
+export function atomicReplaceTextForTests(targetPath: string, content: string): void {
+  atomicReplaceText(targetPath, content);
+}
+
 function atomicReplaceText(targetPath: string, content: string): void {
   const dir = dirname(targetPath);
   const tempDir = mkdtempSync(join(dir, ".git-config-tmp-"));
