@@ -15,7 +15,7 @@
 // matching the ToolResult shapes in types.ts, so these can be wired
 // directly into the tool registry in tools.ts (Phase 5) without adaptation.
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, statSync, realpathSync, constants as fsConstants } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -247,11 +247,27 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
   const walk = (dir: string): void => {
     if (truncated) return;
 
+    let directoryFd: number | undefined;
     let dirents: Dirent[];
     try {
-      dirents = readdirSync(dir, { withFileTypes: true });
+      if (process.platform === "linux") {
+        directoryFd = openSync(
+          dir,
+          fsConstants.O_RDONLY |
+            (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
+            (typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0),
+        );
+        const pinnedPath = realpathSync(`/proc/self/fd/${directoryFd}`);
+        if (!isPathWithinRoot(root, pinnedPath)) return;
+        dirents = readdirSync(`/proc/self/fd/${directoryFd}`, { withFileTypes: true });
+      } else {
+        dirents = readdirSync(dir, { withFileTypes: true });
+      }
     } catch {
       return;
+    } finally {
+      // Keep the FD open until readdirSync has completed. Recursive child
+      // directories are independently pinned when walk() enters them.
     }
 
     const { subdirs, files } = planWalk(dir, dirents);
@@ -312,7 +328,11 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
       const childPath = join(dir, name);
       if (!isListedPathAllowed(childPath, true)) continue;
       walk(childPath);
-      if (truncated) return;
+      if (truncated) break;
+    }
+
+    if (directoryFd !== undefined) {
+      closeSync(directoryFd);
     }
   };
 
