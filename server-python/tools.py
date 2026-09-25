@@ -2115,6 +2115,53 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
     return {"path": rel_path, "restored": not staged, "unstaged": staged}
 
 
+def _validate_commit_scope() -> dict | None:
+    """Reject commits containing staged files outside the active read scope.
+
+    git_add has its own confirmation and selection checks, but the index can
+    also be changed by an external Git process between tool calls. A commit
+    confirmation must therefore revalidate the complete staged set at commit
+    time rather than trusting what was staged earlier.
+    """
+
+    allowed = get_allowed_read_paths()
+    if allowed is None:
+        return None
+
+    try:
+        result = _run_git(
+            ["diff", "--cached", "--name-only", "-z"],
+            timeout=GIT_COMMIT_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"error": "Inspecting staged files timed out."}
+    except Exception as exc:
+        return {"error": f"Could not inspect staged files: {exc}"}
+
+    if result.returncode != 0:
+        return {"error": result.stderr.strip() or "Could not inspect staged files."}
+
+    staged = [name for name in (result.stdout or "").split("\\0") if name]
+    for staged_path in staged:
+        if not is_read_allowed(staged_path):
+            return {
+                "error": (
+                    "Refusing to commit staged file outside the agent "
+                    f"selected paths: {staged_path}"
+                )
+            }
+        try:
+            staged_resolved = safe_path(staged_path)
+        except ValueError:
+            return {"error": f"Refusing to commit invalid staged path: {staged_path}"}
+        if is_sensitive_path(staged_resolved):
+            return {"error": f"Refusing to commit sensitive file: {staged_path}"}
+
+    return None
+
+
 def git_commit(message: str, confirm: bool = False) -> dict:
     """Commit staged changes with a message.
 
@@ -2135,6 +2182,11 @@ def git_commit(message: str, confirm: bool = False) -> dict:
         return {"error": "A commit message is required."}
 
     message = message.strip()
+
+    if confirm:
+        scope_error = _validate_commit_scope()
+        if scope_error is not None:
+            return scope_error
 
     if not confirm:
         diff_result = git_diff(staged=True)
