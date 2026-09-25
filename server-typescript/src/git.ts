@@ -449,7 +449,7 @@ export async function gitRestore(path: string, staged = false, confirm = false):
   } catch (exc) { return { error: errorText(exc) }; }
 }
 
-async function validateCommitScope(): Promise<Record<string, unknown> | null> {
+async function validateCommitScope(holdLock = false): Promise<Record<string, unknown> | null> {
   const allowed = getAllowedReadPaths();
   if (allowed === undefined) return null;
   // `--name-only` collapses an exact-content rename into a single record
@@ -462,7 +462,7 @@ async function validateCommitScope(): Promise<Record<string, unknown> | null> {
   // `--name-status -z` instead reports a 3-field record ("R100", oldPath,
   // newPath) for renames and copies, so both sides of the move can be
   // validated below.
-  const result = await runGit(["diff", "--cached", "--name-status", "-z"], GIT_COMMIT_TIMEOUT_MS);
+  const result = await runGit(["diff", "--cached", "--name-status", "-z"], GIT_COMMIT_TIMEOUT_MS, holdLock);
   if (result.code !== 0) return { error: result.stderr.trim() || "Could not inspect staged files." };
   const fields = result.stdout.split("\0").filter((field) => field.length > 0);
   const stagedPaths = new Set<string>();
@@ -490,6 +490,43 @@ async function validateCommitScope(): Promise<Record<string, unknown> | null> {
   return null;
 }
 
-export async function gitCommit(message: string, confirm = false): Promise<Record<string, unknown>> { if (!message || !message.trim()) return { error: "A commit message is required." }; const trimmedMessage = message.trim(); const scopeError = await validateCommitScope(); if (scopeError) return scopeError; if (!confirm) { const diffResult = await gitDiff("", true); let diffText = ""; if (diffResult && typeof diffResult === "object" && "diff" in diffResult) diffText = String(diffResult.diff ?? ""); if (!diffText) return { error: "No staged changes to commit." }; const preview = diffText.slice(0, PREVIEW_CHAR_LIMIT); const previewTruncated = diffText.length > PREVIEW_CHAR_LIMIT; return { requires_confirmation: true, commit_message: trimmedMessage, preview, preview_truncated: previewTruncated, message: `About to commit with message: '${trimmedMessage}'. This creates a new commit in the repository. Confirm to proceed.` }; } try { const identity = await getSafeCommitIdentity(); const identityArgs: string[] = []; if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`); if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`); const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." }; return { output: (result.stdout || "").slice(0, GIT_COMMIT_MAX_CHARS), commit_message: trimmedMessage, committed: true }; } catch (exc) { return { error: errorText(exc) }; } }
+export async function gitCommit(message: string, confirm = false): Promise<Record<string, unknown>> {
+  if (!message || !message.trim()) return { error: "A commit message is required." };
+  const trimmedMessage = message.trim();
+
+  if (!confirm) {
+    const scopeError = await validateCommitScope();
+    if (scopeError) return scopeError;
+    const diffResult = await gitDiff("", true);
+    let diffText = "";
+    if (diffResult && typeof diffResult === "object" && "diff" in diffResult) diffText = String(diffResult.diff ?? "");
+    if (!diffText) return { error: "No staged changes to commit." };
+    const preview = diffText.slice(0, PREVIEW_CHAR_LIMIT);
+    const previewTruncated = diffText.length > PREVIEW_CHAR_LIMIT;
+    return { requires_confirmation: true, commit_message: trimmedMessage, preview, preview_truncated: previewTruncated, message: `About to commit with message: '${trimmedMessage}'. This creates a new commit in the repository. Confirm to proceed.` };
+  }
+
+  // Hold the git operation lock across the scope re-check AND the actual
+  // `git commit` invocation. Previously these were two separate runGit()
+  // calls, each independently acquiring and releasing the mutex - leaving a
+  // window where a concurrent git_add/git_restore/git_fetch/git_pull call
+  // could change the staged index after validateCommitScope() approved a
+  // snapshot but before `git commit` captured the (possibly different)
+  // resulting tree. Validating and committing under one held lock closes
+  // that in-process TOCTOU window.
+  return gitOperationMutex.runExclusive(async () => {
+    const scopeError = await validateCommitScope(true);
+    if (scopeError) return scopeError;
+    try {
+      const identity = await getSafeCommitIdentity();
+      const identityArgs: string[] = [];
+      if (identity.name) identityArgs.push("-c", `user.name=${identity.name}`);
+      if (identity.email) identityArgs.push("-c", `user.email=${identity.email}`);
+      const result = await runGit([...identityArgs, "commit", "-m", trimmedMessage], GIT_COMMIT_TIMEOUT_MS, true);
+      if (result.code !== 0) return { error: result.stderr.trim() || "git commit failed." };
+      return { output: (result.stdout || "").slice(0, GIT_COMMIT_MAX_CHARS), commit_message: trimmedMessage, committed: true };
+    } catch (exc) { return { error: errorText(exc) }; }
+  });
+}
 
 export async function gitPush(remote = "", branch = "", confirm = false): Promise<Record<string, unknown>> { if (!confirm) return { requires_confirmation: true, remote: remote || "default", branch: branch || "current", message: `This will push commits to '${remote || "default"}' on branch '${branch || "current branch"}'. This updates the remote repository. Confirm to proceed.` }; const args = ["push", "--no-recurse-submodules", "--receive-pack=git-receive-pack"]; if (remote) { const validation = safeValidate(validateGitRemote, remote); if ("error" in validation) return validation; args.push("--", validation.value); } if (branch) { const validation = safeValidate(validateGitBranch, branch); if ("error" in validation) return validation; args.push(validation.value); } try { return await withSanitizedGitConfig(async () => { const result = await runGit(args, GIT_PUSH_TIMEOUT_MS, true); if (result.code !== 0) return { error: result.stderr.trim() || "git push failed." }; return { output: (result.stdout || "").slice(0, GIT_PUSH_MAX_CHARS), remote: remote || "default", branch: branch || "current", pushed: true }; }); } catch (exc) { return { error: errorText(exc) }; } }

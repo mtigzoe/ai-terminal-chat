@@ -293,4 +293,71 @@ describe("git tool security", () => {
         "Refusing to commit staged file outside the agent selected paths: unselected.txt",
     });
   });
+
+  it("validates scope and commits atomically - a concurrent stage cannot land between the check and the commit", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, "allowed.txt"), "ok\n");
+    execFileSync("git", ["add", "allowed.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    fs.writeFileSync(path.join(root, "allowed.txt"), "changed\n");
+    execFileSync("git", ["add", "allowed.txt"], { cwd: root });
+
+    // gitCommit() reads commit identity from local/global git config via
+    // getSafeCommitIdentity(), which this throwaway repo does not have set
+    // locally; supply it via env vars (which that function also honors) so
+    // the commit itself can succeed independent of ambient git config.
+    const savedEnv = {
+      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME,
+      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
+      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME,
+      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL,
+    };
+    process.env.GIT_AUTHOR_NAME = "Test";
+    process.env.GIT_AUTHOR_EMAIL = "test@example.com";
+    process.env.GIT_COMMITTER_NAME = "Test";
+    process.env.GIT_COMMITTER_EMAIL = "test@example.com";
+
+    // Start gitCommit(confirm: true) but do not await it yet.
+    const commitPromise = runWithAllowedReadPaths(["allowed.txt"], () =>
+      gitCommit("legit change", true),
+    );
+
+    // In the same synchronous tick (before any await lets gitCommit's own
+    // work run), stage a file the agent was never authorized to touch, via
+    // the same git-operation mutex gitCommit uses. Previously gitCommit's
+    // scope check and its actual `git commit` were two independent lock
+    // acquisitions, leaving a real window for a concurrent mutation like
+    // this one to land in between - staged, never validated, and then
+    // swept into the commit anyway. With both steps reserved under one
+    // lock acquisition, this add is guaranteed to run either fully before
+    // or fully after gitCommit's whole check-then-commit sequence.
+    fs.writeFileSync(path.join(root, "smuggled.txt"), "never authorized\n");
+    const addPromise = runIsolatedGit(["add", "smuggled.txt"]);
+
+    const [commitResult] = await Promise.all([commitPromise, addPromise]);
+    Object.assign(process.env, savedEnv);
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+    }
+
+    expect(commitResult).toMatchObject({ committed: true });
+    const committedFiles = execFileSync(
+      "git",
+      ["show", "--name-only", "--format=", "HEAD"],
+      { cwd: root, encoding: "utf8" },
+    )
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+    expect(committedFiles).toEqual(["allowed.txt"]);
+  });
 });

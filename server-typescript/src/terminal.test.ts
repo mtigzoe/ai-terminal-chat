@@ -370,6 +370,36 @@ test("git branch -dfoo (unknown flag) is rejected as unknown command", async () 
   assert.ok(isToolError(result));
 });
 
+// git restore has a dedicated, hardened tool (gitRestore() in git.ts) that
+// enforces isReadAllowed() scope and requires explicit confirmation. It must
+// never be reachable as a raw terminal command, which would bypass both.
+test("git restore is forbidden as a terminal allowlist prefix", () => {
+  assert.ok(
+    isForbiddenPrefix("git restore"),
+    "git restore must not be addable to the terminal command allowlist",
+  );
+});
+
+test("git restore --staged is forbidden as a terminal allowlist prefix", () => {
+  assert.ok(isForbiddenPrefix("git restore --staged"));
+});
+
+test("addAllowedCommand rejects git restore", () => {
+  assert.throws(() => addAllowedCommand("git restore"));
+});
+
+test("git restore is rejected even if present in a persisted/forced allowlist", async () => {
+  // Simulates a config file that already contains "git restore" from before
+  // this prefix was denylisted - commandBlocked() must still refuse it
+  // regardless of allowlist state.
+  __setAllowedCommandsForTests(["git restore"]);
+  const result = await runCommand("git restore README.md");
+  assert.ok(isToolError(result), "git restore must be blocked at runtime regardless of allowlist state");
+  if (isToolError(result)) {
+    assert.match(result.error, /blocked for safety/i);
+  }
+});
+
 test("read-only git branch --list is allowed", async () => {
   // Need a git repo for this to work
   const repoDir = mkdtempSync(join(tmpdir(), "git-branch-list-"));

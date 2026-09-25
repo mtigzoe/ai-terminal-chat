@@ -86,6 +86,14 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "git commit",
   "git pull",
   "git add",
+  // A dedicated, hardened tool (gitRestore() in git.ts) already exposes
+  // restore with scope enforcement (isReadAllowed) and an explicit confirm
+  // step, exactly like git_add/git_commit above. Allowing "git restore" as
+  // a terminal prefix would let it run straight through runIsolatedGit,
+  // bypassing both of those checks: it can discard uncommitted changes (or
+  // unstage) any tracked file, including ones never selected for the agent,
+  // without confirmation.
+  "git restore",
   // Destructive git branch options (read-only "git branch --list" is safe)
   "git branch -d",
   "git branch -D",
@@ -806,6 +814,11 @@ function commandBlocked(command: string): string | null {
     "git commit",
     "git pull",
     "git add",
+    // Defense in depth for a config file that already persisted "git
+    // restore" before it was added to FORBIDDEN_ALLOWED_COMMAND_PREFIXES
+    // above (see the comment there) - block it at execution time too,
+    // regardless of allowlist state.
+    "git restore",
   ];
 
   const normalizedCommand = tokens.join(" ").toLowerCase();
