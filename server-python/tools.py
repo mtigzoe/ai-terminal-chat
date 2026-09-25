@@ -946,6 +946,47 @@ def is_command_allowed(command: str) -> bool:
     )
 
 
+def sanitize_git_remote_output(output: str) -> str:
+    """Remove username/password userinfo from Git remote URLs in tool output.
+
+    Mirrors server-typescript sanitizeGitRemoteOutput: keep host/path visible
+    for diagnostics while never exposing credentials embedded in the URL.
+    """
+
+    if not output:
+        return output
+
+    def _strip_userinfo(match: re.Match) -> str:
+        value = match.group(0)
+        try:
+            from urllib.parse import urlsplit, urlunsplit
+
+            parsed = urlsplit(value)
+            if not parsed.username and not parsed.password:
+                return value
+            host = parsed.hostname or ""
+            if parsed.port is not None:
+                host = f"{host}:{parsed.port}"
+            return urlunsplit(
+                (parsed.scheme, host, parsed.path, parsed.query, parsed.fragment)
+            )
+        except Exception:
+            return re.sub(
+                r"^([a-z][a-z0-9+.-]*://)[^/\s]*@",
+                r"\1",
+                value,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+
+    return re.sub(
+        r"\b(?:https?|ssh|git|ftp|ftps)://[^\s]+",
+        _strip_userinfo,
+        output,
+        flags=re.IGNORECASE,
+    )
+
+
 def run_command(command: str, confirm: bool = False) -> dict:
     """Run an allowlisted development command in the project directory.
 
@@ -1060,6 +1101,11 @@ def run_command(command: str, confirm: bool = False) -> dict:
         max_output = 20_000
         stdout = result.stdout or ""
         stderr = result.stderr or ""
+        # Strip embedded remote credentials before model-visible output.
+        if args and args[0].lower() == "git" and len(args) > 1 and args[1].lower() == "remote":
+            stdout = sanitize_git_remote_output(stdout)
+            stderr = sanitize_git_remote_output(stderr)
+
         stdout_truncated = len(stdout) > max_output
         stderr_truncated = len(stderr) > max_output
         truncated = stdout_truncated or stderr_truncated
