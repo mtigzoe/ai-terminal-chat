@@ -229,16 +229,16 @@ def search_files(query: str, path: str = ".") -> dict:
     # prevents a concurrent replacement of the validated root or a traversed
     # child directory from redirecting the search outside PROJECT_ROOT.
     root_fd = _open_pinned_directory(directory)
-    walk_root = directory
-    if root_fd is not None and os.path.isdir("/proc/self/fd"):
-        walk_root = Path(f"/proc/self/fd/{root_fd}/")
-
     try:
         if root_fd is not None:
+            # Walk from the already-open directory descriptor instead of
+            # reopening a /proc path. This keeps the enumeration anchored to
+            # the validated directory even if its pathname is replaced.
             walker = os.fwalk(
-                walk_root,
+                ".",
                 topdown=True,
                 follow_symlinks=False,
+                dir_fd=root_fd,
             )
         else:
             walker = os.walk(directory)
@@ -248,8 +248,7 @@ def search_files(query: str, path: str = ".") -> dict:
                 d for d in dirnames if d not in SEARCH_EXCLUDED_DIR_NAMES
             )
             if root_fd is not None:
-                rel_root = os.path.relpath(root, os.fspath(walk_root))
-                rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
+                rel_root = "" if root == "." else root.replace(os.sep, "/")
             else:
                 rel_root = os.path.relpath(root, os.fspath(directory))
                 rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
