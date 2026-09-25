@@ -11,11 +11,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   rmSync,
   writeFileSync,
   mkdirSync,
   readFileSync,
+  symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, platform } from "node:os";
