@@ -7,7 +7,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtempSync, rmSync, writeFileSync, renameSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath, writeFileWithinProject, openWithinProject } from "./security.ts";
