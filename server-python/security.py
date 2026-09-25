@@ -133,18 +133,11 @@ def _persist_config(payload: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
             handle.write("\n")
-        try:
-            os.replace(temp_name, _CONFIG_FILE)
-        except OSError:
-            # Windows can briefly lock the target file. Fall back to a
-            # direct write, matching TypeScript's behavior. Clean up the
-            # temp file ourselves because we handled the error below.
-            try:
-                os.unlink(temp_name)
-            except OSError:
-                pass
-            with open(_CONFIG_FILE, "w", encoding="utf-8") as target:
-                target.write(f"{json.dumps(payload, indent=2)}\n")
+        # Do not fall back to opening the target pathname directly if the
+        # atomic replacement fails. A direct open follows a replacement
+        # symlink/reparse point and could redirect this authorization-bearing
+        # configuration write to an attacker-selected file. Fail closed.
+        os.replace(temp_name, _CONFIG_FILE)
     except Exception:
         try:
             os.unlink(temp_name)
