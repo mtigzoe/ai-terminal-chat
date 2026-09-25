@@ -231,7 +231,7 @@ def search_files(query: str, path: str = ".") -> dict:
     root_fd = _open_pinned_directory(directory)
     walk_root = directory
     if root_fd is not None and os.path.isdir("/proc/self/fd"):
-        walk_root = Path(f"/proc/self/fd/{root_fd}")
+        walk_root = Path(f"/proc/self/fd/{root_fd}/")
 
     try:
         if root_fd is not None:
