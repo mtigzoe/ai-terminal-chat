@@ -15,7 +15,7 @@
 // matching the ToolResult shapes in types.ts, so these can be wired
 // directly into the tool registry in tools.ts (Phase 5) without adaptation.
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, statSync, constants as fsConstants } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -93,22 +93,60 @@ export function listFiles(inputPath = "."): ListFilesResult {
     return { error: `Not a directory: ${inputPath}` };
   }
 
-  const entries: FileEntry[] = readdirSync(directory, { withFileTypes: true })
-    .map((dirent): FileEntry | null => {
-      let isDirectory: boolean;
-      try {
-        isDirectory = statSync(join(directory, dirent.name)).isDirectory();
-      } catch {
-        isDirectory = dirent.isDirectory();
-      }
+  // On POSIX, pin the validated directory before enumeration so a concurrent
+  // replacement of the pathname with an outside symlink cannot redirect
+  // readdirSync() to the attacker's directory. Node does not provide a
+  // portable Windows openat/readdir-by-handle API, so Windows retains the
+  // pathname fallback (the same platform limitation documented by the Python
+  // directory-enumeration hardening).
+  let directoryFd: number | undefined;
+  let entries: FileEntry[];
+  try {
+    if (process.platform !== "win32") {
+      directoryFd = openSync(
+        directory,
+        fsConstants.O_RDONLY |
+          (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
+          (typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0),
+      );
+    }
 
-      const absolutePath = join(directory, dirent.name);
-      if (!isListedPathAllowed(absolutePath, isDirectory)) return null;
+    // Node's readdirSync typings/runtime accept path-like values rather than
+    // raw directory FDs. On Linux, /proc/self/fd/<fd> names the already-open
+    // directory object, so enumeration remains pinned to that object. On
+    // other POSIX platforms, use the validated pathname (the same limitation
+    // as the Python fallback on platforms without handle-relative APIs).
+    const readTarget =
+      directoryFd !== undefined && process.platform === "linux"
+        ? `/proc/self/fd/${directoryFd}`
+        : directory;
+    entries = readdirSync(readTarget, { withFileTypes: true })
+      .map((dirent): FileEntry | null => {
+        let isDirectory: boolean;
+        try {
+          // Preserve the existing behavior for symlinked directories while
+          // avoiding a second pathname lookup for ordinary directory entries.
+          isDirectory = dirent.isSymbolicLink()
+            ? statSync(join(directory, dirent.name)).isDirectory()
+            : dirent.isDirectory();
+        } catch {
+          isDirectory = dirent.isDirectory();
+        }
 
-      return { name: dirent.name, type: isDirectory ? "directory" : "file" };
-    })
-    .filter((entry): entry is FileEntry => entry !== null)
-    .sort((a, b) => localeAwareCompare(a.name, b.name));
+        const absolutePath = join(directory, dirent.name);
+        if (!isListedPathAllowed(absolutePath, isDirectory)) return null;
+
+        return { name: dirent.name, type: isDirectory ? "directory" : "file" };
+      })
+      .filter((entry): entry is FileEntry => entry !== null)
+      .sort((a, b) => localeAwareCompare(a.name, b.name));
+  } catch (err) {
+    return { error: errorMessage(err) };
+  } finally {
+    if (directoryFd !== undefined) {
+      closeSync(directoryFd);
+    }
+  }
 
   return { path: relativeToProjectRoot(directory), entries };
 }
