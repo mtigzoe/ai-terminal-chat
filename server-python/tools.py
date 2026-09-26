@@ -17,6 +17,7 @@ import stat
 import subprocess
 from child_process import SubprocessCancelled, run_cancellable
 import tempfile
+import uuid
 import threading
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -1477,23 +1478,66 @@ def _git_config_files() -> list[Path]:
 
 
 def _atomic_replace_text(path: Path, content: str) -> None:
-    """Replace a file without following a raced symlink at the target path."""
-    fd, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-        text=True,
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.replace(temp_name, path)
-    except Exception:
+    """Atomically replace a file without following raced symlinks.
+
+    On POSIX, pin the parent directory and create/replace by directory
+    descriptor so a concurrent parent-directory replacement cannot redirect
+    the temporary file or final replacement outside the pinned directory.
+    Windows retains the existing atomic pathname replacement because Python
+    does not expose an equivalent portable directory-descriptor API there.
+    """
+    if os.name != "posix":
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            text=True,
+        )
         try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(temp_name, path)
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
+
+    parent_fd = os.open(
+        path.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    temp_name = f".{path.name}.{uuid.uuid4().hex}.tmp"
+    temp_fd = None
+    try:
+        temp_fd = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+            temp_fd = None
+            handle.write(content)
+        os.replace(
+            temp_name,
+            path.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        temp_name = None
+    finally:
+        if temp_fd is not None:
+            os.close(temp_fd)
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        os.close(parent_fd)
 
 
 def _strip_dangerous_git_config(content: str) -> str:
