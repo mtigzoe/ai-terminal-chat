@@ -578,7 +578,14 @@ function hasPatchProducingFlag(args: string[]): boolean {
       arg.startsWith("--unified=") ||
       /^-U\d+$/.test(arg) ||
       arg === "--cc" ||
-      arg === "--full-diff",
+      arg === "--full-diff" ||
+      arg === "-c" ||
+      arg === "-m" ||
+      arg === "--dd" ||
+      arg === "--remerge-diff" ||
+      arg === "-L" ||
+      arg.startsWith("-L") ||
+      (arg.startsWith("--diff-merges=") && !["off", "none"].includes(arg.split("=", 2)[1])),
   );
 }
 

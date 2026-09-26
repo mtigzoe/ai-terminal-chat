@@ -1011,6 +1011,19 @@ test("git log -p does not leak an unselected file's contents", async () => {
 // ---------------------------------------------------------------------------
 
 for (const command of [
+  "git log -L 1,1:README.md",
+  "git log -L:main:README.md",
+]) {
+  test(`${command} respects file-read restrictions`, async () => {
+    await runWithAllowedReadPaths([], async () => {
+      const result = await runCommand(command);
+      assert.ok(isToolError(result));
+      assert.match(String(result.error), /access denied/i);
+    });
+  });
+}
+
+for (const command of [
   "git  show HEAD:README.md",
   "git  show HEAD",
   "git  diff",

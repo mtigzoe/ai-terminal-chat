@@ -973,6 +973,23 @@ def test_git_log_patch_does_not_leak_unselected_file_contents(git_repo_with_hist
 
 @pytest.mark.parametrize(
     "command",
+    [
+        "git log -L 1,1:README.md",
+        "git log -L:main:README.md",
+    ],
+)
+def test_git_log_diff_generating_options_respect_read_permissions(git_repo_with_history, command):
+    security.set_allowed_read_paths([])
+    try:
+        result = tools.run_command(command)
+        assert "error" in result
+        assert "access denied" in result["error"].lower()
+    finally:
+        security.clear_allowed_read_paths()
+
+
+@pytest.mark.parametrize(
+    "command",
     ["git  show HEAD:README.md", "git  show HEAD", "git  diff", "git  log -p"],
 )
 def test_whitespace_does_not_evade_read_permission_gate(git_repo_with_history, command):
