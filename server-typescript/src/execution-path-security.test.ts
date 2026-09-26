@@ -77,6 +77,37 @@ test("npm --prefix cannot target a directory outside the project root", async ()
   }
 });
 
+test("npm user/global config cannot target a file outside the project root", async () => {
+  const outside = mkdtempSync(join(tmpdir(), "execution-outside-"));
+  const config = join(outside, "npmrc");
+  writeFileSync(config, "node-options=--trace-warnings\n");
+
+  try {
+    for (const command of [
+      `npm test --userconfig "${config}"`,
+      `npm test --userconfig="${config}"`,
+      `npm test --globalconfig "${config}"`,
+      `npm test --globalconfig="${config}"`,
+      "npm test --node-options=--require=../outside.js",
+      "npm test --node-options --import=../outside.js",
+      "npm test --script-shell ../outside-shell",
+      "npm test --script-shell=../outside-shell",
+    ]) {
+      const result = await runCommand(command, true);
+      assert.ok(isToolError(result));
+      if (isToolError(result)) {
+        if (command.includes("--node-options")) {
+          assert.match(result.error, /node-options is not allowed/i);
+        } else {
+          assert.match(result.error, /outside the project root/i);
+        }
+      }
+    }
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("pip --requirement cannot target a file outside the project root", async () => {
   const outside = mkdtempSync(join(tmpdir(), "execution-outside-"));
   const requirements = join(outside, "requirements.txt");

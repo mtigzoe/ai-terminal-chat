@@ -167,7 +167,7 @@ export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
 export function withSanitizedGitConfigForTests<T>(fn: () => Promise<T>): Promise<T> { return withSanitizedGitConfig(fn); }
 
-const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$/i;
+const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
 
 function parseGitConfigKeys(content: string): string[] {
   const keys: string[] = [];
@@ -346,7 +346,14 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
     const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.GIT_EXTERNAL_DIFF; delete env.GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE;
+    for (const key of [
+      "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+      "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_PARAMETERS",
+      "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY", "GIT_PROXY_COMMAND",
+      "GIT_EXTERNAL_DIFF", "GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE", "GIT_PAGER", "GIT_ASKPASS",
+      "SSH_ASKPASS", "GIT_TERMINAL_PROMPT",
+    ]) delete env[key];
     Object.assign(env, { GIT_CONFIG: emptyConfigPath, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_SSH_COMMAND: getGitSshCommand(), GIT_PROXY_COMMAND: "none", GIT_PAGER: "cat", PAGER: "cat" });
     if (options.input !== undefined) {
       const stdout = await new Promise<string>((resolve, reject) => {
