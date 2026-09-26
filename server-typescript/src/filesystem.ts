@@ -15,7 +15,7 @@
 // matching the ToolResult shapes in types.ts, so these can be wired
 // directly into the tool registry in tools.ts (Phase 5) without adaptation.
 
-import { closeSync, existsSync, openSync, readdirSync, statSync, constants as fsConstants } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, realpathSync, statSync, constants as fsConstants } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -282,78 +282,108 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
   const matches: SearchMatch[] = [];
   let truncated = false;
 
-  const walk = (dir: string): void => {
+  const walk = (dir: string, accessPath = dir): void => {
     if (truncated) return;
 
+    let directoryFd: number | undefined;
     let dirents: Dirent[];
     try {
-      dirents = readdirSync(dir, { withFileTypes: true });
+      if (process.platform === "linux") {
+        // Keep the directory handle open for the complete traversal of this
+        // directory. Child directories are opened through this handle so a
+        // concurrent replacement of the pathname cannot redirect traversal.
+        directoryFd = openSync(
+          accessPath,
+          fsConstants.O_RDONLY |
+            (typeof fsConstants.O_DIRECTORY === "number" ? fsConstants.O_DIRECTORY : 0) |
+            (typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0),
+        );
+        const pinnedPath = realpathSync(`/proc/self/fd/${directoryFd}`);
+        if (!isPathWithinRoot(root, pinnedPath)) return;
+        dirents = readdirSync(`/proc/self/fd/${directoryFd}`, {
+          withFileTypes: true,
+        });
+      } else {
+        dirents = readdirSync(dir, { withFileTypes: true });
+      }
     } catch {
+      if (directoryFd !== undefined) closeSync(directoryFd);
       return;
     }
 
-    const { subdirs, files } = planWalk(dir, dirents);
+    try {
+      const { subdirs, files } = planWalk(dir, dirents);
 
-    for (const filename of files) {
-      if (truncated) return;
-      if (isSensitiveFilename(filename)) continue;
+      for (const filename of files) {
+        if (truncated) return;
+        if (isSensitiveFilename(filename)) continue;
 
-      const filePath = join(dir, filename);
-      if (!isListedPathAllowed(filePath, false)) continue;
+        const filePath = join(dir, filename);
+        if (!isListedPathAllowed(filePath, false)) continue;
 
-      // Resolve symlinks and ensure the real path is within the project root
-      // to prevent symlink escapes (e.g., link-to-secret -> /etc/passwd)
-      let resolvedFilePath: string;
-      try {
-        resolvedFilePath = resolveFollowingSymlinks(filePath);
-      } catch {
-        continue;
-      }
-      if (!isPathWithinRoot(root, resolvedFilePath)) {
-        continue;
-      }
+        // Resolve symlinks and ensure the real path is within the project root
+        // to prevent symlink escapes (e.g., link-to-secret -> /etc/passwd)
+        let resolvedFilePath: string;
+        try {
+          resolvedFilePath = resolveFollowingSymlinks(filePath);
+        } catch {
+          continue;
+        }
+        if (!isPathWithinRoot(root, resolvedFilePath)) {
+          continue;
+        }
 
-      // Use relative path for O_NOFOLLOW open so a final-component
-      // symlink cannot redirect the read outside the project.
-      const relForOpen = relative(root, filePath).split("\\").join("/");
-      let text: string;
-      let matchPath: string;
-      try {
-        const result = readFileWithinProject(relForOpen, SEARCH_MAX_FILE_BYTES);
-        text = result.contents;
-        matchPath = relative(root, result.resolvedPath);
-      } catch {
-        continue;
-      }
+        // Use relative path for O_NOFOLLOW open so a final-component
+        // symlink cannot redirect the read outside the project.
+        const relForOpen = relative(root, filePath).split("\\").join("/");
+        let text: string;
+        let matchPath: string;
+        try {
+          const result = readFileWithinProject(relForOpen, SEARCH_MAX_FILE_BYTES);
+          text = result.contents;
+          matchPath = relative(root, result.resolvedPath);
+        } catch {
+          continue;
+        }
 
-      const lines = text.split(/\r\n|\r|\n/);
-      for (let i = 0; i < lines.length; i += 1) {
-        const line = lines[i] ?? "";
-        if (!line.toLowerCase().includes(queryLower)) continue;
+        const lines = text.split(/\r\n|\r|\n/);
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = lines[i] ?? "";
+          if (!line.toLowerCase().includes(queryLower)) continue;
 
-        matches.push({
-          path: matchPath,
-          line: i + 1,
-          text: line.trim().slice(0, 300),
-        });
+          matches.push({
+            path: matchPath,
+            line: i + 1,
+            text: line.trim().slice(0, 300),
+          });
 
-        if (matches.length >= SEARCH_MAX_MATCHES) {
-          truncated = true;
-          break;
+          if (matches.length >= SEARCH_MAX_MATCHES) {
+            truncated = true;
+            break;
+          }
         }
       }
-    }
 
-    if (truncated) return;
-
-    for (const name of subdirs) {
-      const childPath = join(dir, name);
-      if (!isListedPathAllowed(childPath, true)) continue;
-      walk(childPath);
       if (truncated) return;
+
+      for (const name of subdirs) {
+        const childPath = join(dir, name);
+        if (!isListedPathAllowed(childPath, true)) continue;
+
+        // On Linux, resolve the child through the still-open parent
+        // directory handle. O_NOFOLLOW on the child open prevents a final
+        // symlink from redirecting traversal outside the pinned directory.
+        const childAccessPath =
+          process.platform === "linux"
+            ? `/proc/self/fd/${directoryFd}/${name}`
+            : childPath;
+        walk(childPath, childAccessPath);
+        if (truncated) break;
+      }
+    } finally {
+      if (directoryFd !== undefined) closeSync(directoryFd);
     }
   };
-
   walk(directory);
 
   return {

@@ -146,6 +146,17 @@ describe("readFile", () => {
 });
 
 describe("searchFiles", () => {
+  test("recursively searches nested directories", () => {
+    mkdirSync(join(projectRoot, "nested", "deeper"), { recursive: true });
+    writeFileSync(join(projectRoot, "nested", "deeper", "hit.txt"), "findme-nested\\n");
+
+    const result = searchFiles("findme-nested", ".");
+    assert.ok(!isToolError(result));
+    if (isToolError(result)) return;
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0]?.path.split("\\").join("/"), "nested/deeper/hit.txt");
+  });
+
   test("finds matching lines with line numbers", () => {
     writeFileSync(join(projectRoot, "a.txt"), "line one\nfind me here\nline three\n");
     const result = searchFiles("find me", ".");
