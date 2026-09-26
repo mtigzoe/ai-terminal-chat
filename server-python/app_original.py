@@ -16,7 +16,6 @@ from threading import Lock
 
 from dotenv import load_dotenv
 from flask import Flask, Response, request, stream_with_context
-from flask_cors import CORS
 
 import cancellation
 from agent import provider_fingerprint, resume_agent_loop, run_agent_loop
@@ -87,9 +86,64 @@ API_KEY_ENV_VARS = {
 }
 
 app = Flask(__name__)
+
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+_SERVER_HOST = os.getenv("HOST", "127.0.0.1").strip()
+_IS_LOOPBACK_SERVER = _SERVER_HOST.lower() in LOOPBACK_HOSTS
+_API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "").strip()
+
+if not _IS_LOOPBACK_SERVER and not _API_AUTH_TOKEN:
+    raise RuntimeError(
+        "API_AUTH_TOKEN is required when HOST is not a loopback address."
+    )
+
+_configured_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+_DEFAULT_LOCAL_ORIGINS = {
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+}
+_ALLOWED_ORIGINS = set(_configured_origins or _DEFAULT_LOCAL_ORIGINS)
+
+
+def _origin_is_allowed(origin):
+    return not origin or origin in _ALLOWED_ORIGINS
+
+
+def _has_valid_bearer_token():
+    if not _API_AUTH_TOKEN:
+        return _IS_LOOPBACK_SERVER
+    return request.headers.get("Authorization", "") == f"Bearer {_API_AUTH_TOKEN}"
+
+
+@app.before_request
+def _secure_api_request():
+    origin = request.headers.get("Origin")
+    if not _origin_is_allowed(origin):
+        return {"error": "Origin is not allowed."}, 403
+    if request.method != "OPTIONS" and not _has_valid_bearer_token():
+        return {"error": "Authentication required."}, 401
+
+
+@app.after_request
+def _apply_cors_policy(response):
+    origin = request.headers.get("Origin")
+    if origin and _origin_is_allowed(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    if request.method == "OPTIONS":
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+
+
 # Match TypeScript's 2 MiB request body limit (request-body-limit.ts).
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
-CORS(app)
 
 
 @app.errorhandler(413)
