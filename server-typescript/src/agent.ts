@@ -132,6 +132,7 @@ const WRITE_TOOL_NAMES = new Set([
 const GIT_CONFIRM_TOOL_NAMES = new Set([
   "git_add",
   "git_pull",
+  "git_fetch",
   "git_restore",
   "git_commit",
   "git_push",
@@ -1265,6 +1266,10 @@ function describeToolProgress(
       return { phase: "confirm", message: "Preparing to pull" };
     }
 
+    if (functionName === "git_fetch") {
+      return { phase: "confirm", message: "Preparing to fetch from remote" };
+    }
+
     return {
       phase: "confirm",
       message: `Preparing to stage${pathLabel || " file(s)"}`,
@@ -1281,7 +1286,6 @@ function describeToolProgress(
       git_diff: `Inspecting git diff${pathLabel}`,
       git_log: "Inspecting recent commits",
       git_branch: "Listing git branches",
-      git_fetch: "Fetching from remote",
     };
     return { phase: "inspect", message: inspectMap[functionName] || `Inspecting via ${functionName}` };
   }

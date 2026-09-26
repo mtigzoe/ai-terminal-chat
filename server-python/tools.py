@@ -1939,15 +1939,25 @@ def _validate_git_branch_name(branch: str) -> str:
     return value
 
 
-def git_fetch(remote: str = "") -> dict:
+def git_fetch(remote: str = "", confirm: bool = False) -> dict:
     """Fetch changes from a remote without merging.
+
+    This contacts the configured remote and updates remote-tracking refs,
+    so the agent must obtain explicit confirmation before network access.
 
     Args:
         remote: Remote name to fetch from. Leave empty for all remotes.
-
-    Returns:
-        A dictionary with fetch output, or an error.
+        confirm: True to perform the fetch; false returns a preview.
     """
+    if not confirm:
+        return {
+            "requires_confirmation": True,
+            "remote": remote or "all remotes",
+            "message": (
+                "This will contact the configured Git remote(s) and update "
+                "remote-tracking references. Confirm to proceed."
+            ),
+        }
 
     try:
         validated_remote = _validate_git_remote_name(remote)
@@ -2689,6 +2699,7 @@ WRITE_TOOL_NAMES = {
 GIT_CONFIRM_TOOL_NAMES = {
     "git_add",
     "git_pull",
+    "git_fetch",
     "git_restore",
     "git_commit",
     "git_push",
@@ -2922,8 +2933,10 @@ TOOL_SCHEMAS = {
     "git_fetch": {
         "description": (
             "Fetch changes from a remote repository without merging. "
-            "Use this to update remote tracking branches before "
-            "inspecting or pulling."
+            "This contacts the configured remote and updates remote-tracking "
+            "refs. Requires confirmation: calling without confirm=true will "
+            "NOT fetch anything, it only previews the remote. Only call it "
+            "again with confirm=true after the user has explicitly agreed."
         ),
         "parameters": {
             "type": "object",
@@ -2934,6 +2947,10 @@ TOOL_SCHEMAS = {
                         "Remote name to fetch from. Leave empty for "
                         "all remotes."
                     ),
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": "Must be true to actually fetch. Defaults to false.",
                 },
             },
             "required": [],

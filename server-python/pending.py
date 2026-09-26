@@ -351,6 +351,16 @@ def _confirmation_paths_for_pending(tool_name: str, args: dict, preview: Optiona
     if tool_name == "git_commit":
         return [GIT_INDEX_MARKER]
 
+    if tool_name == "git_fetch":
+        remote = args.get("remote") if isinstance(args.get("remote"), str) else ""
+        remote = remote.strip()
+        remote_marker = (
+            f"{GIT_REMOTE_PREFIX}{remote}"
+            if remote and re.fullmatch(r"[\w.-]+", remote)
+            else f"{GIT_REMOTE_PREFIX}<default>"
+        )
+        return [remote_marker]
+
     if tool_name == "git_push":
         branch = args.get("branch") if isinstance(args.get("branch"), str) else ""
         branch = branch.strip()

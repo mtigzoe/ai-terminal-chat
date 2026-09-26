@@ -142,7 +142,7 @@ export const TOOL_SCHEMAS: ToolSchemas = {
   },
   git_fetch: {
     description:
-      "Fetch changes from a remote repository without merging. Use this to update remote tracking branches before inspecting or pulling.",
+      "Fetch changes from a remote repository without merging. This contacts the configured remote and updates remote-tracking refs. Requires confirmation: calling without confirm=true will NOT fetch anything, it only previews the remote. Only call it again with confirm=true after the user has explicitly agreed.",
     parameters: {
       type: "object",
       properties: {
@@ -150,6 +150,11 @@ export const TOOL_SCHEMAS: ToolSchemas = {
           type: "string",
           description:
             "Remote name to fetch from. Leave empty for all remotes.",
+        },
+        confirm: {
+          type: "boolean",
+          description:
+            "Must be true to actually fetch. Defaults to false.",
         },
       },
       required: [],

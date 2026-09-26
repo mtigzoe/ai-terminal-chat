@@ -578,15 +578,21 @@ def git_repo_with_remote(tmp_path, monkeypatch):
     return repo
 
 
-def test_git_fetch_succeeds(git_repo_with_remote):
+def test_git_fetch_requires_confirmation(git_repo_with_remote):
     result = tools.git_fetch()
+    assert result.get("requires_confirmation") is True
+    assert result.get("remote") == "all remotes"
+
+
+def test_git_fetch_confirm_true_succeeds(git_repo_with_remote):
+    result = tools.git_fetch(confirm=True)
     assert "error" not in result
-    assert "remote" in result
+    assert result.get("remote") == "all remotes"
 
 
-def test_git_fetch_with_specific_remote(git_repo_with_remote):
+def test_git_fetch_with_specific_remote_requires_confirmation(git_repo_with_remote):
     result = tools.git_fetch("origin")
-    assert "error" not in result
+    assert result.get("requires_confirmation") is True
     assert result.get("remote") == "origin"
 
 
@@ -764,11 +770,10 @@ def test_new_git_tools_are_registered_consistently():
         assert name in tools.TOOL_SCHEMAS, f"{name} missing from TOOL_SCHEMAS"
         assert name in tools.TOOL_TIMEOUTS, f"{name} missing from TOOL_TIMEOUTS"
 
-    confirm_tools = {"git_pull", "git_restore", "git_commit", "git_push"}
+    confirm_tools = {"git_fetch", "git_pull", "git_restore", "git_commit", "git_push"}
     for name in confirm_tools:
         assert name in tools.GIT_CONFIRM_TOOL_NAMES, f"{name} missing from GIT_CONFIRM_TOOL_NAMES"
 
-    assert "git_fetch" not in tools.GIT_CONFIRM_TOOL_NAMES
 
 
 def test_git_pull_is_forbidden_in_run_command_allowlist():
