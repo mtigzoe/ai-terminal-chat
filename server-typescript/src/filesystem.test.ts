@@ -154,7 +154,7 @@ describe("searchFiles", () => {
     assert.ok(!isToolError(result));
     if (isToolError(result)) return;
     assert.equal(result.matches.length, 1);
-    assert.equal(result.matches[0]?.path, "nested/deeper/hit.txt");
+    assert.equal(result.matches[0]?.path.split("\\").join("/"), "nested/deeper/hit.txt");
   });
 
   test("finds matching lines with line numbers", () => {
