@@ -1,6 +1,7 @@
 /**
  * apply_patch / write_file preview path-boundary tests.
  */
+import fs from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -20,7 +21,7 @@ import {
   __setProjectRootForTests,
   __resetProjectRootForTests,
 } from "./security.ts";
-import { apply_patch, write_file } from "./write-tools.ts";
+import { apply_patch, write_file, git_add } from "./write-tools.ts";
 
 test.afterEach(() => {
   __resetProjectRootForTests();
@@ -150,6 +151,44 @@ test("apply_patch applies a clean unified diff via secure I/O", () => {
   assert.ok(!("error" in applied), JSON.stringify(applied));
   assert.equal(readFileSync(join(project, "README.md"), "utf8"), "hello world\n");
   rmSync(project, { recursive: true, force: true });
+});
+
+test("git_add creates its hash input with exclusive creation inside a private temp directory", () => {
+  const { project } = makeGitProject();
+  writeFileSync(join(project, "stage-me.txt"), "stage this\n", "utf8");
+
+  const originalMkdtempSync = fs.mkdtempSync;
+  const originalWriteFileSync = fs.writeFileSync;
+  let hashInputDir: string | undefined;
+  let sawExclusiveCreate = false;
+
+  fs.mkdtempSync = ((prefix: string, ...args: Parameters<typeof originalMkdtempSync> extends [any, ...infer R] ? R : never[]) => {
+    const result = originalMkdtempSync(prefix, ...args as any);
+    if (prefix.includes("git-add-")) hashInputDir = result;
+    return result;
+  }) as typeof fs.mkdtempSync;
+
+  fs.writeFileSync = ((filePath: any, data: any, options?: any) => {
+    if (hashInputDir && filePath === join(hashInputDir, "input.tmp")) {
+      sawExclusiveCreate = options?.flag === "wx";
+      assert.equal(options?.mode, 0o600);
+    }
+    return (originalWriteFileSync as any)(filePath, data, options);
+  }) as typeof fs.writeFileSync;
+
+  try {
+    const preview = git_add("stage-me.txt", false);
+    assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+    const result = git_add("stage-me.txt", true);
+    assert.equal(result.staged, true, JSON.stringify(result));
+    assert.equal(sawExclusiveCreate, true);
+    assert.ok(hashInputDir, "git_add must create a private temporary directory");
+    assert.equal(existsSync(hashInputDir!), false, "private temporary directory must be cleaned up");
+  } finally {
+    fs.mkdtempSync = originalMkdtempSync;
+    fs.writeFileSync = originalWriteFileSync;
+    rmSync(project, { recursive: true, force: true });
+  }
 });
 
 test("apply_patch does not use git apply path open for TOCTOU", () => {
