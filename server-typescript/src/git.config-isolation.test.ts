@@ -11,16 +11,18 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   rmSync,
   writeFileSync,
   mkdirSync,
   readFileSync,
+  symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, platform } from "node:os";
 
-import { runIsolatedGit, GIT_CONFIG_OVERRIDES, stripDangerousGitConfig, withSanitizedGitConfigForTests } from "./git.ts";
+import { runIsolatedGit, GIT_CONFIG_OVERRIDES, stripDangerousGitConfig, withSanitizedGitConfigForTests, atomicReplaceTextForTests } from "./git.ts";
 import { runCommand } from "./terminal.ts";
 import {
   __setProjectRootForTests,
@@ -539,5 +541,21 @@ test("sanitization does not overwrite a concurrent .git/config change", async ()
   } finally {
     __resetProjectRootForTests();
     rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("atomic Git config replacement does not follow a raced symlink", () => {
+  const dir = mkdtempSync(join(tmpdir(), "git-config-atomic-"));
+  const target = join(dir, "config");
+  const sentinel = join(dir, "sentinel");
+  try {
+    writeFileSync(sentinel, "sentinel\\n", "utf8");
+    symlinkSync(sentinel, target);
+    atomicReplaceTextForTests(target, "safe\\n");
+    assert.equal(readFileSync(target, "utf8"), "safe\\n");
+    assert.equal(readFileSync(sentinel, "utf8"), "sentinel\\n");
+    assert.equal(lstatSync(target).isSymbolicLink(), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
