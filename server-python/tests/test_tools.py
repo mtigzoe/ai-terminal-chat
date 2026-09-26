@@ -113,6 +113,33 @@ def test_atomic_replace_text_replaces_symlink_without_following_target(tmp_path)
     assert sentinel.read_text(encoding="utf-8") == "sentinel"
 
 
+def test_atomic_replace_text_replaces_symlink_without_following_target(tmp_path):
+    target = tmp_path / "config"
+    sentinel = tmp_path / "outside"
+    sentinel.write_text("sentinel", encoding="utf-8")
+    target.symlink_to(sentinel)
+
+    tools._atomic_replace_text(target, "safe")
+
+    assert target.read_text(encoding="utf-8") == "safe"
+    assert sentinel.read_text(encoding="utf-8") == "sentinel"
+
+
+def test_atomic_replace_text_rejects_symlinked_parent_on_posix(tmp_path):
+    if os.name != "posix":
+        pytest.skip("POSIX directory-descriptor hardening test")
+
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        tools._atomic_replace_text(linked_parent / "config", "safe")
+
+    assert not (real_parent / "config").exists()
+
+
 def test_safe_path_accepts_project_relative_path():
     path = app.safe_path("server-python")
     assert path == (app.PROJECT_ROOT / "server-python").resolve()
