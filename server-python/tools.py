@@ -983,6 +983,185 @@ def is_command_allowed(command: str) -> bool:
     )
 
 
+
+def _looks_like_local_path(value: str) -> bool:
+    """True when a command argument appears to name a local filesystem path."""
+    value = value.strip()
+    if not value:
+        return False
+    if value.startswith("file:"):
+        return True
+    if Path(value).is_absolute() or re.match(r"^[A-Za-z]:[\\\\/]", value):
+        return True
+    if value in {".", ".."} or value.startswith(("./", "../", ".\\\\", "..\\\\")):
+        return True
+    return "/" in value or "\\\\" in value
+
+
+def _execution_path_error(raw_path: str) -> str | None:
+    """Reject execution paths that escape PROJECT_ROOT, including symlinks."""
+    candidate = raw_path.strip().strip('"')
+    if candidate.startswith("file:"):
+        candidate = candidate[5:]
+        if candidate.startswith("//"):
+            candidate = candidate[2:]
+    try:
+        safe_path(candidate)
+    except ValueError as exc:
+        return f"Access denied: execution path is outside the project root: {raw_path} ({exc})"
+    return None
+
+
+def _execution_path_permission_error(command: str) -> dict | None:
+    """Keep allowlisted test/lint/install path arguments inside PROJECT_ROOT."""
+    try:
+        tokens = shlex.split(command, posix=False)
+    except ValueError:
+        return {"error": "Access denied: could not safely parse execution command paths."}
+    if not tokens:
+        return None
+
+    executable = tokens[0].lower()
+    if executable in {"pytest", "black", "ruff", "flake8", "pip", "pip3"}:
+        path_options = {
+            "-c", "--config", "--confcutdir", "--rootdir", "--basetemp",
+            "--append-config", "--output-file", "--debug",
+        }
+        override_ini_options = {"-o", "--override-ini"}
+        for index in range(1, len(tokens)):
+            token = tokens[index]
+            if token in path_options:
+                if index + 1 >= len(tokens) or not tokens[index + 1].strip():
+                    return {"error": f"Access denied: missing path for {token}."}
+                error = _execution_path_error(tokens[index + 1])
+                if error:
+                    return {"error": error}
+                continue
+            matched = next((option for option in path_options if token.startswith(option + "=")), None)
+            if matched:
+                value = token[len(matched) + 1:]
+                if not value:
+                    return {"error": f"Access denied: missing path for {matched}."}
+                error = _execution_path_error(value)
+                if error:
+                    return {"error": error}
+                continue
+
+            if token in override_ini_options:
+                if index + 1 >= len(tokens) or not tokens[index + 1].strip():
+                    return {"error": f"Access denied: missing value for {token}."}
+                override = tokens[index + 1].strip()
+                key, separator, value = override.partition("=")
+                if separator and key.strip().lower() == "cache_dir":
+                    error = _execution_path_error(value)
+                    if error:
+                        return {"error": error}
+                continue
+
+            matched_override = next(
+                (option for option in override_ini_options if token.startswith(option + "=")),
+                None,
+            )
+            if matched_override:
+                override = token[len(matched_override) + 1:].strip()
+                key, separator, value = override.partition("=")
+                if separator and key.strip().lower() == "cache_dir":
+                    error = _execution_path_error(value)
+                    if error:
+                        return {"error": error}
+                continue
+
+            if token.startswith("-"):
+                continue
+            target = token.split("::", 1)[0]
+            if _looks_like_local_path(target):
+                error = _execution_path_error(target)
+                if error:
+                    return {"error": error}
+
+    if executable in {"pip", "pip3"}:
+        for index in range(1, len(tokens)):
+            token = tokens[index]
+            if token in {"-r", "--requirement", "-e", "--editable"}:
+                if index + 1 >= len(tokens) or not tokens[index + 1].strip():
+                    return {"error": f"Access denied: missing path for {token}."}
+                error = _execution_path_error(tokens[index + 1])
+                if error:
+                    return {"error": error}
+                continue
+            for option in ("-r", "--requirement", "-e", "--editable"):
+                if token.startswith(option + "="):
+                    value = token[len(option) + 1:]
+                    if not value:
+                        return {"error": f"Access denied: missing path for {option}."}
+                    error = _execution_path_error(value)
+                    if error:
+                        return {"error": error}
+            if not token.startswith("-") and _looks_like_local_path(token):
+                error = _execution_path_error(token)
+                if error:
+                    return {"error": error}
+
+    if executable == "npm":
+        path_options = {
+            "--prefix", "--workspace", "--userconfig", "--globalconfig",
+            "--script-shell", "--git", "--node-gyp", "--cache", "--logs-dir",
+        }
+        # npm passes node-options through to Node.js for lifecycle scripts.
+        # It can carry multiple code-loading mechanisms (--require, --import,
+        # --loader, etc.), so parsing only one of them is unsafe. Reject the
+        # override entirely rather than attempting an incomplete path parser.
+        if any(token == "--node-options" or token.startswith("--node-options=")
+               for token in tokens[1:]):
+            return {"error": "Access denied: --node-options is not allowed for npm execution."}
+        for index in range(1, len(tokens)):
+            token = tokens[index]
+            if token in path_options:
+                if index + 1 >= len(tokens):
+                    return {"error": f"Access denied: missing path for {token}."}
+                error = _execution_path_error(tokens[index + 1])
+                if error:
+                    return {"error": error}
+                continue
+            for option in path_options:
+                if token.startswith(option + "="):
+                    value = token[len(option) + 1:]
+                    if not value:
+                        return {"error": f"Access denied: missing path for {option}."}
+                    error = _execution_path_error(value)
+                    if error:
+                        return {"error": error}
+
+
+
+    return None
+
+# Environment variables that can change interpreter/plugin/configuration behavior in
+# project-controlled terminal processes. These are removed so a server-level
+# environment cannot inject startup code or alternate config into allowlisted
+# pytest/npm commands.
+_TERMINAL_ENV_BLOCKLIST = frozenset({
+    "NODE_OPTIONS", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP",
+    "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PERL5LIB", "PERL5OPT",
+    "RUBYLIB", "RUBYOPT", "BASH_ENV", "ENV",
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+    "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+    "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL",
+    "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY", "GIT_PROXY_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_ASKPASS",
+    "SSH_ASKPASS", "GIT_TERMINAL_PROMPT",
+})
+
+
+def _sanitized_terminal_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for key in list(env):
+        upper = key.upper()
+        if upper in _TERMINAL_ENV_BLOCKLIST or upper.startswith("NPM_CONFIG_"):
+            env.pop(key, None)
+    return env
+
+
 def run_command(command: str, confirm: bool = False) -> dict:
     """Run an allowlisted development command in the project directory.
 
@@ -1045,6 +1224,10 @@ def run_command(command: str, confirm: bool = False) -> dict:
     if sensitive_path_error is not None:
         return sensitive_path_error
 
+    execution_path_error = _execution_path_permission_error(canonical)
+    if execution_path_error is not None:
+        return execution_path_error
+
     if is_execution_risk_command(canonical) and not confirm:
         return {
             "requires_confirmation": True,
@@ -1093,6 +1276,7 @@ def run_command(command: str, confirm: bool = False) -> dict:
                 args,
                 cwd=PROJECT_ROOT,
                 timeout=60,
+                env=_sanitized_terminal_env(),
             )
         except SubprocessCancelled:
             return {"error": "Command cancelled.", "cancelled": True}
@@ -1277,7 +1461,7 @@ _GIT_CONFIG_OVERRIDES = [
 
 
 DYNAMIC_GIT_CONFIG_KEY_RE = re.compile(
-    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.textconv|submodule\..+\.update)$",
+    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.(command|textconv)|submodule\..+\.update)$",
     re.IGNORECASE,
 )
 
@@ -1371,7 +1555,10 @@ def _run_git(
         # Best-effort mode bits; continue with empty file.
         pass
 
-    env = os.environ.copy()
+    # Reuse the terminal environment sanitizer so Git cannot inherit
+    # repository/object/config/transport/helper overrides from the server.
+    # The controlled Git values below are then applied explicitly.
+    env = _sanitized_terminal_env()
     # Empty GIT_EXTERNAL_DIFF makes Git try to execute "" and fail with
     # "cannot run : No such file or directory". Remove inherited values
     # instead; --no-ext-diff / -c diff.external= block repo-controlled helpers.

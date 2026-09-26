@@ -64,6 +64,43 @@ def project_root(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_terminal_env_strips_execution_injection_variables(monkeypatch):
+    monkeypatch.setenv("NODE_OPTIONS", "--require ./outside.js")
+    monkeypatch.setenv("PYTEST_PLUGINS", "outside.plugin")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--override-ini=cache_dir=../outside")
+    monkeypatch.setenv("PYTHONPATH", "../outside")
+    monkeypatch.setenv("GIT_SSH", "../outside/ssh-wrapper")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "../outside/ssh-command")
+    monkeypatch.setenv("GIT_SSH_VARIANT", "simple")
+    monkeypatch.setenv("GIT_SSL_NO_VERIFY", "1")
+    monkeypatch.setenv("NPM_CONFIG_USERCONFIG", "../outside/.npmrc")
+    monkeypatch.setenv("NPM_CONFIG_NODE_OPTIONS", "--require ./outside.js")
+    monkeypatch.setenv("NORMAL_TERMINAL_VALUE", "kept")
+    env = tools._sanitized_terminal_env()
+    for key in ("NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS"):
+        assert key not in env
+    assert env["NORMAL_TERMINAL_VALUE"] == "kept"
+
+
+def test_run_git_ignores_inherited_git_repository_environment(git_repo, tmp_path, monkeypatch):
+    outside = tmp_path / "outside-repo"
+    outside.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=outside, check=True)
+
+    monkeypatch.setenv("GIT_DIR", str(outside / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(outside))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(outside / "index"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(outside / "objects"))
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'core.fsmonitor=true'")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "outside-ssh")
+    monkeypatch.setenv("GIT_PROXY_COMMAND", "outside-proxy")
+
+    result = tools._run_git(["rev-parse", "--show-toplevel"], timeout=10)
+
+    assert result.returncode == 0
+    assert Path(result.stdout.strip()).resolve() == git_repo.resolve()
+
+
 def test_safe_path_accepts_project_relative_path():
     path = app.safe_path("server-python")
     assert path == (app.PROJECT_ROOT / "server-python").resolve()
@@ -836,6 +873,60 @@ def test_pwd_translated_to_cmd_cd_on_windows(monkeypatch):
     assert result["returncode"] == 0
     # stdout should contain the project root path.
     assert str(tools.PROJECT_ROOT) in result["stdout"]
+
+# ---------------------------------------------------------------------------
+# Execution-path boundary regression tests
+#
+# Python's run_command() requires confirmation for test/lint/install commands,
+# but confirmation is not a substitute for the project-root boundary. These
+# commands must not be able to inspect or write through path-valued options
+# outside PROJECT_ROOT.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest ../outside.py",
+        "pytest --rootdir ../outside",
+        "pytest -o cache_dir=../outside",
+        "pytest --override-ini=cache_dir=../outside",
+        "pytest --override-ini cache_dir=../outside",
+        "black --check ../outside.py",
+        "ruff check ../outside.py",
+        "flake8 ../outside.py",
+        "flake8 --config ../outside.ini",
+        "flake8 --append-config ../outside.ini",
+        "flake8 --output-file ../outside.log",
+        "flake8 --output-file=../outside.log",
+        "npm test --userconfig ../outside.npmrc",
+        "npm test --userconfig=../outside.npmrc",
+        "npm test --globalconfig ../outside.npmrc",
+        "npm test --globalconfig=../outside.npmrc",
+        "npm test --node-options=--require=../outside.js",
+        "npm test --node-options --import=../outside.js",
+        "npm test --script-shell ../outside-shell",
+        "npm test --script-shell=../outside-shell",
+    ],
+)
+def test_execution_paths_cannot_escape_project_root(command):
+    result = tools.run_command(command)
+    assert "error" in result, f"{command!r} must be rejected before confirmation/execution"
+    assert "outside the project" in result["error"].lower() or "outside the project root" in result["error"].lower() or "node-options is not allowed" in result["error"].lower()
+
+
+def test_execution_path_inside_project_still_requires_confirmation(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "test_sample.py").write_text("def test_sample():\n    assert True\n")
+    monkeypatch.setattr(security, "PROJECT_ROOT", project)
+    monkeypatch.setattr(tools, "PROJECT_ROOT", project)
+
+    result = tools.run_command("pytest test_sample.py")
+    assert result.get("requires_confirmation") is True
+    assert "error" not in result
+
+
 
 # ---------------------------------------------------------------------------
 # Gate-normalization regression tests
