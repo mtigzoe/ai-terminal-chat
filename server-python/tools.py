@@ -1254,25 +1254,63 @@ def _execution_path_permission_error(command: str) -> dict | None:
 # environment cannot inject startup code or alternate config into allowlisted
 # pytest/npm commands.
 _TERMINAL_ENV_BLOCKLIST = frozenset({
-    "NODE_OPTIONS", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP",
+    "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS", "NODE_V8_COVERAGE",
+    "NODE_ICU_DATA", "NODE_TLS_REJECT_UNAUTHORIZED",
+    "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE",
+    "PYTHONBREAKPOINT", "PYTHONPYCACHEPREFIX", "PYTHONPRESITE",
     "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PERL5LIB", "PERL5OPT",
     "RUBYLIB", "RUBYOPT", "BASH_ENV", "ENV",
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
     "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
     "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL",
-    "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY", "GIT_PROXY_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_ASKPASS",
+    "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY",
+    "GIT_PROXY_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_ASKPASS",
     "SSH_ASKPASS", "GIT_TERMINAL_PROMPT",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
 })
+_TERMINAL_ENV_PREFIXES = ("NPM_CONFIG_", "PIP_", "PYTEST_", "RUFF_")
 
-
-def _sanitized_terminal_env() -> dict[str, str]:
+def _build_sanitized_terminal_env() -> tuple[dict[str, str], Path]:
     env = dict(os.environ)
     for key in list(env):
         upper = key.upper()
-        if upper in _TERMINAL_ENV_BLOCKLIST or upper.startswith("NPM_CONFIG_"):
+        if (
+            upper in _TERMINAL_ENV_BLOCKLIST
+            or any(upper.startswith(prefix) for prefix in _TERMINAL_ENV_PREFIXES)
+            or upper.endswith("_API_KEY")
+            or upper.endswith("_SECRET")
+            or upper.endswith("_TOKEN")
+            or "PASSWORD" in upper
+        ):
             env.pop(key, None)
-    return env
+
+    isolated_home = Path(tempfile.mkdtemp(prefix="ai-terminal-chat-home-"))
+    env["HOME"] = str(isolated_home)
+    env["USERPROFILE"] = str(isolated_home)
+    xdg_config = isolated_home / ".config"
+    xdg_config.mkdir(parents=True, exist_ok=True)
+    env["XDG_CONFIG_HOME"] = str(xdg_config)
+    env.pop("XDG_CONFIG_DIRS", None)
+    if os.name == "nt":
+        appdata = isolated_home / "AppData" / "Roaming"
+        local_appdata = isolated_home / "AppData" / "Local"
+        appdata.mkdir(parents=True, exist_ok=True)
+        local_appdata.mkdir(parents=True, exist_ok=True)
+        env["APPDATA"] = str(appdata)
+        env["LOCALAPPDATA"] = str(local_appdata)
+    return env, isolated_home
+
+@contextmanager
+def _sanitized_terminal_env():
+    env, isolated_home = _build_sanitized_terminal_env()
+    try:
+        yield env
+    finally:
+        import shutil
+        shutil.rmtree(isolated_home, ignore_errors=True)
 
 
 def run_command(command: str, confirm: bool = False) -> dict:
@@ -1385,12 +1423,13 @@ def run_command(command: str, confirm: bool = False) -> dict:
             args = ["cmd", "/c", "dir", *args[1:]]
 
         try:
-            result = run_cancellable(
-                args,
-                cwd=PROJECT_ROOT,
-                timeout=60,
-                env=_sanitized_terminal_env(),
-            )
+            with _sanitized_terminal_env() as sanitized_env:
+                result = run_cancellable(
+                    args,
+                    cwd=PROJECT_ROOT,
+                    timeout=60,
+                    env=sanitized_env,
+                )
         except SubprocessCancelled:
             return {"error": "Command cancelled.", "cancelled": True}
 
