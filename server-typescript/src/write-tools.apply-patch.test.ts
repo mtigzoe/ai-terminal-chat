@@ -182,7 +182,7 @@ test("git_add creates its hash input with exclusive creation inside a private te
     assert.ok(hashInputPath, "git_add must use a private input.tmp file");
     assert.equal(sawExclusiveCreate, true);
     assert.equal(existsSync(hashInputPath!), false, "private temp file must be cleaned up");
-    assert.equal(existsSync(path.dirname(hashInputPath!)), false, "private temp directory must be cleaned up");
+    assert.equal(existsSync(dirname(hashInputPath!)), false, "private temp directory must be cleaned up");
   } finally {
     fs.writeFileSync = originalWriteFileSync;
     rmSync(project, { recursive: true, force: true });
