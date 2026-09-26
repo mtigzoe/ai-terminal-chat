@@ -15,7 +15,7 @@
 // matching the ToolResult shapes in types.ts, so these can be wired
 // directly into the tool registry in tools.ts (Phase 5) without adaptation.
 
-import { closeSync, existsSync, openSync, readdirSync, statSync, constants as fsConstants } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, realpathSync, statSync, constants as fsConstants } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative } from "node:path";
 
