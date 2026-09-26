@@ -28,7 +28,7 @@ export const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "sendemail.smtpencryption=", "-c", "sendemail.smtpuser=", "-c", "sendemail.smtppass=",
   "-c", "sendemail.smtpdomain=", "-c", "sendemail.smtpServer=", "-c", "http.proxy=",
   "-c", "http.https.proxy=", "-c", "http.extraHeader=", "-c", "http.proxyAuthMethod=",
-  "-c", "http.version=", "-c", "http.lowSpeedLimit=0", "-c", "http.lowSpeedTime=0", "-c", "remote.helper=", "-c", "remote.origin.proxy=",
+  "-c", "http.version=", "-c", "http.lowSpeedLimit=0", "-c", "http.lowSpeedTime=0", "-c", "remote.helper=",
   "-c", "alias.status=", "-c", "alias.stat=", "-c", "alias.st=", "-c", "alias.diff=", "-c", "alias.log=",
   "-c", "alias.branch=", "-c", "alias.show=", "-c", "alias.remote=", "-c", "alias.fetch=", "-c", "alias.pull=",
   "-c", "alias.push=", "-c", "alias.add=", "-c", "alias.commit=", "-c", "alias.restore=", "-c", "alias.checkout=",
@@ -167,7 +167,7 @@ export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
 export function withSanitizedGitConfigForTests<T>(fn: () => Promise<T>): Promise<T> { return withSanitizedGitConfig(fn); }
 
-const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
+const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
 
 function parseGitConfigKeys(content: string): string[] {
   const keys: string[] = [];
