@@ -10,6 +10,8 @@ import { runChildProcess } from "./child-process.ts";
 import { loadAppConfig, persistAppConfig } from "./config.js";
 import type { RunCommandResult } from "./types.js";
    import { basename, join } from "node:path";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   getAllowedReadPaths,
   getProjectRoot,
@@ -1298,47 +1300,62 @@ function capOutput(value: string): {
  * subprocesses. Project-controlled scripts (npm lifecycle, pytest plugins,
  * etc.) must not observe provider API keys from the server process. */
 const SENSITIVE_ENV_VAR_NAMES = new Set([
-  "GOOGLE_API_KEY",
-  "GEMINI_API_KEY",
-  "OPENAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "XAI_API_KEY",
-  "OPENROUTER_API_KEY",
-  "KILO_API_KEY",
-  "API_AUTH_TOKEN",
-  "AI_TERMINAL_CHAT_HEALTH_TOKEN",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_ACCESS_KEY_ID",
-  "AWS_SESSION_TOKEN",
-  "GITHUB_TOKEN",
-  "GH_TOKEN",
-  "NPM_TOKEN",
-  "NODE_AUTH_TOKEN",
-  "NODE_OPTIONS", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP",
-  "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PERL5LIB", "PERL5OPT",
-  "RUBYLIB", "RUBYOPT", "BASH_ENV", "ENV",
+  "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+  "XAI_API_KEY", "OPENROUTER_API_KEY", "KILO_API_KEY", "API_AUTH_TOKEN",
+  "AI_TERMINAL_CHAT_HEALTH_TOKEN", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID",
+  "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN",
+]);
+const EXECUTION_ALTERING_ENV_VAR_NAMES = new Set([
+  "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS", "NODE_V8_COVERAGE",
+  "NODE_ICU_DATA", "NODE_TLS_REJECT_UNAUTHORIZED", "PYTHONPATH", "PYTHONHOME",
+  "PYTHONSTARTUP", "PYTHONUSERBASE", "PYTHONBREAKPOINT", "PYTHONPYCACHEPREFIX",
+  "PYTHONPRESITE",
+]);
+const STRIPPED_ENV_VAR_PREFIXES = ["NPM_CONFIG_", "PIP_", "PYTEST_", "RUFF_"] as const;
+const NETWORK_ENV_VAR_NAMES = new Set([
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
+  "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
 ]);
 
-export function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
+export interface SanitizedTerminalEnv {
+  env: NodeJS.ProcessEnv;
+  cleanup: () => void;
+}
+
+export function buildSanitizedTerminalEnv(): SanitizedTerminalEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of SENSITIVE_ENV_VAR_NAMES) {
-    delete env[name];
-  }
+  for (const name of SENSITIVE_ENV_VAR_NAMES) delete env[name];
   for (const key of Object.keys(env)) {
     const upper = key.toUpperCase();
-    if (upper.startsWith("NPM_CONFIG_")) {
-      delete env[key];
-      continue;
-    }
-    if (
-      upper.endsWith("_API_KEY") ||
-      upper.endsWith("_SECRET") ||
-      upper.endsWith("_TOKEN") ||
-      upper.includes("PASSWORD")
-    ) {
+    if (upper.endsWith("_API_KEY") || upper.endsWith("_SECRET") ||
+        upper.endsWith("_TOKEN") || upper.includes("PASSWORD") ||
+        STRIPPED_ENV_VAR_PREFIXES.some((prefix) => upper.startsWith(prefix))) {
       delete env[key];
     }
   }
+  for (const name of EXECUTION_ALTERING_ENV_VAR_NAMES) delete env[name];
+  for (const name of NETWORK_ENV_VAR_NAMES) delete env[name];
+
+  const isolatedHome = mkdtempSync(join(tmpdir(), "ai-terminal-chat-home-"));
+  const xdgConfigHome = join(isolatedHome, ".config");
+  mkdirSync(xdgConfigHome, { recursive: true });
+  env.HOME = isolatedHome;
+  env.USERPROFILE = isolatedHome;
+  env.XDG_CONFIG_HOME = xdgConfigHome;
+  delete env.XDG_CONFIG_DIRS;
+  if (process.platform === "win32") {
+    env.APPDATA = join(isolatedHome, "AppData", "Roaming");
+    env.LOCALAPPDATA = join(isolatedHome, "AppData", "Local");
+    mkdirSync(env.APPDATA, { recursive: true });
+    mkdirSync(env.LOCALAPPDATA, { recursive: true });
+  }
+  return { env, cleanup: () => rmSync(isolatedHome, { recursive: true, force: true }) };
+}
+
+export function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
+  const { env, cleanup } = buildSanitizedTerminalEnv();
+  cleanup();
   return env;
 }
 
@@ -1515,6 +1532,8 @@ export async function runCommand(
     }
   }
 
+  const { env: sanitizedEnv, cleanup: cleanupSanitizedEnv } = buildSanitizedTerminalEnv();
+
   try {
     const { stdout, stderr, code } = await runChildProcess(
       file,
@@ -1524,7 +1543,7 @@ export async function runCommand(
         timeout: COMMAND_TIMEOUT_MS,
         signal,
         maxBuffer: MAX_OUTPUT_CHARS * 2,
-        env: sanitizedTerminalEnv(),
+        env: sanitizedEnv,
       },
     );
 
@@ -1601,6 +1620,8 @@ export async function runCommand(
           error.message ?? String(err)
         }`,
     };
+  }  finally {
+    cleanupSanitizedEnv();
   }
 }
 
