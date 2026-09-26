@@ -1,6 +1,7 @@
 /**
  * apply_patch / write_file preview path-boundary tests.
  */
+import fs from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -12,7 +13,7 @@ import {
   writeFileSync,
   mkdirSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
@@ -20,7 +21,7 @@ import {
   __setProjectRootForTests,
   __resetProjectRootForTests,
 } from "./security.ts";
-import { apply_patch, write_file } from "./write-tools.ts";
+import { apply_patch, write_file, git_add } from "./write-tools.ts";
 
 test.afterEach(() => {
   __resetProjectRootForTests();
@@ -150,6 +151,42 @@ test("apply_patch applies a clean unified diff via secure I/O", () => {
   assert.ok(!("error" in applied), JSON.stringify(applied));
   assert.equal(readFileSync(join(project, "README.md"), "utf8"), "hello world\n");
   rmSync(project, { recursive: true, force: true });
+});
+
+test("git_add creates its hash input with exclusive creation inside a private temp directory", () => {
+  const { project } = makeGitProject();
+  writeFileSync(join(project, "stage-me.txt"), "stage this\n", "utf8");
+
+  const originalWriteFileSync = fs.writeFileSync;
+  let sawExclusiveCreate = false;
+  let hashInputPath: string | undefined;
+
+  fs.writeFileSync = ((filePath: any, data: any, options?: any) => {
+    if (
+      typeof filePath === "string" &&
+      basename(filePath) === "input.tmp" &&
+      basename(dirname(filePath)).startsWith("git-add-")
+    ) {
+      hashInputPath = filePath;
+      sawExclusiveCreate = options?.flag === "wx";
+      assert.equal(options?.mode, 0o600);
+    }
+    return (originalWriteFileSync as any)(filePath, data, options);
+  }) as typeof fs.writeFileSync;
+
+  try {
+    const preview = git_add("stage-me.txt", false);
+    assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+    const result = git_add("stage-me.txt", true);
+    assert.equal(result.staged, true, JSON.stringify(result));
+    assert.ok(hashInputPath, "git_add must use a private input.tmp file");
+    assert.equal(sawExclusiveCreate, true);
+    assert.equal(existsSync(hashInputPath!), false, "private temp file must be cleaned up");
+    assert.equal(existsSync(dirname(hashInputPath!)), false, "private temp directory must be cleaned up");
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
+    rmSync(project, { recursive: true, force: true });
+  }
 });
 
 test("apply_patch does not use git apply path open for TOCTOU", () => {
