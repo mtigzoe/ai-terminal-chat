@@ -1353,12 +1353,6 @@ export function buildSanitizedTerminalEnv(): SanitizedTerminalEnv {
   return { env, cleanup: () => rmSync(isolatedHome, { recursive: true, force: true }) };
 }
 
-export function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
-  const { env, cleanup } = buildSanitizedTerminalEnv();
-  cleanup();
-  return env;
-}
-
 /** Execute one allowlisted command in the configured project root. */
 export async function runCommand(
   command: string,
