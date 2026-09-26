@@ -28,7 +28,7 @@ export const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "sendemail.smtpencryption=", "-c", "sendemail.smtpuser=", "-c", "sendemail.smtppass=",
   "-c", "sendemail.smtpdomain=", "-c", "sendemail.smtpServer=", "-c", "http.proxy=",
   "-c", "http.https.proxy=", "-c", "http.extraHeader=", "-c", "http.proxyAuthMethod=",
-  "-c", "http.version=", "-c", "http.lowSpeedLimit=0", "-c", "http.lowSpeedTime=0", "-c", "remote.helper=",
+  "-c", "http.version=", "-c", "http.lowSpeedLimit=0", "-c", "http.lowSpeedTime=0", "-c", "remote.helper=", "-c", "remote.origin.proxy=",
   "-c", "alias.status=", "-c", "alias.stat=", "-c", "alias.st=", "-c", "alias.diff=", "-c", "alias.log=",
   "-c", "alias.branch=", "-c", "alias.show=", "-c", "alias.remote=", "-c", "alias.fetch=", "-c", "alias.pull=",
   "-c", "alias.push=", "-c", "alias.add=", "-c", "alias.commit=", "-c", "alias.restore=", "-c", "alias.checkout=",
