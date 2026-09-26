@@ -29,6 +29,7 @@ import {
   existsSync,
   fstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   closeSync,
   readFileSync,
@@ -237,13 +238,13 @@ function sleepSync(ms: number): void {
 function writeConfigFile(targetFile: string, payload: Record<string, unknown>): void {
   const serialized = `${JSON.stringify(payload, null, 2)}\n`;
   const dir = dirname(targetFile);
-  const tempPath = join(
-    dir,
-    `config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`,
-  );
+  // Use a private directory plus exclusive creation so a local process
+  // cannot pre-create the temporary pathname as a symlink.
+  const tempDir = mkdtempSync(join(dir, `.config-tmp-${process.pid}-`));
+  const tempPath = join(tempDir, "config.tmp");
 
   try {
-    writeFileSync(tempPath, serialized, "utf8");
+    writeFileSync(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 0o600 });
     // On Windows, renameSync can fail with EPERM if the target is locked
     // by another process (e.g., antivirus). Retry multiple times with
     // increasing delays.
@@ -262,13 +263,12 @@ function writeConfigFile(targetFile: string, payload: Record<string, unknown>): 
         throw renameErr;
       }
     }
-  } catch (err) {
+  } finally {
     try {
-      rmSync(tempPath, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
     } catch {
-      // Best-effort cleanup; the original error is what matters.
+      // Best-effort cleanup; preserve the write/rename result or error.
     }
-    throw err;
   }
 }
 
