@@ -164,8 +164,8 @@ test("git_add creates its hash input with exclusive creation inside a private te
   fs.writeFileSync = ((filePath: any, data: any, options?: any) => {
     if (
       typeof filePath === "string" &&
-      filePath.endsWith("/input.tmp") &&
-      basename(dirname(filePath))!.startsWith("git-add-")
+      basename(filePath) === "input.tmp" &&
+      basename(dirname(filePath)).startsWith("git-add-")
     ) {
       hashInputPath = filePath;
       sawExclusiveCreate = options?.flag === "wx";
