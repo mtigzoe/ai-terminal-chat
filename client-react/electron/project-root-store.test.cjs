@@ -25,6 +25,22 @@ describe('project-root-store', () => {
     expect(restored).toEqual([fs.realpathSync.native(projectDir)]);
   });
 
+  test('does not follow a pre-created predictable temporary-file symlink', () => {
+    const target = path.join(userDataDir, 'authorized-project-roots.json');
+    const predictableTemp = `${target}.${process.pid}.tmp`;
+    const attackerTarget = path.join(projectDir, 'attacker-target.txt');
+
+    fs.writeFileSync(attackerTarget, 'sentinel');
+    fs.writeFileSync(predictableTemp, 'pre-created');
+
+    const roots = new Set([fs.realpathSync.native(projectDir)]);
+    expect(saveAuthorizedProjectRoots(userDataDir, roots)).toBe(true);
+
+    expect(fs.readFileSync(attackerTarget, 'utf8')).toBe('sentinel');
+    expect(fs.readFileSync(predictableTemp, 'utf8')).toBe('pre-created');
+    expect(loadAuthorizedProjectRoots(userDataDir)).toEqual([fs.realpathSync.native(projectDir)]);
+  });
+
   test('ignores malformed and missing roots', () => {
     fs.writeFileSync(
       path.join(userDataDir, 'authorized-project-roots.json'),
