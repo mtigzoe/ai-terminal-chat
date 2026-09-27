@@ -1153,3 +1153,8 @@ test("a non-isolated Git subcommand is refused even if the allowlist is widened"
     __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
   }
 });
+test("git fetch cannot be added to the terminal allowlist without confirmation", async () => {
+  const { isForbiddenPrefix, addAllowedCommand } = await import("./terminal.ts");
+  assert.equal(isForbiddenPrefix("git fetch"), true);
+  assert.throws(() => addAllowedCommand("git fetch"), /not permitted for safety reasons/);
+});
