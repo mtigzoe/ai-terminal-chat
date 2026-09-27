@@ -1158,3 +1158,13 @@ test("git fetch cannot be added to the terminal allowlist without confirmation",
   assert.equal(isForbiddenPrefix("git fetch"), true);
   assert.throws(() => addAllowedCommand("git fetch"), /not permitted for safety reasons/);
 });
+
+
+test("Windows git executable aliases cannot bypass fetch confirmation", async () => {
+  const { isForbiddenPrefix, isExecutionRiskCommand, addAllowedCommand } = await import("./terminal.ts");
+  for (const prefix of ["git.exe fetch", "git.cmd fetch", "git.bat fetch"]) {
+    assert.equal(isForbiddenPrefix(prefix), true);
+    assert.throws(() => addAllowedCommand(prefix), /not permitted for safety reasons/);
+  }
+  assert.equal(isExecutionRiskCommand("git.exe fetch"), true);
+});
