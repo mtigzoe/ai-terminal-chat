@@ -1168,3 +1168,33 @@ test("Windows git executable aliases cannot bypass fetch confirmation", async ()
   }
   assert.equal(isExecutionRiskCommand("git.exe fetch"), true);
 });
+
+
+test("Windows git executable aliases preserve file-read permissions", async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { execFileSync } = await import("node:child_process");
+  const { join } = await import("node:path");
+  const temp = mkdtempSync(join(tmpdir(), "terminal-git-alias-read-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: temp });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: temp });
+    writeFileSync(join(temp, "secret.txt"), "not selected");
+    writeFileSync(join(temp, "selected.txt"), "selected");
+    execFileSync("git", ["add", "secret.txt", "selected.txt"], { cwd: temp });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: temp });
+
+    __setProjectRootForTests(temp);
+    await runWithAllowedReadPaths(["selected.txt"], async () => {
+      const { runCommand } = await import("./terminal.ts");
+      const result = runCommand("git.exe show HEAD:secret.txt");
+      assert.equal("error" in result, true);
+      if ("error" in result) {
+        assert.match(String(result.error), /not selected|selected/i);
+      }
+    });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
