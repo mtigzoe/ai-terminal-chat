@@ -1052,10 +1052,14 @@ def is_command_allowed(command: str) -> bool:
     except ValueError:
         tokens = command.split()
     normalized = " ".join(tokens)
+    normalized_prefixes = (
+        _canonicalize_command(prefix).lower()
+        for prefix in ALLOWED_COMMAND_PREFIXES
+    )
 
     return any(
         normalized == prefix or normalized.startswith(prefix + " ")
-        for prefix in ALLOWED_COMMAND_PREFIXES
+        for prefix in normalized_prefixes
     )
 
 
