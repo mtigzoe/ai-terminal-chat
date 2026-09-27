@@ -47,6 +47,36 @@ test("gitDiff rejects an absolute path", async () => {
   assert.equal("error" in result, true);
 });
 
+test("runIsolatedGit blocks repository-enabled external protocols", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { execFileSync } = await import("node:child_process");
+  const temp = mkdtempSync(join(tmpdir(), "git-protocol-isolation-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    const helper = join(temp, "git-ext-helper.mjs");
+    const marker = join(temp, "git-ext-pwned.txt");
+    writeFileSync(helper, "require('node:fs').writeFileSync('git-ext-pwned.txt', 'executed');\n");
+    const configPath = join(temp, ".git", "config");
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8")
+        + "\n[protocol \\\"ext\\\"]\\n\\tallow = always\\n"
+        + "[remote \\\"origin\\\"]\\n\\turl = ext::node git-ext-helper.mjs %S\\n"
+        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\\n",
+    );
+
+    __setProjectRootForTests(temp);
+    const result = await runIsolatedGit(["fetch", "origin"]);
+
+    assert.notEqual(result.code, 0);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+
 test("gitAdd previews staging and does not mutate without confirmation", async () => {
   const result = await gitAdd("src/git.test.ts");
   assert.equal("requires_confirmation" in result, true);
