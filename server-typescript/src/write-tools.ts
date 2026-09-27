@@ -766,11 +766,18 @@ export function extractPatchTargetPaths(patchText: string): string[] {
   const paths: string[] = [];
   const seen = new Set<string>();
 
-  const add = (raw: string, stripGitPrefix = false) => {
-    let candidate = unquoteGitPath(raw);
-    if (stripGitPrefix && /^(?:a|b)\//.test(candidate)) {
-      candidate = candidate.slice(2);
-    }
+  // SECURITY: must resolve each header path exactly the way parseUnifiedDiff()
+  // does (via stripPatchPath() below), because this is the function that
+  // decides which paths get safePath()/isSensitivePath() checked, which paths
+  // are shown to the user in the apply_patch confirmation preview, and which
+  // paths confirmation-state.ts fingerprints for TOCTOU protection. Stripping
+  // a leading "a/"/"b/" any differently than stripPatchPath() lets a header
+  // with a doubled prefix (e.g. "--- a/a/notes.txt") get validated and
+  // previewed under one path while parseUnifiedDiff resolves the hunk itself
+  // to a different, unvalidated, unfingerprinted path — so the file the user
+  // approves is not the file that actually gets written.
+  const add = (raw: string) => {
+    const candidate = stripPatchPath(raw);
     if (!candidate || candidate === "/dev/null") return;
     if (seen.has(candidate)) return;
     seen.add(candidate);
@@ -788,7 +795,7 @@ export function extractPatchTargetPaths(patchText: string): string[] {
 
     for (const prefix of ["+++ b/", "--- a/", "+++ ", "--- "]) {
       if (line.startsWith(prefix)) {
-        add(line.slice(prefix.length), prefix === "+++ " || prefix === "--- ");
+        add(line.slice(prefix.length));
         break;
       }
     }

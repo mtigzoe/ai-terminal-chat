@@ -226,3 +226,34 @@ test("apply_patch does not use git apply path open for TOCTOU", () => {
   rmSync(project, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 });
+
+test("apply_patch preview path matches the path it actually writes, even with a doubled a/b/ header prefix", () => {
+  // extractPatchTargetPaths() (used for validation and for the confirmation
+  // preview/fingerprint) must strip a leading "a/"/"b/" exactly the way
+  // parseUnifiedDiff()'s stripPatchPath() does when it resolves the hunk's
+  // real target. Before this test, a header like "--- a/a/notes.txt" was
+  // validated/previewed as "a/notes.txt" but the hunk itself was applied to
+  // "notes.txt" — an existing file the user never saw named in the preview.
+  const { project } = makeGitProject();
+  writeFileSync(join(project, "notes.txt"), "original\n", "utf8");
+  const patch = [
+    "diff --git a/a/notes.txt b/b/notes.txt",
+    "--- a/a/notes.txt",
+    "+++ b/b/notes.txt",
+    "@@ -1 +1 @@",
+    "-original",
+    "+patched",
+    "",
+  ].join("\n");
+
+  const preview = apply_patch(patch, false);
+  assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+  assert.deepEqual(preview.files, ["notes.txt"], JSON.stringify(preview));
+
+  const applied = apply_patch(patch, true);
+  assert.ok(!("error" in applied), JSON.stringify(applied));
+  assert.deepEqual(applied.files, ["notes.txt"], JSON.stringify(applied));
+  assert.equal(readFileSync(join(project, "notes.txt"), "utf8"), "patched\n");
+
+  rmSync(project, { recursive: true, force: true });
+});
