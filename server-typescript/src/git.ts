@@ -167,7 +167,7 @@ export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
 export function withSanitizedGitConfigForTests<T>(fn: () => Promise<T>): Promise<T> { return withSanitizedGitConfig(fn); }
 
-const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|hook\..+|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
+const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|hook\..+|http\..+\.(extraHeader|proxy|cookieFile|sslCert|sslKey)|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
 
 function parseGitConfigKeys(content: string): string[] {
   const keys: string[] = [];
@@ -370,7 +370,7 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
       "GIT_EXTERNAL_DIFF", "GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE", "GIT_PAGER", "GIT_ASKPASS",
       "SSH_ASKPASS", "GIT_TERMINAL_PROMPT",
     ]) delete env[key];
-    Object.assign(env, { GIT_CONFIG: emptyConfigPath, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_SSH_COMMAND: getGitSshCommand(), GIT_PROXY_COMMAND: "none", GIT_PAGER: "cat", PAGER: "cat" });
+    Object.assign(env, { GIT_CONFIG: emptyConfigPath, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_SSH_COMMAND: getGitSshCommand(), GIT_PROXY_COMMAND: "none", GIT_ALLOW_PROTOCOL: "file:https:http:git:ssh", GIT_PAGER: "cat", PAGER: "cat" });
     if (options.input !== undefined) {
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(gitExecutable, safeArgs, { cwd: getProjectRoot(), shell: false, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });

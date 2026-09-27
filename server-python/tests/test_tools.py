@@ -101,6 +101,43 @@ def test_run_git_ignores_inherited_git_repository_environment(git_repo, tmp_path
     assert Path(result.stdout.strip()).resolve() == git_repo.resolve()
 
 
+def test_run_git_blocks_repository_enabled_external_protocol(git_repo):
+    """A repository config must not enable ext:: to execute a helper process."""
+    helper = git_repo / "git-ext-helper.py"
+    marker = git_repo / "git-ext-pwned.txt"
+    helper.write_text(
+        "from pathlib import Path; Path('git-ext-pwned.txt').write_text('executed')\n",
+        encoding="utf-8",
+    )
+    config_path = git_repo / ".git" / "config"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "\\n[protocol \\\"ext\\\"]\\n\\tallow = always\\n"
+        + "[remote \\\"origin\\\"]\\n\\turl = ext::python git-ext-helper.py %S\\n"
+        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\\n",
+        encoding="utf-8",
+    )
+
+    result = tools._run_git(["fetch", "origin"], timeout=10)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+
+
+def test_run_git_neutralizes_url_specific_http_headers(git_repo):
+    config_path = git_repo / ".git" / "config"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + '\n[http "https://example.invalid/"]\n\textraHeader = Authorization: Bearer repository-secret\n',
+        encoding="utf-8",
+    )
+
+    result = tools._run_git(["config", "--get", "http.https://example.invalid/.extraHeader"], timeout=10)
+
+    assert result.returncode != 0
+    assert "repository-secret" not in (result.stdout or "")
+
+
 def test_atomic_replace_text_replaces_symlink_without_following_target(tmp_path):
     target = tmp_path / "config"
     sentinel = tmp_path / "outside"

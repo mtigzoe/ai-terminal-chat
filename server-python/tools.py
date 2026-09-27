@@ -1701,7 +1701,7 @@ _GIT_CONFIG_OVERRIDES = [
 
 
 DYNAMIC_GIT_CONFIG_KEY_RE = re.compile(
-    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|diff\..+\.(command|textconv)|submodule\..+\.update|hook\..+)$",
+    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|diff\..+\.(command|textconv)|submodule\..+\.update|hook\..+|http\..+\.(extraheader|proxy|cookiefile|sslcert|sslkey))$",
     re.IGNORECASE,
 )
 
@@ -1814,6 +1814,10 @@ def _run_git(
                 "SSH_ASKPASS": "",
                 "GIT_SSH_COMMAND": _git_ssh_command(),
                 "GIT_PROXY_COMMAND": "none",
+                # Restrict fetch/push/clone to built-in network protocols. This
+                # overrides repository protocol.*.allow settings so an untrusted
+                # .git/config cannot enable ext:: or another remote helper.
+                "GIT_ALLOW_PROTOCOL": "file:https:http:git:ssh",
                 "GIT_PAGER": "cat",
                 "PAGER": "cat",
             }

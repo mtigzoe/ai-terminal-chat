@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
 import { __setProjectRootForTests, getProjectRoot, runWithAllowedReadPaths } from "./security.js";
@@ -46,6 +47,57 @@ test("gitDiff rejects an absolute path", async () => {
   const result = await gitDiff("C:\\Windows\\System32\\drivers\\etc\\hosts");
   assert.equal("error" in result, true);
 });
+
+test("runIsolatedGit blocks repository-enabled external protocols", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-protocol-isolation-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    const helper = join(temp, "git-ext-helper.cjs");
+    const marker = join(temp, "git-ext-pwned.txt");
+    writeFileSync(helper, "require('node:fs').writeFileSync('git-ext-pwned.txt', 'executed');\n");
+    const configPath = join(temp, ".git", "config");
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8")
+        + "\n[protocol \\\"ext\\\"]\\n\\tallow = always\\n"
+        + "[remote \\\"origin\\\"]\\n\\turl = ext::node git-ext-helper.mjs %S\\n"
+        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\\n",
+    );
+
+    __setProjectRootForTests(temp);
+    const result = await runIsolatedGit(["fetch", "origin"]);
+
+    assert.notEqual(result.code, 0);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedGit neutralizes URL-specific HTTP headers", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-http-config-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    const configPath = join(temp, ".git", "config");
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8")
+        + "\n[http \\\"https://example.invalid/\\\"]\\n\\textraHeader = Authorization: Bearer repository-secret\\n",
+    );
+    __setProjectRootForTests(temp);
+    const result = await runIsolatedGit(["config", "--get", "http.https://example.invalid/.extraHeader"]);
+    assert.notEqual(result.code, 0);
+    assert.equal(result.stdout.includes("repository-secret"), false);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+
 
 test("gitAdd previews staging and does not mutate without confirmation", async () => {
   const result = await gitAdd("src/git.test.ts");
