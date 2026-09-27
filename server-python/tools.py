@@ -415,6 +415,8 @@ def _canonicalize_command(command: str) -> str:
         tokens = shlex.split(command or "", posix=False)
     except ValueError:
         tokens = (command or "").split()
+    if tokens and tokens[0].lower() in {"git.exe", "git.cmd", "git.bat"}:
+        tokens[0] = "git"
     return " ".join(tokens)
 
 
@@ -424,17 +426,8 @@ def _matches_canonical_prefix(canonical: str, prefix: str) -> bool:
     return canonical == prefix or canonical.startswith(prefix + " ")
 
 
-def _normalize_policy_executable(command: str) -> str:
-    """Normalize Windows executable suffixes before security-policy matching."""
-
-    tokens = command.split()
-    if tokens and tokens[0].lower() in {"git.exe", "git.cmd", "git.bat"}:
-        tokens[0] = "git"
-    return " ".join(tokens)
-
-
 def is_execution_risk_command(command: str) -> bool:
-    canonical = _normalize_policy_executable(_canonicalize_command(command)).lower()
+    canonical = _canonicalize_command(command).lower()
     if not canonical:
         return False
     for prefix in EXECUTION_RISK_COMMAND_PREFIXES:
@@ -574,9 +567,7 @@ def _is_forbidden_prefix(prefix: str) -> bool:
     Intentional DEFAULT_ALLOWED_COMMAND_PREFIXES remain allowed.
     """
 
-    normalized = _normalize_policy_executable(
-        _normalize_command_prefix(prefix)
-    ).lower()
+    normalized = _canonicalize_command(_normalize_command_prefix(prefix)).lower()
     if not normalized:
         return True
 
