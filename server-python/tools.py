@@ -390,6 +390,7 @@ EXECUTION_RISK_COMMAND_PREFIXES = (
     "npm run lint",
     "npm install",
     "npm ci",
+    "git fetch",
     "pip install",
     "pip3 install",
     "pytest",
