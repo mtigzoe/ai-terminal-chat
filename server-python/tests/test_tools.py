@@ -1352,3 +1352,12 @@ def test_is_forbidden_prefix_blocks_git_fetch():
     assert _is_forbidden_prefix("git fetch") is True
     with pytest.raises(ValueError):
         tools.add_allowed_command("git fetch")
+
+
+def test_is_forbidden_prefix_blocks_windows_git_fetch_aliases():
+    """Windows git executable suffixes must not bypass fetch confirmation."""
+    for prefix in ("git.exe fetch", "git.cmd fetch", "git.bat fetch"):
+        assert tools._is_forbidden_prefix(prefix) is True
+        with pytest.raises(ValueError):
+            tools.add_allowed_command(prefix)
+    assert tools.is_execution_risk_command("git.exe fetch") is True
