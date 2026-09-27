@@ -1505,7 +1505,7 @@ def _strip_dangerous_git_config(content: str) -> str:
         stripped = raw.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             section = stripped[1:-1].strip().lower()
-            skipping = (section == "url" or section.startswith("url ") or section == "filter" or section.startswith("filter ") or section == "include" or section.startswith("includeif "))
+            skipping = (section == "url" or section.startswith("url ") or section == "filter" or section.startswith("filter ") or section == "include" or section.startswith("includeif ") or section == "hook" or section.startswith("hook "))
         if not skipping:
             out.append(raw)
     return "".join(out)
@@ -1661,7 +1661,7 @@ _GIT_CONFIG_OVERRIDES = [
 
 
 DYNAMIC_GIT_CONFIG_KEY_RE = re.compile(
-    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.(command|textconv)|submodule\..+\.update)$",
+    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.(command|textconv)|submodule\..+\.update|hook\..+)$",
     re.IGNORECASE,
 )
 
@@ -2599,7 +2599,8 @@ def git_commit(message: str, confirm: bool = False) -> dict:
         }
 
     try:
-        result = _run_git(["commit", "-m", message], timeout=GIT_COMMIT_TIMEOUT)
+        with _sanitized_git_config():
+            result = _run_git(["commit", "-m", message], timeout=GIT_COMMIT_TIMEOUT)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:

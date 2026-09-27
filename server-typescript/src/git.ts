@@ -167,7 +167,7 @@ export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
 export function withSanitizedGitConfigForTests<T>(fn: () => Promise<T>): Promise<T> { return withSanitizedGitConfig(fn); }
 
-const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
+const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack)|hook\..+|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
 
 function parseGitConfigKeys(content: string): string[] {
   const keys: string[] = [];
@@ -237,7 +237,7 @@ export function stripDangerousGitConfig(content: string): string {
     const trimmed = raw.trim(); const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
     if (sectionMatch) {
       const body = sectionMatch[1]!.trim().toLowerCase();
-      if (body.startsWith("url ") || body === "url" || body.startsWith("filter ") || body === "filter") { skipping = true; continue; }
+      if (body.startsWith("url ") || body === "url" || body.startsWith("filter ") || body === "filter" || body.startsWith("hook ") || body === "hook") { skipping = true; continue; }
       skipping = false; out.push(raw); continue;
     }
     if (skipping) continue;
