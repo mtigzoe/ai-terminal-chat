@@ -1323,6 +1323,12 @@ export interface SanitizedTerminalEnv {
   cleanup: () => void;
 }
 
+export function sanitizedTerminalEnv(): NodeJS.ProcessEnv {
+  const { env, cleanup } = buildSanitizedTerminalEnv();
+  cleanup();
+  return env;
+}
+
 export function buildSanitizedTerminalEnv(): SanitizedTerminalEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of SENSITIVE_ENV_VAR_NAMES) delete env[name];
