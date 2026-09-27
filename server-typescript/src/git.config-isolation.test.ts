@@ -197,6 +197,7 @@ test("runIsolatedGit blocks named hook commands", async () => {
   setLocal(repo, "hook.evil.event", "pre-commit");
   __setProjectRootForTests(repo);
   try {
+    execFileSync("git", ["add", "a.txt"], { cwd: repo, stdio: "ignore" });
     const result = await runIsolatedGit(["commit", "-m", "hook-isolation"]);
     assert.equal(existsSync(marker), false, "named hook command must not run");
     assert.equal(result.code, 0);
