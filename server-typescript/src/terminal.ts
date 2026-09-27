@@ -437,10 +437,13 @@ export function isCommandAllowed(command: string): boolean {
     }
   }
 
-  return allowedCommandPrefixes.some(
-    (prefix) =>
-      normalized === prefix || normalized.startsWith(`${prefix} `),
-  );
+  return allowedCommandPrefixes.some((prefix) => {
+    const normalizedPrefix = canonicalizeCommand(prefix).toLowerCase();
+    return (
+      normalized === normalizedPrefix ||
+      normalized.startsWith(`${normalizedPrefix} `)
+    );
+  });
 }
 
 /**
