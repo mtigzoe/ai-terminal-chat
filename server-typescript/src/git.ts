@@ -167,7 +167,7 @@ export function withGitOperationLockForTests<T>(fn: () => Promise<T>): Promise<T
 export function isGitOperationLockHeldForTests(): boolean { return gitOperationMutex.isHeld; }
 export function withSanitizedGitConfigForTests<T>(fn: () => Promise<T>): Promise<T> { return withSanitizedGitConfig(fn); }
 
-const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|hook\..+|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
+const DYNAMIC_OVERRIDE_KEY_RE = /^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|hook\..+|http\..+\.(extraHeader|proxy|cookieFile|sslCert|sslKey)|diff\..+\.(command|textconv)|submodule\..+\.update)$/i;
 
 function parseGitConfigKeys(content: string): string[] {
   const keys: string[] = [];
