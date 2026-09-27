@@ -1825,16 +1825,13 @@ def _run_git(
             + list(args)
         )
         try:
-            try:
-                return run_cancellable(
-                    ["git", *safe_args],
-                    cwd=PROJECT_ROOT,
-                    timeout=timeout,
-                    input_text=input_text,
-                    env=env,
-                )
-            except SubprocessCancelled:
-                raise
+            return run_cancellable(
+                ["git", *safe_args],
+                cwd=PROJECT_ROOT,
+                timeout=timeout,
+                input_text=input_text,
+                env=env,
+            )
     finally:
         try:
             import shutil
