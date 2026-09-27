@@ -76,10 +76,10 @@ def test_terminal_env_strips_execution_injection_variables(monkeypatch):
     monkeypatch.setenv("NPM_CONFIG_USERCONFIG", "../outside/.npmrc")
     monkeypatch.setenv("NPM_CONFIG_NODE_OPTIONS", "--require ./outside.js")
     monkeypatch.setenv("NORMAL_TERMINAL_VALUE", "kept")
-    env = tools._sanitized_terminal_env()
-    for key in ("NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS"):
-        assert key not in env
-    assert env["NORMAL_TERMINAL_VALUE"] == "kept"
+    with tools._sanitized_terminal_env() as env:
+        for key in ("NODE_OPTIONS", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "PYTHONPATH", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_SSL_NO_VERIFY", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_NODE_OPTIONS"):
+            assert key not in env
+        assert env["NORMAL_TERMINAL_VALUE"] == "kept"
 
 
 def test_run_git_ignores_inherited_git_repository_environment(git_repo, tmp_path, monkeypatch):
