@@ -84,6 +84,7 @@ export const FORBIDDEN_ALLOWED_COMMAND_PREFIXES = [
   "diskpart",
   "git reset",
   "git clean",
+  "git fetch",
   "git push",
   "git commit",
   "git pull",
