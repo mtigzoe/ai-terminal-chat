@@ -48,6 +48,14 @@ def test_git_diff_disables_textconv(monkeypatch):
     assert captured["args"][:3] == ["diff", "--no-ext-diff", "--no-textconv"]
 
 
+def test_dynamic_git_config_includes_remote_proxy(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _git(root, "config", "remote.origin.proxy", "http://127.0.0.1:9")
+    monkeypatch.setattr(tools, "PROJECT_ROOT", root)
+    flattened = " ".join(tools._dynamic_git_config_overrides())
+    assert "remote.origin.proxy=" in flattened
+
+
 def test_dynamic_git_config_overrides_execution_paths(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     _git(root, 'config', 'filter.evil.clean', "sh -c 'touch pwned; cat'")
