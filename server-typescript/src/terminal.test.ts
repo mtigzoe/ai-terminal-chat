@@ -1180,7 +1180,7 @@ test("Windows git executable aliases preserve file-read permissions", async () =
     execFileSync("git", ["init", "-q"], { cwd: temp });
     execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: temp });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: temp });
-    writeFileSync(join(temp, "secret.txt"), "not selected");
+    writeFileSync(join(temp, "unselected.txt"), "not selected");
     writeFileSync(join(temp, "selected.txt"), "selected");
     execFileSync("git", ["add", "secret.txt", "selected.txt"], { cwd: temp });
     execFileSync("git", ["commit", "-qm", "fixture"], { cwd: temp });
@@ -1188,7 +1188,7 @@ test("Windows git executable aliases preserve file-read permissions", async () =
     __setProjectRootForTests(temp);
     await runWithAllowedReadPaths(["selected.txt"], async () => {
       const { runCommand } = await import("./terminal.ts");
-      const result = runCommand("git.exe show HEAD:secret.txt");
+      const result = runCommand("git.exe show HEAD:unselected.txt");
       assert.equal("error" in result, true);
       if ("error" in result) {
         assert.match(String(result.error), /not selected|selected/i);
