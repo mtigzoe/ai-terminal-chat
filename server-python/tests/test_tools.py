@@ -1361,3 +1361,16 @@ def test_is_forbidden_prefix_blocks_windows_git_fetch_aliases():
         with pytest.raises(ValueError):
             tools.add_allowed_command(prefix)
     assert tools.is_execution_risk_command("git.exe fetch") is True
+
+
+def test_windows_git_executable_alias_preserves_read_permissions(git_repo):
+    (git_repo / "secret.txt").write_text("not selected", encoding="utf-8")
+    (git_repo / "selected.txt").write_text("selected", encoding="utf-8")
+    subprocess.run(["git", "add", "secret.txt", "selected.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=git_repo, check=True)
+
+    with security.allowed_read_paths_context(["selected.txt"]):
+        result = tools.run_command("git.exe show HEAD:secret.txt")
+
+    assert "error" in result
+    assert "selected" in result["error"].lower()
