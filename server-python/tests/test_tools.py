@@ -1389,3 +1389,25 @@ def test_is_forbidden_prefix_blocks_git_fetch():
     assert _is_forbidden_prefix("git fetch") is True
     with pytest.raises(ValueError):
         tools.add_allowed_command("git fetch")
+
+
+def test_is_forbidden_prefix_blocks_windows_git_fetch_aliases():
+    """Windows git executable suffixes must not bypass fetch confirmation."""
+    for prefix in ("git.exe fetch", "git.cmd fetch", "git.bat fetch"):
+        assert tools._is_forbidden_prefix(prefix) is True
+        with pytest.raises(ValueError):
+            tools.add_allowed_command(prefix)
+    assert tools.is_execution_risk_command("git.exe fetch") is True
+
+
+def test_windows_git_executable_alias_preserves_read_permissions(git_repo):
+    (git_repo / "unselected.txt").write_text("not selected", encoding="utf-8")
+    (git_repo / "selected.txt").write_text("selected", encoding="utf-8")
+    subprocess.run(["git", "add", "unselected.txt", "selected.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=git_repo, check=True)
+
+    with security.allowed_read_paths_context(["selected.txt"]):
+        result = tools.run_command("git.exe show HEAD:unselected.txt")
+
+    assert "error" in result
+    assert "selected" in result["error"].lower()

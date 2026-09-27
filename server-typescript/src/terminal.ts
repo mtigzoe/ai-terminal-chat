@@ -160,6 +160,7 @@ export const EXECUTION_RISK_COMMAND_PREFIXES = [
   "npm run lint",
   "npm install",
   "npm ci",
+  "git fetch",
   "pip install",
   "pip3 install",
   "pytest",
@@ -181,11 +182,16 @@ export const EXECUTION_RISK_COMMAND_PREFIXES = [
  * but no longer recognized as execution-risk or content-reading.
  */
 export function canonicalizeCommand(command: string): string {
+  let tokens: string[];
   try {
-    return tokenizeCommand(command ?? "").join(" ");
+    tokens = tokenizeCommand(command ?? "");
   } catch {
-    return (command ?? "").trim().split(/\s+/).filter(Boolean).join(" ");
+    tokens = (command ?? "").trim().split(/\s+/).filter(Boolean);
   }
+  if (tokens.length > 0 && ["git.exe", "git.cmd", "git.bat"].includes(tokens[0].toLowerCase())) {
+    tokens[0] = "git";
+  }
+  return tokens.join(" ");
 }
 
 /** Prefix match against an already-canonical, already-lowercased command. */
@@ -209,7 +215,7 @@ function normalizePrefix(prefix: string): string {
 
 /** True if a proposed allowlist prefix must be rejected for safety reasons. */
 export function isForbiddenPrefix(prefix: string): boolean {
-  const normalized = normalizePrefix(prefix).toLowerCase();
+  const normalized = canonicalizeCommand(normalizePrefix(prefix)).toLowerCase();
 
   if (!normalized) return true;
 
@@ -432,10 +438,13 @@ export function isCommandAllowed(command: string): boolean {
     }
   }
 
-  return allowedCommandPrefixes.some(
-    (prefix) =>
-      normalized === prefix || normalized.startsWith(`${prefix} `),
-  );
+  return allowedCommandPrefixes.some((prefix) => {
+    const normalizedPrefix = canonicalizeCommand(prefix).toLowerCase();
+    return (
+      normalized === normalizedPrefix ||
+      normalized.startsWith(`${normalizedPrefix} `)
+    );
+  });
 }
 
 /**

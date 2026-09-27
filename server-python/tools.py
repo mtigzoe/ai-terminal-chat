@@ -390,6 +390,7 @@ EXECUTION_RISK_COMMAND_PREFIXES = (
     "npm run lint",
     "npm install",
     "npm ci",
+    "git fetch",
     "pip install",
     "pip3 install",
     "pytest",
@@ -415,6 +416,8 @@ def _canonicalize_command(command: str) -> str:
         tokens = shlex.split(command or "", posix=False)
     except ValueError:
         tokens = (command or "").split()
+    if tokens and tokens[0].lower() in {"git.exe", "git.cmd", "git.bat"}:
+        tokens[0] = "git"
     return " ".join(tokens)
 
 
@@ -565,7 +568,7 @@ def _is_forbidden_prefix(prefix: str) -> bool:
     Intentional DEFAULT_ALLOWED_COMMAND_PREFIXES remain allowed.
     """
 
-    normalized = _normalize_command_prefix(prefix).lower()
+    normalized = _canonicalize_command(_normalize_command_prefix(prefix)).lower()
     if not normalized:
         return True
 
@@ -1050,10 +1053,14 @@ def is_command_allowed(command: str) -> bool:
     except ValueError:
         tokens = command.split()
     normalized = " ".join(tokens)
+    normalized_prefixes = (
+        _canonicalize_command(prefix).lower()
+        for prefix in ALLOWED_COMMAND_PREFIXES
+    )
 
     return any(
         normalized == prefix or normalized.startswith(prefix + " ")
-        for prefix in ALLOWED_COMMAND_PREFIXES
+        for prefix in normalized_prefixes
     )
 
 
