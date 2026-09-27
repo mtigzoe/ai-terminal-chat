@@ -1817,7 +1817,7 @@ def _run_git(
                 # Restrict fetch/push/clone to built-in network protocols. This
                 # overrides repository protocol.*.allow settings so an untrusted
                 # .git/config cannot enable ext:: or another remote helper.
-                "GIT_ALLOW_PROTOCOL": "https:http:git:ssh",
+                "GIT_ALLOW_PROTOCOL": "file:https:http:git:ssh",
                 "GIT_PAGER": "cat",
                 "PAGER": "cat",
             }
