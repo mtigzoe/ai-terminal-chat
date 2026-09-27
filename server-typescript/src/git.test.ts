@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
 import { __setProjectRootForTests, getProjectRoot, runWithAllowedReadPaths } from "./security.js";
@@ -50,7 +51,6 @@ test("gitDiff rejects an absolute path", async () => {
 test("runIsolatedGit blocks repository-enabled external protocols", async () => {
   const { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
-  const { execFileSync } = await import("node:child_process");
   const temp = mkdtempSync(join(tmpdir(), "git-protocol-isolation-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: temp });
