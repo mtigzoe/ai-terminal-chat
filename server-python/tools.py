@@ -1814,6 +1814,10 @@ def _run_git(
                 "SSH_ASKPASS": "",
                 "GIT_SSH_COMMAND": _git_ssh_command(),
                 "GIT_PROXY_COMMAND": "none",
+                # Restrict fetch/push/clone to built-in network protocols. This
+                # overrides repository protocol.*.allow settings so an untrusted
+                # .git/config cannot enable ext:: or another remote helper.
+                "GIT_ALLOW_PROTOCOL": "https:http:git:ssh",
                 "GIT_PAGER": "cat",
                 "PAGER": "cat",
             }
