@@ -181,11 +181,16 @@ export const EXECUTION_RISK_COMMAND_PREFIXES = [
  * but no longer recognized as execution-risk or content-reading.
  */
 export function canonicalizeCommand(command: string): string {
+  let tokens: string[];
   try {
-    return tokenizeCommand(command ?? "").join(" ");
+    tokens = tokenizeCommand(command ?? "");
   } catch {
-    return (command ?? "").trim().split(/\s+/).filter(Boolean).join(" ");
+    tokens = (command ?? "").trim().split(/\s+/).filter(Boolean);
   }
+  if (tokens.length > 0 && ["git.exe", "git.cmd", "git.bat"].includes(tokens[0].toLowerCase())) {
+    tokens[0] = "git";
+  }
+  return tokens.join(" ");
 }
 
 /** Prefix match against an already-canonical, already-lowercased command. */
@@ -193,17 +198,9 @@ function matchesCanonicalPrefix(canonical: string, prefix: string): boolean {
   return canonical === prefix || canonical.startsWith(`${prefix} `);
 }
 
-function normalizePolicyExecutable(command: string): string {
-  const tokens = command.split(/\\s+/).filter(Boolean);
-  if (tokens.length > 0 && ["git.exe", "git.cmd", "git.bat"].includes(tokens[0].toLowerCase())) {
-    tokens[0] = "git";
-  }
-  return tokens.join(" ");
-}
-
 /** True when the command can run project/dependency-controlled code. */
 export function isExecutionRiskCommand(command: string): boolean {
-  const canonical = normalizePolicyExecutable(canonicalizeCommand(command)).toLowerCase();
+  const canonical = canonicalizeCommand(command).toLowerCase();
   if (!canonical) return false;
   return EXECUTION_RISK_COMMAND_PREFIXES.some((prefix) =>
     matchesCanonicalPrefix(canonical, prefix),
@@ -217,7 +214,7 @@ function normalizePrefix(prefix: string): string {
 
 /** True if a proposed allowlist prefix must be rejected for safety reasons. */
 export function isForbiddenPrefix(prefix: string): boolean {
-  const normalized = normalizePolicyExecutable(normalizePrefix(prefix)).toLowerCase();
+  const normalized = canonicalizeCommand(normalizePrefix(prefix)).toLowerCase();
 
   if (!normalized) return true;
 
