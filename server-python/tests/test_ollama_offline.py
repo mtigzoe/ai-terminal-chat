@@ -36,7 +36,7 @@ def test_ollama_refresh_capabilities_notes_unreachable_server():
     )
 
     with patch(
-        "ollama.requests.request",
+        "ollama.safe_fetch.safe_request",
         side_effect=ConnectionError("connection refused"),
     ):
         caps = provider.refresh_capabilities()
@@ -53,7 +53,7 @@ def test_ollama_refresh_capabilities_notes_empty_model_catalog():
     empty_tags = Mock(status_code=200)
     empty_tags.json.return_value = {"models": []}
 
-    with patch("ollama.requests.request", return_value=empty_tags):
+    with patch("ollama.safe_fetch.safe_request", return_value=empty_tags):
         caps = provider.refresh_capabilities()
 
     assert "no models are installed" in caps.notes
@@ -70,7 +70,7 @@ def test_ollama_refresh_capabilities_notes_missing_configured_model():
         "models": [{"name": "llama3.1:latest", "size": 1}],
     }
 
-    with patch("ollama.requests.request", return_value=tags):
+    with patch("ollama.safe_fetch.safe_request", return_value=tags):
         caps = provider.refresh_capabilities()
 
     assert "is not installed" in caps.notes
@@ -88,7 +88,7 @@ def test_ollama_has_model_matches_latest_tag():
         "models": [{"name": "llama3.1:latest"}],
     }
 
-    with patch("ollama.requests.request", return_value=tags):
+    with patch("ollama.safe_fetch.safe_request", return_value=tags):
         assert provider.has_model("llama3.1") is True
         assert provider.has_model("other") is False
 
@@ -101,7 +101,7 @@ def test_ollama_generate_raises_clear_error_when_model_missing():
     tags = Mock(status_code=200)
     tags.json.return_value = {"models": [{"name": "llama3.1"}]}
 
-    with patch("ollama.requests.request", return_value=tags):
+    with patch("ollama.safe_fetch.safe_request", return_value=tags):
         provider.refresh_capabilities()
         with pytest.raises(RuntimeError, match="is not installed"):
             provider.generate([{"role": "user", "content": "hi"}])
@@ -131,7 +131,7 @@ def test_ollama_refresh_capabilities_clears_notes_when_model_available():
             return show
         raise AssertionError(url)
 
-    with patch("ollama.requests.request", side_effect=request_side_effect):
+    with patch("ollama.safe_fetch.safe_request", side_effect=request_side_effect):
         caps = provider.refresh_capabilities()
         assert provider.has_model("llama3.1") is True
 

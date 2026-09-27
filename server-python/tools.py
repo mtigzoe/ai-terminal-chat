@@ -245,7 +245,15 @@ def search_files(query: str, path: str = ".") -> dict:
         else:
             walker = os.walk(directory)
 
-        for root, dirnames, filenames, dir_fd in walker:
+        # os.fwalk() yields (dirpath, dirnames, filenames, dir_fd) while the
+        # non-POSIX fallback os.walk() yields 3-tuples. Normalize both shapes
+        # here so the rest of the loop can rely on dir_fd being bound.
+        for entry in walker:
+            if root_fd is not None:
+                root, dirnames, filenames, dir_fd = entry
+            else:
+                root, dirnames, filenames = entry
+                dir_fd = None
             dirnames[:] = sorted(
                 d for d in dirnames if d not in SEARCH_EXCLUDED_DIR_NAMES
             )
@@ -1524,26 +1532,6 @@ def _git_config_files() -> list[Path]:
     return paths
 
 
-def _atomic_replace_text(path: Path, content: str) -> None:
-    """Replace a file without following a raced symlink at the target path."""
-    fd, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-        text=True,
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.replace(temp_name, path)
-    except Exception:
-        try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
-
-
 def _strip_dangerous_git_config(content: str) -> str:
     """Remove URL/filter/include sections before network Git operations."""
     out: list[str] = []
@@ -1584,6 +1572,7 @@ def _atomic_replace_text(path: Path, content: str) -> None:
             except OSError:
                 pass
             raise
+        return
 
     parent_fd = os.open(
         path.parent,

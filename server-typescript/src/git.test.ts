@@ -144,7 +144,10 @@ test("runIsolatedGit ignores inherited Git repository and transport environment"
   try {
     const result = await runIsolatedGit(["rev-parse", "--show-toplevel"]);
     assert.equal(result.code, 0);
-    assert.equal(result.stdout.trim(), resolve(process.cwd(), ".."));
+    // Git prints a forward-slash path even on Windows while path.resolve()
+    // produces backslashes there, so compare with one separator convention.
+    const normalize = (value: string) => value.replace(/\\/g, "/");
+    assert.equal(normalize(result.stdout.trim()), normalize(resolve(process.cwd(), "..")));
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete process.env[key];

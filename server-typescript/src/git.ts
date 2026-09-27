@@ -430,7 +430,18 @@ async function stageFileWithoutFilters(relativePath: string, absolutePath: strin
   const hashed = await runIsolatedGit(["hash-object", "-w", "--stdin", "--no-filters"], { timeout: GIT_ADD_TIMEOUT_MS, input: payload }); if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed"); const oid = hashed.stdout.trim(); if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error(`Unexpected hash-object output: ${oid}`); const updated = await runIsolatedGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`], { timeout: GIT_ADD_TIMEOUT_MS }); if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
 }
 
-async function restoreWorktreeWithoutFilters(relativePath: string): Promise<void> { const indexPath = relativePath.replace(/\\/g, "/"); const result = await runGit(["checkout-index", "--force", "--", indexPath], GIT_RESTORE_TIMEOUT_MS); if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git checkout-index failed"); }
+async function restoreWorktreeWithoutFilters(relativePath: string): Promise<void> {
+  const indexPath = relativePath.replace(/\\/g, "/");
+  // Force core.symlinks=true for this checkout: the isolated Git environment
+  // intentionally ignores system/global config, and on Windows the platform's
+  // symlink capability is recorded there. Without it git falls back to
+  // core.symlinks=false and silently writes an index entry that is a symlink
+  // (mode 120000) as a regular file containing the link target text, so a
+  // restore would replace the requested symlink with the file it points at
+  // instead of the link itself.
+  const result = await runGit(["-c", "core.symlinks=true", "checkout-index", "--force", "--", indexPath], GIT_RESTORE_TIMEOUT_MS);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git checkout-index failed");
+}
 
 export async function gitAdd(path: string, confirm = false): Promise<Record<string, unknown>> {
   let filePath: string; try { filePath = safePath(path); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }

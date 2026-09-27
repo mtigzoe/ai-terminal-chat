@@ -341,7 +341,10 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(path.join(root, "greeting.txt"), "utf-8")).toBe("hello\n");
   });
 
-  it("applies quoted git paths with octal escapes", () => {
+  // Windows forbids control characters (the tab below) in file names, so the
+  // setup file cannot exist there. The octal-escape decoding itself is also
+  // covered cross-platform by confirmation-state.test.ts.
+  it.skipIf(process.platform === "win32")("applies quoted git paths with octal escapes", () => {
     const fileName = "line\tname.txt";
     fs.writeFileSync(path.join(root, fileName), "hello\n");
     const patch = "--- \"a/line\\011name.txt\"\n+++ \"b/line\\011name.txt\"\n@@ -1 +1 @@\n-hello\n+hello world\n";
