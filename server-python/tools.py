@@ -1833,12 +1833,12 @@ def _run_git(
                 env=env,
             )
         finally:
-        try:
-            import shutil
+            try:
+                import shutil
 
-            shutil.rmtree(isolation, ignore_errors=True)
-        except Exception:
-            pass
+                shutil.rmtree(isolation, ignore_errors=True)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------
