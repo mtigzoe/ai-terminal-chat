@@ -109,14 +109,14 @@ def test_run_git_blocks_repository_enabled_external_protocol(git_repo):
         "from pathlib import Path; Path('git-ext-pwned.txt').write_text('executed')\n",
         encoding="utf-8",
     )
-    with (git_repo / ".git" / "config").open("a", encoding="utf-8") as config:
-        config.write_text(
-            config.read()
-            + "\\n[protocol \\\"ext\\\"]\\n\\tallow = always\\n"
-            + "[remote \\\"origin\\\"]\\n\\turl = ext::python git-ext-helper.py %S\\n"
-            + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\\n",
-            encoding="utf-8",
-        )
+    config_path = git_repo / ".git" / "config"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "\\n[protocol \\\"ext\\\"]\\n\\tallow = always\\n"
+        + "[remote \\\"origin\\\"]\\n\\turl = ext::python git-ext-helper.py %S\\n"
+        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\\n",
+        encoding="utf-8",
+    )
 
     result = tools._run_git(["fetch", "origin"], timeout=10)
 
