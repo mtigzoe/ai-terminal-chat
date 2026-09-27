@@ -54,7 +54,7 @@ test("runIsolatedGit blocks repository-enabled external protocols", async () => 
   const temp = mkdtempSync(join(tmpdir(), "git-protocol-isolation-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: temp });
-    const helper = join(temp, "git-ext-helper.mjs");
+    const helper = join(temp, "git-ext-helper.cjs");
     const marker = join(temp, "git-ext-pwned.txt");
     writeFileSync(helper, "require('node:fs').writeFileSync('git-ext-pwned.txt', 'executed');\n");
     const configPath = join(temp, ".git", "config");
