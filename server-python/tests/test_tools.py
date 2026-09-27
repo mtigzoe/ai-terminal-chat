@@ -1341,5 +1341,13 @@ def test_non_isolated_git_subcommand_refused_even_if_allowlist_widened(monkeypat
 
     monkeypatch.setattr(tools, "ALLOWED_COMMAND_PREFIXES", ["git config"])
     result = tools.run_command("git config --list")
-    assert "error" in result
+    assert "error" in resultdef test_is_forbidden_prefix_blocks_git_fetch():
+    """A user-added git fetch prefix must not bypass explicit fetch confirmation."""
+    from tools import _is_forbidden_prefix
+
+    assert _is_forbidden_prefix("git fetch") is True
+    with pytest.raises(ValueError):
+        tools.add_allowed_command("git fetch")
+
+
     assert "subcommand not allowed" in result["error"].lower()
