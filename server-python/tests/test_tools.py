@@ -124,6 +124,20 @@ def test_run_git_blocks_repository_enabled_external_protocol(git_repo):
     assert not marker.exists()
 
 
+def test_run_git_neutralizes_url_specific_http_headers(git_repo):
+    config_path = git_repo / ".git" / "config"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + '\n[http "https://example.invalid/"]\n\textraHeader = Authorization: Bearer repository-secret\n',
+        encoding="utf-8",
+    )
+
+    result = tools._run_git(["config", "--get", "http.https://example.invalid/.extraHeader"], timeout=10)
+
+    assert result.returncode != 0
+    assert "repository-secret" not in (result.stdout or "")
+
+
 def test_atomic_replace_text_replaces_symlink_without_following_target(tmp_path):
     target = tmp_path / "config"
     sentinel = tmp_path / "outside"
