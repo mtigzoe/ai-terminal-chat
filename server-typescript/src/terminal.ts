@@ -193,9 +193,17 @@ function matchesCanonicalPrefix(canonical: string, prefix: string): boolean {
   return canonical === prefix || canonical.startsWith(`${prefix} `);
 }
 
+function normalizePolicyExecutable(command: string): string {
+  const tokens = command.split(/\\s+/).filter(Boolean);
+  if (tokens.length > 0 && ["git.exe", "git.cmd", "git.bat"].includes(tokens[0].toLowerCase())) {
+    tokens[0] = "git";
+  }
+  return tokens.join(" ");
+}
+
 /** True when the command can run project/dependency-controlled code. */
 export function isExecutionRiskCommand(command: string): boolean {
-  const canonical = canonicalizeCommand(command).toLowerCase();
+  const canonical = normalizePolicyExecutable(canonicalizeCommand(command)).toLowerCase();
   if (!canonical) return false;
   return EXECUTION_RISK_COMMAND_PREFIXES.some((prefix) =>
     matchesCanonicalPrefix(canonical, prefix),
@@ -209,7 +217,7 @@ function normalizePrefix(prefix: string): string {
 
 /** True if a proposed allowlist prefix must be rejected for safety reasons. */
 export function isForbiddenPrefix(prefix: string): boolean {
-  const normalized = normalizePrefix(prefix).toLowerCase();
+  const normalized = normalizePolicyExecutable(normalizePrefix(prefix)).toLowerCase();
 
   if (!normalized) return true;
 
