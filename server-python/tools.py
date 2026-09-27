@@ -1797,44 +1797,44 @@ def _run_git(
     # Reuse the terminal environment sanitizer so Git cannot inherit
     # repository/object/config/transport/helper overrides from the server.
     # The controlled Git values below are then applied explicitly.
-    env = _sanitized_terminal_env()
-    # Empty GIT_EXTERNAL_DIFF makes Git try to execute "" and fail with
-    # "cannot run : No such file or directory". Remove inherited values
-    # instead; --no-ext-diff / -c diff.external= block repo-controlled helpers.
-    env.pop("GIT_EXTERNAL_DIFF", None)
-    env.pop("GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE", None)
-    env.update(
-        {
-            "GIT_CONFIG": empty_config,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "NUL" if os.name == "nt" else "/dev/null",
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ASKPASS": "",
-            "SSH_ASKPASS": "",
-            "GIT_SSH_COMMAND": _git_ssh_command(),
-            "GIT_PROXY_COMMAND": "none",
-            "GIT_PAGER": "cat",
-            "PAGER": "cat",
-        }
-    )
+    with _sanitized_terminal_env() as env:
+        # Empty GIT_EXTERNAL_DIFF makes Git try to execute "" and fail with
+        # "cannot run : No such file or directory". Remove inherited values
+        # instead; --no-ext-diff / -c diff.external= block repo-controlled helpers.
+        env.pop("GIT_EXTERNAL_DIFF", None)
+        env.pop("GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE", None)
+        env.update(
+            {
+                "GIT_CONFIG": empty_config,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": "NUL" if os.name == "nt" else "/dev/null",
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_ASKPASS": "",
+                "SSH_ASKPASS": "",
+                "GIT_SSH_COMMAND": _git_ssh_command(),
+                "GIT_PROXY_COMMAND": "none",
+                "GIT_PAGER": "cat",
+                "PAGER": "cat",
+            }
+        )
 
-    safe_args = (
-        list(_GIT_CONFIG_OVERRIDES)
-        + _dynamic_git_config_overrides()
-        + _git_line_ending_overrides()
-        + list(args)
-    )
-    try:
+        safe_args = (
+            list(_GIT_CONFIG_OVERRIDES)
+            + _dynamic_git_config_overrides()
+            + _git_line_ending_overrides()
+            + list(args)
+        )
         try:
-            return run_cancellable(
-                ["git", *safe_args],
-                cwd=PROJECT_ROOT,
-                timeout=timeout,
-                input_text=input_text,
-                env=env,
-            )
-        except SubprocessCancelled:
-            raise
+            try:
+                return run_cancellable(
+                    ["git", *safe_args],
+                    cwd=PROJECT_ROOT,
+                    timeout=timeout,
+                    input_text=input_text,
+                    env=env,
+                )
+            except SubprocessCancelled:
+                raise
     finally:
         try:
             import shutil
