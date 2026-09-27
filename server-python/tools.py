@@ -1824,14 +1824,13 @@ def _run_git(
             + _git_line_ending_overrides()
             + list(args)
         )
-        try:
-            return run_cancellable(
-                ["git", *safe_args],
-                cwd=PROJECT_ROOT,
-                timeout=timeout,
-                input_text=input_text,
-                env=env,
-            )
+        return run_cancellable(
+            ["git", *safe_args],
+            cwd=PROJECT_ROOT,
+            timeout=timeout,
+            input_text=input_text,
+            env=env,
+        )
     finally:
         try:
             import shutil
