@@ -1182,7 +1182,7 @@ test("Windows git executable aliases preserve file-read permissions", async () =
     execFileSync("git", ["config", "user.name", "Test"], { cwd: temp });
     writeFileSync(join(temp, "unselected.txt"), "not selected");
     writeFileSync(join(temp, "selected.txt"), "selected");
-    execFileSync("git", ["add", "secret.txt", "selected.txt"], { cwd: temp });
+    execFileSync("git", ["add", "unselected.txt", "selected.txt"], { cwd: temp });
     execFileSync("git", ["commit", "-qm", "fixture"], { cwd: temp });
 
     __setProjectRootForTests(temp);
