@@ -1818,20 +1818,21 @@ def _run_git(
             }
         )
 
-        safe_args = (
-            list(_GIT_CONFIG_OVERRIDES)
-            + _dynamic_git_config_overrides()
-            + _git_line_ending_overrides()
-            + list(args)
-        )
-        return run_cancellable(
-            ["git", *safe_args],
-            cwd=PROJECT_ROOT,
-            timeout=timeout,
-            input_text=input_text,
-            env=env,
-        )
-    finally:
+        try:
+            safe_args = (
+                list(_GIT_CONFIG_OVERRIDES)
+                + _dynamic_git_config_overrides()
+                + _git_line_ending_overrides()
+                + list(args)
+            )
+            return run_cancellable(
+                ["git", *safe_args],
+                cwd=PROJECT_ROOT,
+                timeout=timeout,
+                input_text=input_text,
+                env=env,
+            )
+        finally:
         try:
             import shutil
 
