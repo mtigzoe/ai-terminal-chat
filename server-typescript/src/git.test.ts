@@ -76,6 +76,28 @@ test("runIsolatedGit blocks repository-enabled external protocols", async () => 
   }
 });
 
+test("runIsolatedGit neutralizes URL-specific HTTP headers", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-http-config-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    const configPath = join(temp, ".git", "config");
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8")
+        + "\n[http \\\"https://example.invalid/\\\"]\\n\\textraHeader = Authorization: Bearer repository-secret\\n",
+    );
+    __setProjectRootForTests(temp);
+    const result = await runIsolatedGit(["config", "--get", "http.https://example.invalid/.extraHeader"]);
+    assert.notEqual(result.code, 0);
+    assert.equal(result.stdout.includes("repository-secret"), false);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+
 
 test("gitAdd previews staging and does not mutate without confirmation", async () => {
   const result = await gitAdd("src/git.test.ts");
