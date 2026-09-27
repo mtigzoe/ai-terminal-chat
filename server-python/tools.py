@@ -1701,7 +1701,7 @@ _GIT_CONFIG_OVERRIDES = [
 
 
 DYNAMIC_GIT_CONFIG_KEY_RE = re.compile(
-    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|diff\..+\.(command|textconv)|submodule\..+\.update|hook\..+)$",
+    r"^(filter\..+\.(clean|smudge|process|required)|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|merge\..+\.driver|remote\..+\.(uploadpack|receivepack|proxy)|diff\..+\.(command|textconv)|submodule\..+\.update|hook\..+|http\..+\.(extraheader|proxy|cookiefile|sslcert|sslkey))$",
     re.IGNORECASE,
 )
 
