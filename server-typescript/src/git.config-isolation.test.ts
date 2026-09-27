@@ -273,6 +273,20 @@ test("terminal git status also blocks worktree fsmonitor", async () => {
   }
 });
 
+test("dynamic Git config clears remote proxy", async () => {
+  const repo = initRepo();
+  setLocal(repo, "remote.origin.proxy", "http://127.0.0.1:9");
+  __setProjectRootForTests(repo);
+  try {
+    const result = await runIsolatedGit(["config", "--get", "remote.origin.proxy"]);
+    assert.notEqual(result.code, 0);
+    assert.equal(result.stdout.trim(), "");
+  } finally {
+    __resetProjectRootForTests();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("GIT_CONFIG_OVERRIDES includes fsmonitor, hooksPath, alias.status", () => {
   const joined = GIT_CONFIG_OVERRIDES.join("\n");
   assert.ok(joined.includes("core.fsmonitor="));
