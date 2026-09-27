@@ -278,8 +278,9 @@ test("dynamic Git config clears remote proxy", async () => {
   setLocal(repo, "remote.origin.proxy", "http://127.0.0.1:9");
   __setProjectRootForTests(repo);
   try {
-    const result = await runIsolatedGit(["remote", "get-url", "origin"]);
-    assert.equal(result.code, 0);
+    const result = await runIsolatedGit(["config", "--get", "remote.origin.proxy"]);
+    assert.notEqual(result.code, 0);
+    assert.equal(result.stdout.trim(), "");
   } finally {
     __resetProjectRootForTests();
     rmSync(repo, { recursive: true, force: true });
