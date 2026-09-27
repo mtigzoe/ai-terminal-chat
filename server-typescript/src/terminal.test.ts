@@ -1188,7 +1188,7 @@ test("Windows git executable aliases preserve file-read permissions", async () =
     __setProjectRootForTests(temp);
     await runWithAllowedReadPaths(["selected.txt"], async () => {
       const { runCommand } = await import("./terminal.ts");
-      const result = runCommand("git.exe show HEAD:unselected.txt");
+      const result = await runCommand("git.exe show HEAD:unselected.txt");
       assert.equal("error" in result, true);
       if ("error" in result) {
         assert.match(String(result.error), /not selected|selected/i);
