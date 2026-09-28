@@ -31,6 +31,7 @@ from security import (
     is_sensitive_path,
     require_read_allowed,
     safe_path,
+    safe_write_path,
 )
 
 # ---------------------------------------------------------
@@ -124,7 +125,10 @@ def read_file(path: str) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        # Preserve the final path component lexically so dangling symlinks
+        # remain addressable. safe_path() resolves the final component and
+        # therefore turns a dangling link into its missing target.
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2326,12 +2330,19 @@ def git_add(path: str, confirm: bool = False) -> dict:
                 )
             }
 
-    if not file_path.exists():
+    try:
+        lexical_stat = file_path.lstat()
+    except FileNotFoundError:
         return {"error": f"File does not exist: {path}"}
 
-    if file_path.is_dir():
+    if stat.S_ISDIR(lexical_stat.st_mode):
         return {
             "error": "git_add can only stage a single file, not a directory."
+        }
+
+    if not (stat.S_ISREG(lexical_stat.st_mode) or stat.S_ISLNK(lexical_stat.st_mode)):
+        return {
+            "error": "git_add can only stage a regular file or symbolic link."
         }
 
     rel_path = str(file_path.relative_to(PROJECT_ROOT))
@@ -2351,8 +2362,12 @@ def git_add(path: str, confirm: bool = False) -> dict:
         # Never invoke `git add` here: repository .gitattributes can attach
         # arbitrary filter.clean/filter.process commands. Hash the exact file
         # bytes with --no-filters and update the index directly instead.
-        mode = "100755" if (file_path.stat().st_mode & 0o111) else "100644"
-        payload = file_path.read_bytes()
+        if stat.S_ISLNK(lexical_stat.st_mode):
+            mode = "120000"
+            payload = os.readlink(file_path).encode("utf-8")
+        else:
+            mode = "100755" if (lexical_stat.st_mode & 0o111) else "100644"
+            payload = file_path.read_bytes()
         hashed = _run_git(
             ["hash-object", "-w", "--stdin", "--no-filters"],
             timeout=15,
