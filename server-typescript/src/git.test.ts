@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
 import { __setProjectRootForTests, getProjectRoot, runWithAllowedReadPaths } from "./security.js";
-import { gitAdd, gitBranch, gitDiff, gitLog, gitStatus, runIsolatedGit } from "./git.js";
+import { gitAdd, gitBranch, gitDiff, gitLog, gitRestore, gitStatus, runIsolatedGit } from "./git.js";
 
 let originalProjectRoot: string;
 
@@ -99,6 +99,41 @@ test("runIsolatedGit neutralizes URL-specific HTTP headers", async () => {
 
 
 
+test("gitRestore recreates tracked symlinks under isolated Git config", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, symlinkSync, unlinkSync, lstatSync, readlinkSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-restore-symlink-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    writeFileSync(join(temp, "target.txt"), "target contents\n");
+    symlinkSync("target.txt", join(temp, "link.txt"), "file");
+    execFileSync("git", ["add", "target.txt", "link.txt"], { cwd: temp });
+
+    // Replace the tracked symlink with an ordinary file so gitRestore() must
+    // recreate the index entry rather than merely leave the existing link.
+    unlinkSync(join(temp, "link.txt"));
+    writeFileSync(join(temp, "link.txt"), "target.txt");
+
+    __setProjectRootForTests(temp);
+    const result = await gitRestore("link.txt", false, true);
+    assert.deepEqual(result, {
+      path: "link.txt",
+      restored: true,
+      unstaged: false,
+    });
+
+    const restored = lstatSync(join(temp, "link.txt"));
+    assert.equal(restored.isSymbolicLink(), true);
+    assert.equal(readlinkSync(join(temp, "link.txt"), "utf8"), "target.txt");
+    assert.equal(
+      execFileSync("git", ["show", ":link.txt"], { cwd: temp, encoding: "utf8" }),
+      "target.txt",
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("gitAdd previews staging and does not mutate without confirmation", async () => {
   const result = await gitAdd("src/git.test.ts");
   assert.equal("requires_confirmation" in result, true);
@@ -144,7 +179,10 @@ test("runIsolatedGit ignores inherited Git repository and transport environment"
   try {
     const result = await runIsolatedGit(["rev-parse", "--show-toplevel"]);
     assert.equal(result.code, 0);
-    assert.equal(result.stdout.trim(), resolve(process.cwd(), ".."));
+    // Git prints a forward-slash path even on Windows while path.resolve()
+    // produces backslashes there, so compare with one separator convention.
+    const normalize = (value: string) => value.replace(/\\/g, "/");
+    assert.equal(normalize(result.stdout.trim()), normalize(resolve(process.cwd(), "..")));
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete process.env[key];

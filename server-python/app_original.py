@@ -407,6 +407,37 @@ def _confirm_legacy(action, action_id: str, confirmed: bool):
     return {"confirmed": True, "action_id": action_id, "tool": action.tool_name, "result": result}
 
 
+def _pending_project_root_conflict(action):
+    """Return a 409 response when a pending action belongs to another root.
+
+    A pending mutation is bound to the project root that created it. This is
+    checked before the action is consumed so callers receive a specific 409
+    instead of the generic 'not found' that pop_pending()'s equivalent guard
+    produces once the saved root no longer matches.
+    """
+
+    resume = action.resume
+    if resume is None:
+        return None
+    saved_root = resume.get("project_root")
+    if not saved_root:
+        return None
+    try:
+        if os.path.abspath(str(saved_root)) != os.path.abspath(str(get_project_root())):
+            return {
+                "error": (
+                    "Cannot confirm this action because the active "
+                    "project root differs from the project root that "
+                    "created the pending action."
+                )
+            }, 409
+    except (OSError, TypeError):
+        return {
+            "error": "Cannot confirm this action because the saved project root is invalid."
+        }, 409
+    return None
+
+
 @app.route("/confirm", methods=["POST"])
 def confirm_action():
     """Approve/reject a pending write or file-read permission request, then
@@ -421,6 +452,18 @@ def confirm_action():
     if not action_id:
         return {"error": "action_id is required."}, 400
 
+    # Peek before consuming: a pending mutation is bound to the project root
+    # that created it, and pop_pending() discards an action whose saved root
+    # no longer matches, which would surface as a generic 404 instead of the
+    # specific 409 that binding is supposed to produce.
+    peeked = get_pending(action_id)
+    if peeked is None:
+        return {"error": "Pending action not found or already resolved."}, 404
+
+    root_conflict = _pending_project_root_conflict(peeked)
+    if root_conflict is not None:
+        return root_conflict
+
     action = pop_pending(action_id)
     if action is None:
         return {"error": "Pending action not found or already resolved."}, 404
@@ -428,24 +471,10 @@ def confirm_action():
     if action.tool_name != "read_file_permission" and action.tool_name not in WRITE_TOOL_NAMES and action.tool_name not in GIT_CONFIRM_TOOL_NAMES:
         return {"error": "Only pending write actions can be confirmed."}, 400
 
+    # The saved project root was validated above (and pop_pending() refuses a
+    # stale root as well), so the resume below can never run against a
+    # different project.
     resume = action.resume
-    if resume is not None:
-        saved_root = resume.get("project_root")
-        if saved_root:
-            try:
-                if os.path.abspath(str(saved_root)) != os.path.abspath(str(get_project_root())):
-                    return {
-                        "error": (
-                            "Cannot confirm this action because the active "
-                            "project root differs from the project root that "
-                            "created the pending action."
-                        )
-                    }, 409
-            except (OSError, TypeError):
-                return {
-                    "error": "Cannot confirm this action because the saved project root is invalid."
-                }, 409
-
     if resume is None or resume.get("provider_fingerprint") != provider_fingerprint(provider):
         # No saved loop state (or the active provider changed since this
         # action was created, and its saved `contents` are that provider's

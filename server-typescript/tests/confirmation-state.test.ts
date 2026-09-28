@@ -164,7 +164,9 @@ describe("Git index confirmation state", () => {
     expect(confirmationFileStatesMatch(states)).toBe(false);
   });
 
-  it("does not let symlink-target/content pairs collide through the join delimiter", () => {
+  // This scenario needs a literal NUL byte inside a file name, which Windows
+  // forbids; that impossibility is what makes the fingerprint delimiter safe.
+  it.skipIf(process.platform === "win32")("does not let symlink-target/content pairs collide through the join delimiter", () => {
     // Regression test: the symlink fingerprint used to join
     // "symlink" + target + "target" + targetBytes with an ordinary
     // *printable* two-character "\0" (a literal backslash followed by

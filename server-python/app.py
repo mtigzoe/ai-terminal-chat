@@ -24,6 +24,14 @@ PROJECT_ROOT = _original.PROJECT_ROOT
 get_project_root = _original.get_project_root
 provider = _original.provider
 
+# The auth gate in ``app_original`` (its ``before_request`` hook) reads these
+# module globals, so they are re-exported and mirrored like the other compat
+# names: otherwise callers cannot observe the decision, and
+# ``monkeypatch.setattr(app, "_IS_LOOPBACK_SERVER", ...)`` fails with
+# AttributeError instead of exercising the gate.
+_IS_LOOPBACK_SERVER = _original._IS_LOOPBACK_SERVER
+_API_AUTH_TOKEN = _original._API_AUTH_TOKEN
+
 # Re-export the public names historically provided by ``app``. Tests and
 # callers patch these names on the compatibility module, so assignments are
 # mirrored to ``app_original`` by _AppModule below.
@@ -179,6 +187,10 @@ class _AppModule(ModuleType):
         "is_command_allowed",
         "run_command",
         "get_project_root",
+        # Security-gate state: mirrored so callers and tests can toggle the
+        # loopback / API-auth-token decision through the compat module.
+        "_IS_LOOPBACK_SERVER",
+        "_API_AUTH_TOKEN",
     }
 
     def __setattr__(self, name, value):
