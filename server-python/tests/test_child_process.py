@@ -29,6 +29,45 @@ def test_run_cancellable_completes_quickly():
     assert "ok" in (result.stdout or "")
 
 
+def test_run_cancellable_round_trips_binary_stdin_without_text_conversion():
+    payload = bytes([0x00, 0xFF, 0x80, 0xC3, 0x28, 0x0A])
+    result = run_cancellable(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+        ],
+        cwd=os.getcwd(),
+        timeout=5,
+        input_bytes=payload,
+        text=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout == payload
+
+
+def test_run_cancellable_rejects_mixed_text_and_binary_stdin():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        run_cancellable(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"],
+            cwd=os.getcwd(),
+            timeout=5,
+            input_text="text",
+            input_bytes=b"bytes",
+            text=False,
+        )
+
+
+def test_run_cancellable_requires_binary_mode_for_binary_stdin():
+    with pytest.raises(ValueError, match="text=False"):
+        run_cancellable(
+            [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+            cwd=os.getcwd(),
+            timeout=5,
+            input_bytes=b"bytes",
+        )
+
+
 def test_run_cancellable_respects_timeout():
     with pytest.raises(Exception) as exc_info:
         run_cancellable(
