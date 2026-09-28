@@ -192,14 +192,28 @@ def test_confirm_route_resumes_multi_step_git_workflow(git_repo_with_remote, mon
     monkeypatch.setattr(app, "provider", provider)
 
     client = app.app.test_client()
-    chat_response = client.post("/chat", json={"chat": "add and commit file.txt", "history": []})
+    chat_response = client.post(
+        "/chat",
+        json={
+            "chat": "add and commit file.txt",
+            "history": [],
+            "allowed_paths": ["file.txt"],
+        },
+    )
     assert chat_response.status_code == 200
     body = chat_response.get_json()
     pending = [e for e in body["tool_activity"] if e.get("type") == "pending_confirmation"]
     assert len(pending) == 1
     action_id = pending[0]["action_id"]
 
-    confirm_response = client.post("/confirm", json={"action_id": action_id, "confirmed": True})
+    confirm_response = client.post(
+        "/confirm",
+        json={
+            "action_id": action_id,
+            "confirmed": True,
+            "allowed_paths": ["file.txt"],
+        },
+    )
     assert confirm_response.status_code == 200
     confirm_body = confirm_response.get_json()
     # Should NOT be fully done yet: git_commit is still pending.
@@ -209,7 +223,14 @@ def test_confirm_route_resumes_multi_step_git_workflow(git_repo_with_remote, mon
     assert confirm_body["text"] == ""
 
     next_action_id = confirm_body["pending_confirmation"]["action_id"]
-    confirm_response_2 = client.post("/confirm", json={"action_id": next_action_id, "confirmed": True})
+    confirm_response_2 = client.post(
+        "/confirm",
+        json={
+            "action_id": next_action_id,
+            "confirmed": True,
+            "allowed_paths": ["file.txt"],
+        },
+    )
     assert confirm_response_2.status_code == 200
     confirm_body_2 = confirm_response_2.get_json()
     assert confirm_body_2.get("pending_confirmation") is None
