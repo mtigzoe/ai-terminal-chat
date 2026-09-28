@@ -125,10 +125,7 @@ def read_file(path: str) -> dict:
     """
 
     try:
-        # Preserve the final path component lexically so dangling symlinks
-        # remain addressable. safe_path() resolves the final component and
-        # therefore turns a dangling link into its missing target.
-        file_path = safe_write_path(path)
+        file_path = safe_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2300,7 +2297,10 @@ def git_add(path: str, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        # Preserve the final path component lexically so dangling symlinks
+        # remain addressable. safe_path() resolves the final component and
+        # therefore turns a dangling link into its missing target.
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
