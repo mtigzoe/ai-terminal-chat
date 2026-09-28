@@ -109,7 +109,7 @@ def _sanitize_part(part: dict) -> types.Part | None:
 
 class GeminiProvider(Provider):
 
-    def __init__(self, api_key: str = None, model: str = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         # Prefer values supplied by the factory (ProviderConfig). Fall
         # back to the environment only when the caller omitted an
         # argument entirely, so direct construction still works without

@@ -205,7 +205,7 @@ class OllamaProvider(OpenAICompatibleProvider):
             f"Could not reach Ollama at {self.native_base_url}.{hint} {exc}"
         ).strip()
 
-    def _missing_model_message(self, model: str = None) -> str:
+    def _missing_model_message(self, model: str | None = None) -> str:
         name = model or self.model
         return (
             f"Ollama is reachable at {self.native_base_url}, but model "
@@ -265,7 +265,7 @@ class OllamaProvider(OpenAICompatibleProvider):
             })
         return models
 
-    def has_model(self, model: str = None) -> bool:
+    def has_model(self, model: str | None = None) -> bool:
         """Return True if the configured (or given) model is installed."""
 
         target = model or self.model
@@ -274,7 +274,7 @@ class OllamaProvider(OpenAICompatibleProvider):
                 return True
         return False
 
-    def show_model(self, model: str = None) -> dict:
+    def show_model(self, model: str | None = None) -> dict:
         """Return `/api/show` data for a model, or {} if unavailable."""
 
         try:
@@ -291,7 +291,7 @@ class OllamaProvider(OpenAICompatibleProvider):
         except Exception:
             return {}
 
-    def capabilities_for_model(self, model: str = None) -> ProviderCapabilities:
+    def capabilities_for_model(self, model: str | None = None) -> ProviderCapabilities:
         info = self.show_model(model)
         raw = info.get("capabilities")
         notes = []

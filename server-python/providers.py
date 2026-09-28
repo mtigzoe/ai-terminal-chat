@@ -143,7 +143,7 @@ def load_provider_config(name: str) -> ProviderConfig:
     )
 
 
-def get_provider(name: str = None, model: str = None) -> Provider:
+def get_provider(name: str | None = None, model: str | None = None) -> Provider:
     """Build a Provider from environment configuration.
 
     A Settings Save request may include ``project_path`` and an Ollama
