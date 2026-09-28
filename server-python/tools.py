@@ -2249,6 +2249,9 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
         except ValueError as exc:
             return {"error": str(exc)}
 
+        if is_sensitive_path(file_path):
+            return {"error": f"Refusing to inspect sensitive file: {path}"}
+
         try:
             require_read_allowed(file_path)
         except ValueError as exc:
@@ -2259,22 +2262,20 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
         # path component. Git would otherwise treat that argument as
         # --output and write the diff outside the project.
         args.extend(["--", str(file_path.relative_to(PROJECT_ROOT))])
-    elif not staged and get_allowed_read_paths() is not None:
-        # Project-page file selection restricts which files the model can
-        # read (read_file, and an unscoped diff would let it see arbitrary
-        # working-tree changes across the whole repo instead). Staged
-        # changes are different: a file only ends up here after git_add
-        # already asked for — and got — its own explicit user
-        # confirmation, so showing that specific staged diff back
-        # (including from git_commit's own preview step, just below)
-        # isn't a way around the file-selection boundary.
-        return {
-            "error": (
-                "A path is required while agent file-selection is active. "
-                "Pass an allowed relative path, or use read_file on a "
-                "selected file."
-            )
-        }
+    else:
+        allowed_paths = get_allowed_read_paths()
+        if allowed_paths is not None:
+            selected_paths = []
+            for allowed_path in sorted(allowed_paths):
+                try:
+                    selected_path = safe_path(allowed_path)
+                except ValueError:
+                    continue
+                if not is_sensitive_path(selected_path):
+                    selected_paths.append(allowed_path)
+            if not selected_paths:
+                return {"diff": "", "truncated": False}
+            args.extend(["--", *selected_paths])
 
     try:
         result = _run_git(args[1:], timeout=GIT_DIFF_TIMEOUT)
@@ -2424,6 +2425,11 @@ def git_add(path: str, confirm: bool = False) -> dict:
 
     if is_sensitive_path(file_path):
         return {"error": f"Refusing to stage sensitive file: {path}"}
+
+    try:
+        require_read_allowed(file_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     if not (PROJECT_ROOT / ".git").exists():
         # PROJECT_ROOT can be a subdirectory of the actual repo root

@@ -323,22 +323,25 @@ test('shift-click selects the visible file range and ignores files hidden by the
   await user.click(screen.getByRole('button', { name: /clear selection/i }));
   await waitFor(() => expect(checkboxA).not.toBeChecked());
   await user.click(checkboxA);
-  await user.type(screen.getByLabelText(/filter files and folders/i), 'c');
+  const filterInput = screen.getByRole('searchbox', { name: /filter files and folders/i });
+  fireEvent.change(filterInput, { target: { value: 'c' } });
 
-  const filteredC = await screen.findByRole('checkbox', { name: /select c\.txt for the agent/i });
   await waitFor(() => {
+    expect(filterInput).toHaveValue('c');
     expect(screen.queryByRole('checkbox', { name: /select a\.txt for the agent/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /select b\.txt for the agent/i })).not.toBeInTheDocument();
   });
+  const filteredC = screen.getByRole('checkbox', { name: /select c\.txt for the agent/i });
   await user.keyboard('{Shift>}');
   await user.click(filteredC);
   await user.keyboard('{/Shift}');
 
-  const filterInput = screen.getByRole('searchbox', { name: /filter files and folders/i });
-  await user.clear(filterInput);
-  expect(screen.getByRole('checkbox', { name: /select a\.txt for the agent/i })).toBeChecked();
-  expect(screen.getByRole('checkbox', { name: /select b\.txt for the agent/i })).not.toBeChecked();
-  expect(screen.getByRole('checkbox', { name: /select c\.txt for the agent/i })).toBeChecked();
+  fireEvent.change(filterInput, { target: { value: '' } });
+  await waitFor(() => {
+    expect(screen.getByRole('checkbox', { name: /select a\.txt for the agent/i })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /select b\.txt for the agent/i })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /select c\.txt for the agent/i })).toBeChecked();
+  });
 });
 
 test('keyboard End in a virtualized tree keeps focus on the last item and scrolls it into the window', async () => {
