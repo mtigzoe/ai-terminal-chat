@@ -743,6 +743,7 @@ const CONFIRMABLE_TOOL_NAMES = new Set([
   "apply_patch",
   "delete_file",
   "git_add",
+  "git_fetch",
   "git_pull",
   "git_restore",
   "git_commit",
@@ -855,6 +856,23 @@ app.post("/confirm", async (c) => {
     return c.json({ error: "action_id is required." }, 400 as any);
   }
 
+  const peeked = getPending(actionId);
+  if (!peeked) {
+    return c.json({ error: "Pending action not found or already resolved." }, 404 as any);
+  }
+  // Pending mutations are bound to the project root that created them. Peek
+  // before consuming so a stale root yields a specific 409 (matching
+  // server-python pop_pending/_pending_project_root_conflict) instead of a
+  // generic 404, and so the pending action remains stored for its original root.
+  if (peeked.resume?.project_root && peeked.resume.project_root !== getProjectRoot()) {
+    return c.json(
+      {
+        error:
+          "Cannot confirm this action because the active project root differs from the project root that created the pending action.",
+      },
+      409 as any,
+    );
+  }
   const action = popPending(actionId);
   if (!action) {
     return c.json({ error: "Pending action not found or already resolved." }, 404 as any);

@@ -195,6 +195,18 @@ describe("Git index confirmation state", () => {
     expect(stateA[0]?.sha256).not.toBe(stateB[0]?.sha256);
   });
 
+  it("binds git_fetch confirmation to the requested remote and invalidates on remote config changes", () => {
+    execFileSync("git", ["remote", "add", "origin", "https://example.com/one.git"], { cwd: root });
+    expect(confirmationPathsForPending("git_fetch", { remote: "origin" })).toEqual(["__git_remote__:origin"]);
+    expect(confirmationPathsForPending("git_fetch", { remote: "" })).toEqual(["__git_remote__:<default>"]);
+    const states = captureConfirmationFileStates(confirmationPathsForPending("git_fetch", { remote: "origin" }));
+    expect(states[0]?.kind).toBe("git_remote");
+    expect(states[0]?.status).toBe("present");
+    expect(confirmationFileStatesMatch(states)).toBe(true);
+    execFileSync("git", ["remote", "set-url", "origin", "https://example.com/two.git"], { cwd: root });
+    expect(confirmationFileStatesMatch(states)).toBe(false);
+  });
+
   it("decodes quoted git patch paths for confirmation binding", () => {
     const patch = "--- \"a/line\\011name.txt\"\n+++ \"b/line\\011name.txt\"\n@@ -1 +1 @@\n-one\n+two\n";
     expect(confirmationPathsForPending("apply_patch", { patch })).toEqual(["line\tname.txt"]);
