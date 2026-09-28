@@ -29,6 +29,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Default mock for project-root
   axiosInstance.get.mockResolvedValue({ data: { path: '/tmp/project' } });
+  axiosInstance.post.mockImplementation((url) => {
+    if (url.endsWith('/chat')) {
+      return global.__chatResponse || Promise.resolve({ data: {} });
+    }
+    if (url.endsWith('/confirm')) {
+      return global.__confirmResponse || Promise.resolve({ data: { result: { cancelled: true } } });
+    }
+    throw new Error(`Unexpected axios POST: ${url}`);
+  });
   axiosInstance.isCancel.mockReturnValue(false);
   // Reset global mock responses
   global.__chatResponse = Promise.resolve({ data: {} });
@@ -41,7 +50,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  vi.clearAllMocks();
   delete global.fetch;
   delete global.__chatResponse;
   delete global.__confirmResponse;
