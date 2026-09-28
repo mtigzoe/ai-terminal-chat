@@ -1775,6 +1775,7 @@ def _run_git(
     args: list,
     timeout: float,
     input_text: str | None = None,
+    input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess:
     """Run git with config/SSH isolation matching the TypeScript backend.
 
@@ -1831,6 +1832,8 @@ def _run_git(
                 cwd=PROJECT_ROOT,
                 timeout=timeout,
                 input_text=input_text,
+                input_bytes=input_bytes,
+                text=input_bytes is None,
                 env=env,
             )
         finally:
