@@ -81,7 +81,7 @@ def run_cancellable(
     timeout: float,
     cancel_event: Optional[Event] = None,
     env: Optional[Mapping[str, str]] = None,
-    input_text: Optional[str] = None,
+    input_text: Optional[Union[str, bytes]] = None,
     text: bool = True,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess with timeout and optional cooperative cancellation.
