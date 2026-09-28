@@ -1193,6 +1193,13 @@ def test_near_miss_prefixes_are_not_execution_risk():
 def git_repo_with_history(git_repo):
     """A git repository with one commit containing two distinct files."""
 
+    (git_repo / "README.md").write_text("# README\n")
+    (git_repo / "other.md").write_text("# Other\n")
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=git_repo, check=True)
+    return git_repo
+
+
 def test_git_add_stages_binary_bytes_without_utf8_corruption(git_repo, monkeypatch):
     binary = bytes([0x00, 0xFF, 0x80, 0xC3, 0x28, 0x0A])
     target = git_repo / "binary.dat"
@@ -1210,14 +1217,6 @@ def test_git_add_stages_binary_bytes_without_utf8_corruption(git_repo, monkeypat
         stdout=subprocess.PIPE,
     ).stdout
     assert staged == binary
-
-
-    (git_repo / "README.md").write_text("# README\n")
-    (git_repo / "other.md").write_text("# Other\n")
-    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=git_repo, check=True)
-    return git_repo
-
 
 # ---------------------------------------------------------------------------
 # git log read-permission regression tests
