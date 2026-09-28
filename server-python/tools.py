@@ -3077,10 +3077,19 @@ def delete_file(path: str, confirm: bool = False) -> dict:
     if file_path == PROJECT_ROOT:
         return {"error": "Refusing to delete the project root."}
 
-    if not file_path.exists():
-        return {"error": f"File does not exist: {path}"}
+    # safe_path() follows the final symlink for security validation, but
+    # deletion must operate on the requested directory entry itself. Otherwise
+    # deleting "link.txt" would unlink the symlink target instead of the link.
+    lexical_path = Path(os.path.normpath(str(PROJECT_ROOT / path)))
 
-    if file_path.is_dir():
+    try:
+        lexical_stat = lexical_path.lstat()
+    except FileNotFoundError:
+        return {"error": f"File does not exist: {path}"}
+    except OSError as exc:
+        return {"error": f"Could not inspect file: {exc}"}
+
+    if stat.S_ISDIR(lexical_stat.st_mode):
         return {
             "error": (
                 "delete_file can only delete a single file, not a "
@@ -3088,10 +3097,12 @@ def delete_file(path: str, confirm: bool = False) -> dict:
             )
         }
 
+    relative_path = lexical_path.relative_to(PROJECT_ROOT).as_posix()
+
     if not confirm:
         return {
             "requires_confirmation": True,
-            "path": str(file_path.relative_to(PROJECT_ROOT)),
+            "path": relative_path,
             "message": (
                 f"'{path}' was NOT deleted. Ask the user to explicitly "
                 f"confirm this deletion in the chat, then call "
@@ -3100,15 +3111,31 @@ def delete_file(path: str, confirm: bool = False) -> dict:
         }
 
     try:
-        file_path.unlink()
+        if os.name == "posix":
+            # Pin the already-validated parent directory and unlink only the
+            # final lexical entry. This also protects against a parent
+            # directory being replaced between validation and deletion.
+            parent_relative = lexical_path.parent.relative_to(PROJECT_ROOT).as_posix()
+            resolved_parent = safe_path(parent_relative or ".")
+            parent_fd = _open_pinned_directory(resolved_parent)
+            if parent_fd is None:
+                raise OSError("Could not securely open the parent directory.")
+            try:
+                os.unlink(lexical_path.name, dir_fd=parent_fd)
+            finally:
+                os.close(parent_fd)
+        else:
+            # Windows has no portable dir_fd equivalent in Python. The final
+            # lexical entry is still unlinked directly, so a final symlink is
+            # removed rather than followed to its target.
+            os.unlink(lexical_path)
     except Exception as exc:
         return {"error": f"Could not delete file: {exc}"}
 
     return {
-        "path": str(file_path.relative_to(PROJECT_ROOT)),
+        "path": relative_path,
         "deleted": True,
     }
-
 
 def _extract_patch_target_paths(patch_text: str) -> set:
     """Pull the file path(s) a unified diff would touch out of its headers.
