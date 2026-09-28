@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import axios from 'axios';
 import App from './App';
 import SettingsPage from './components/SettingsPage.jsx';
@@ -18,6 +18,10 @@ vi.mock('axios', () => ({
     isCancel: vi.fn(() => false),
   },
 }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 afterEach(() => {
   cleanup();
