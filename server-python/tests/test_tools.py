@@ -956,6 +956,52 @@ def test_git_restore_rejects_sensitive_files(git_repo):
     assert "sensitive" in result["error"].lower()
 
 
+def test_git_add_preserves_symbolic_links_including_dangling_links(git_repo):
+    """git_add must stage a symlink entry, not the target's contents.
+
+    In particular, a dangling symlink must still be stageable because Git
+    stores the link target itself in the index and does not require the
+    target to exist.
+    """
+    target = git_repo / "target.txt"
+    target.write_text("target contents\n", encoding="utf-8")
+    link = git_repo / "link.txt"
+    dangling = git_repo / "dangling.txt"
+    try:
+        link.symlink_to(target.name)
+        dangling.symlink_to("missing-target.txt")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symbolic links unavailable: {exc}")
+
+    result = tools.git_add("link.txt", confirm=True)
+    assert result.get("staged") is True
+
+    result = tools.git_add("dangling.txt", confirm=True)
+    assert result.get("staged") is True
+
+    for name, expected in (
+        ("link.txt", b"target.txt"),
+        ("dangling.txt", b"missing-target.txt"),
+    ):
+        staged = subprocess.run(
+            ["git", "ls-files", "--stage", "--", name],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert staged.startswith("120000 "), staged
+
+        blob = subprocess.run(
+            ["git", "show", f":{name}"],
+            cwd=git_repo,
+            capture_output=True,
+            check=True,
+        ).stdout
+        assert blob == expected
+
+
+
 def test_git_commit_requires_message(git_repo):
     result = tools.git_commit("")
     assert "error" in result
