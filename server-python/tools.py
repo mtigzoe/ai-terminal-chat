@@ -2715,12 +2715,24 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
         }
 
     try:
-        args = ["git", "restore"]
         if staged:
-            args.append("--staged")
-        args.append("--")
-        args.append(rel_path)
-        result = _run_git(args[1:], timeout=15)
+            args = ["restore", "--staged", "--", rel_path]
+        else:
+            # The isolated Git environment does not inherit the user's
+            # system/global core.symlinks setting. Git for Windows commonly
+            # records core.symlinks=false in local config, which would turn a
+            # tracked symlink into a regular file containing its target text.
+            # Force symlink semantics for this single-file restore while the
+            # existing config isolation still disables repository-controlled
+            # smudge/process filters.
+            args = [
+                "-c",
+                "core.symlinks=true",
+                "restore",
+                "--",
+                rel_path,
+            ]
+        result = _run_git(args, timeout=15)
     except FileNotFoundError:
         return {"error": "git is not installed or not on PATH."}
     except subprocess.TimeoutExpired:

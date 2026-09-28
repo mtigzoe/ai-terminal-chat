@@ -1073,6 +1073,12 @@ def test_git_restore_restores_symlink_entry_without_following_target(git_repo):
 
     subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    # Reproduce Git for Windows' common repository setting on every platform.
+    # Without an explicit override, checkout/restore writes a mode-120000 index
+    # entry as a regular file containing the link target text.
+    subprocess.run(
+        ["git", "config", "core.symlinks", "false"], cwd=git_repo, check=True
+    )
 
     other.write_text("other modified\n")
     link.unlink()
