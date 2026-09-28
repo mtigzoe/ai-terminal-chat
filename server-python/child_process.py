@@ -81,13 +81,19 @@ def run_cancellable(
     timeout: float,
     cancel_event: Optional[Event] = None,
     env: Optional[Mapping[str, str]] = None,
-    input_text: Optional[Union[str, bytes]] = None,
+    input_text: Optional[str] = None,
+    input_bytes: Optional[bytes] = None,
     text: bool = True,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess with timeout and optional cooperative cancellation.
 
     If ``cancel_event`` is omitted, the active contextvar event (if any) is used.
     """
+    if input_text is not None and input_bytes is not None:
+        raise ValueError("input_text and input_bytes are mutually exclusive.")
+    if input_bytes is not None and text:
+        raise ValueError("input_bytes requires text=False.")
+
     event = cancel_event if cancel_event is not None else get_active_cancel_event()
 
     if event is not None and event.is_set():
@@ -98,7 +104,7 @@ def run_cancellable(
         "shell": False,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
-        "stdin": subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        "stdin": subprocess.PIPE if (input_text is not None or input_bytes is not None) else subprocess.DEVNULL,
         "env": dict(env) if env is not None else None,
         "text": text,
     }
@@ -113,7 +119,7 @@ def run_cancellable(
 
     def _communicate() -> None:
         try:
-            out, err = proc.communicate(input=input_text)
+            out, err = proc.communicate(input=input_bytes if input_bytes is not None else input_text)
             box.append((out, err))
         except Exception as exc:  # pragma: no cover - defensive
             error_box.append(exc)
