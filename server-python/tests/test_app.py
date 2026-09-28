@@ -10,7 +10,7 @@ sys.path.insert(0, str(SERVER_DIR))
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
 import app  # noqa: E402
-from pending import clear_pending, create_pending  # noqa: E402
+from pending import clear_pending, create_pending, get_pending  # noqa: E402
 
 
 @pytest.fixture
@@ -277,7 +277,7 @@ def test_confirm_endpoint_rejects_saved_action_after_project_root_changes(client
         # The root-mismatch response must not consume the pending action.
         # The action remains stored for a later confirmation under its
         # original project root.
-        assert app._original.get_pending(action.action_id) is action
+        assert get_pending(action.action_id) is action
         security.PROJECT_ROOT.set(root_a)
     finally:
         security.PROJECT_ROOT.set(original_root)
