@@ -44,6 +44,21 @@ describe("git tool security", () => {
     });
   });
 
+  it("omits sensitive selected files from a pathless staged diff", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, ".env"), "API_KEY=do-not-expose\n");
+    execFileSync("git", ["add", "allowed.txt", ".env"], { cwd: root });
+
+    const result = await runWithAllowedReadPaths(["allowed.txt", ".env"], () =>
+      gitDiff("", true),
+    );
+
+    expect(result).toMatchObject({ truncated: false });
+    expect(String(result.diff)).toContain("allowed\\n");
+    expect(String(result.diff)).not.toContain("API_KEY");
+    expect(String(result.diff)).not.toContain(".env");
+  });
+
   it("applies dynamic Git config overrides from a linked worktree common config", async () => {
     execFileSync("git", ["init", "-q", "--initial-branch=main"], { cwd: root });
     fs.writeFileSync(path.join(root, "seed.txt"), "seed\\n");

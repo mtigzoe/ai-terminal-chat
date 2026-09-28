@@ -535,14 +535,53 @@ export async function gitCommittedFileCount(): Promise<Record<string, unknown>> 
 }
 
 export async function gitDiff(path = "", staged = false): Promise<Record<string, unknown>> {
-  const args = ["diff", "--no-ext-diff", "--no-textconv"]; if (staged) args.push("--staged");
+  const args = ["diff", "--no-ext-diff", "--no-textconv"];
+  if (staged) args.push("--staged");
   const allowed = getAllowedReadPaths();
   if (allowed !== undefined) {
-    if (path) { try { const filePath = safePath(path); if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` }; if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` }; const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, "")); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; } }
-    else { const selected = [...allowed]; if (selected.length === 0) return { diff: "", truncated: false }; args.push("--", ...selected); }
-  } else if (path) { let filePath: string; try { filePath = safePath(path); } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; } if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` }; const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, "")); }
-  try { const result = await runGit(args, GIT_DIFF_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." }; const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS); return { diff: diff.value, truncated: diff.truncated, ...(diff.truncated ? { truncation_note: `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.` } : {}) }; }
-  catch (error) { return { error: errorText(error) }; }
+    if (path) {
+      try {
+        const filePath = safePath(path);
+        if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` };
+        if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` };
+        const root = getProjectRoot();
+        const lexicalPath = resolve(root, path.trim());
+        args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, ""));
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    } else {
+      const selected: string[] = [];
+      for (const selectedPath of allowed) {
+        try {
+          if (!isSensitivePath(safePath(selectedPath))) selected.push(selectedPath);
+        } catch {
+          // Invalid selections are not readable and must not reach Git.
+        }
+      }
+      if (selected.length === 0) return { diff: "", truncated: false };
+      args.push("--", ...selected);
+    }
+  } else if (path) {
+    let filePath: string;
+    try {
+      filePath = safePath(path);
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+    if (isSensitivePath(filePath)) return { error: `Refusing to inspect sensitive file: ${path}` };
+    const root = getProjectRoot();
+    const lexicalPath = resolve(root, path.trim());
+    args.push("--", lexicalPath.slice(root.length).replace(/^[/\\]+/, ""));
+  }
+  try {
+    const result = await runGit(args, GIT_DIFF_TIMEOUT_MS);
+    if (result.code !== 0) return { error: result.stderr.trim() || "git diff failed." };
+    const diff = cap(result.stdout, GIT_DIFF_MAX_CHARS);
+    return { diff: diff.value, truncated: diff.truncated, ...(diff.truncated ? { truncation_note: `Diff output was truncated to ${GIT_DIFF_MAX_CHARS} characters. Request a path-scoped diff for a smaller view.` } : {}) };
+  } catch (error) {
+    return { error: errorText(error) };
+  }
 }
 
 export async function gitLog(maxCount = 10): Promise<Record<string, unknown>> { const numeric = Number(maxCount); if (!Number.isInteger(numeric)) return { error: "max_count must be a whole number." }; const count = Math.max(1, Math.min(numeric, 100)); try { const result = await runGit(["log", `-${count}`, "--oneline", "--decorate"], GIT_LOG_TIMEOUT_MS); if (result.code !== 0) return { error: result.stderr.trim() || "git log failed." }; const log = cap(result.stdout, GIT_LOG_MAX_CHARS); return { log: log.value, truncated: log.truncated, ...(log.truncated ? { truncation_note: `Log output was truncated to ${GIT_LOG_MAX_CHARS} characters.` } : {}) }; } catch (error) { return { error: errorText(error) }; } }
