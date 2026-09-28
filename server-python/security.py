@@ -336,6 +336,9 @@ def safe_path(path: str) -> Path:
 
 SENSITIVE_EXACT_NAMES = {
     ".git-credentials",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
     "credentials.json",
     "secrets.json",
     "id_rsa",
