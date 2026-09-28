@@ -15,6 +15,7 @@ import {
   persistAppConfig,
   SERVER_HOST,
 } from "./config.js";
+import { acquireConfigLock, releaseConfigLock } from "./config-lock.ts";
 
 // Snapshot and restore any env vars a test touches, so tests never leak
 // state into each other or into the surrounding shell environment.
@@ -254,8 +255,12 @@ describe("persistAppConfig concurrency", () => {
     const lockPath = join(dir, ".config.config.lock");
     const fs = await import("node:fs");
 
-    // Writer A: manually create and hold the lock (simulating long-running operation)
-    const lockFdA = fs.openSync(lockPath, "wx");
+    // Writer A: acquire the production lock, including ownership metadata.
+    // An empty manually opened lock is a legacy lock and is intentionally
+    // reclaimed after the production timeout, so it cannot represent a live
+    // current-version writer in this contention test.
+    const lockA = acquireConfigLock(configPath);
+    assert.equal(lockA.lockPath, lockPath);
 
     // Writer B: run in a separate process to genuinely test lock contention.
     // This avoids the event-loop blocking issue of Atomics.wait in the main test process.
@@ -334,8 +339,7 @@ describe("persistAppConfig concurrency", () => {
     assert.equal(loadAppConfig(configPath).value, 1);
 
     // Release Writer A's lock
-    fs.closeSync(lockFdA);
-    fs.rmSync(lockPath, { force: true });
+    releaseConfigLock(lockA.lockFd, lockA.lockPath);
 
     // Verify that after releasing Writer A's lock, a normal persistAppConfig() succeeds
     persistAppConfig({ value: 3 }, configPath);
