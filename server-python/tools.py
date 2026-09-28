@@ -2353,11 +2353,12 @@ def git_add(path: str, confirm: bool = False) -> dict:
         hashed = _run_git(
             ["hash-object", "-w", "--stdin", "--no-filters"],
             timeout=15,
-            input_text=payload.decode("utf-8", errors="surrogateescape"),
+            input_bytes=payload,
+            text=False,
         )
         if hashed.returncode != 0:
-            return {"error": f"git add failed: {hashed.stderr.strip() or hashed.stdout.strip()}"}
-        oid = hashed.stdout.strip()
+            return {"error": f"git add failed: {(hashed.stderr or b"").decode("utf-8", errors="replace").strip() or (hashed.stdout or b"").decode("utf-8", errors="replace").strip()}"}
+        oid = hashed.stdout.decode("ascii", errors="replace").strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", oid, re.IGNORECASE):
             return {"error": "git add failed: unexpected hash-object output."}
         indexed = _run_git(
