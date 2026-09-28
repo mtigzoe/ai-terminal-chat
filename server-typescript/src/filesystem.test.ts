@@ -304,4 +304,55 @@ describe("searchFiles", () => {
     assert.ok(paths.every((p) => p === "subdir/target.txt" || p === "link.txt"));
     assert.ok(paths.includes("subdir/target.txt"));
   });
+
+  test("refuses to start a search inside .git (read_file refuses .git, so search must not bypass it)", () => {
+    mkdirSync(join(projectRoot, ".git"));
+    writeFileSync(
+      join(projectRoot, ".git", "config"),
+      '[remote "origin"]\n\turl = https://user:ghp_SECRETTOKEN@github.com/o/r.git\n',
+    );
+
+    const result = searchFiles("ghp_", ".git");
+    assert.ok(isToolError(result));
+    if (!isToolError(result)) return;
+    assert.match(result.error, /\.git/);
+    assert.ok(!JSON.stringify(result).includes("SECRETTOKEN"));
+  });
+
+  test("refuses to start a search in a subdirectory of .git", () => {
+    mkdirSync(join(projectRoot, ".git", "hooks"), { recursive: true });
+    writeFileSync(join(projectRoot, ".git", "hooks", "note.txt"), "findme-in-hooks");
+
+    const result = searchFiles("findme-in-hooks", ".git/hooks");
+    assert.ok(isToolError(result));
+  });
+
+  test("refuses a search inside a nested repository's .git directory", () => {
+    mkdirSync(join(projectRoot, "vendor", "lib", ".git"), { recursive: true });
+    writeFileSync(join(projectRoot, "vendor", "lib", ".git", "config"), "findme-nested");
+
+    const result = searchFiles("findme-nested", "vendor/lib/.git");
+    assert.ok(isToolError(result));
+  });
+
+  test("still skips .git when it is reached by descending from the project root", () => {
+    mkdirSync(join(projectRoot, ".git"));
+    writeFileSync(join(projectRoot, ".git", "config"), "findme-descend");
+    writeFileSync(join(projectRoot, "visible.txt"), "findme-descend");
+
+    const result = searchFiles("findme-descend", ".");
+    assert.ok(!isToolError(result));
+    if (isToolError(result)) return;
+    assert.deepEqual(result.matches.map((m) => m.path), ["visible.txt"]);
+  });
+
+  test("still searches ordinary directories whose names merely resemble .git", () => {
+    mkdirSync(join(projectRoot, ".github"));
+    writeFileSync(join(projectRoot, ".github", "ci.yml"), "findme-github");
+
+    const result = searchFiles("findme-github", ".github");
+    assert.ok(!isToolError(result));
+    if (isToolError(result)) return;
+    assert.equal(result.matches.length, 1);
+  });
 });

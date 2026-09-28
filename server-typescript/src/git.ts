@@ -492,8 +492,15 @@ export async function gitRestore(path: string, staged = false, confirm = false):
 }
 
 async function validateCommitScope(): Promise<Record<string, unknown> | null> {
-  const allowed = getAllowedReadPaths();
-  if (allowed === undefined) return null;
+  // isReadAllowed() already returns true unconditionally when no read-path
+  // scoping is active (getAllowedReadPaths() === undefined), so it is safe
+  // to call unconditionally here. The sensitive-file check below must run
+  // every time, scoped or not: gitAdd()/stageFileWithoutFiltersForWriteTool()
+  // already refuse to stage a sensitive file through this app's own tools,
+  // but the index can also hold files staged before the session started (or
+  // by a raw `git add` run outside the app) — this is the last checkpoint
+  // before that content becomes a permanent commit, and it must not be
+  // skipped just because no read-path restriction happens to be configured.
   const result = await runGit(["diff", "--cached", "--name-only", "-z"], GIT_COMMIT_TIMEOUT_MS);
   if (result.code !== 0) return { error: result.stderr.trim() || "Could not inspect staged files." };
   const staged = result.stdout.split("\0").filter(Boolean);

@@ -801,7 +801,10 @@ describe("POST /confirm", () => {
         contents: [],
         round_index: 0,
         tool_results: [],
-        remaining_calls: [],
+        // A real pending action always saves the paused call as the first
+        // remaining call (agent.ts: currentToolCalls.slice(callIndex)), and
+        // resumeAgentLoop() refuses to resume without one.
+        remaining_calls: [{ name: "git_fetch", args: { remote: "origin" } }],
         last_call_signature: null,
         consecutive_repeat_count: 0,
         consecutive_error_count: 0,

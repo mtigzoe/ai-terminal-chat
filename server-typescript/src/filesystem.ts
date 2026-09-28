@@ -278,6 +278,21 @@ export function searchFiles(query: string, inputPath = "."): SearchFilesResult {
   }
 
   const root = getProjectRoot();
+
+  // The walk below only skips `.git` (and other noise directories) when it
+  // *descends* into them. A search that starts inside `.git` bypasses that,
+  // and would return lines from files such as `.git/config`, whose remote
+  // URLs can embed credentials. read_file refuses any path with a `.git`
+  // component (isSensitivePath), so search_files must not be a way around it.
+  const startParts = relative(root, directory).split(/[\\/]/);
+  if (startParts.some((part) => part.toLowerCase() === ".git")) {
+    return {
+      error:
+        `Refusing to search '${inputPath}': it is inside a .git directory, ` +
+        `whose contents are never exposed to the model.`,
+    };
+  }
+
   const queryLower = query.toLowerCase();
   const matches: SearchMatch[] = [];
   let truncated = false;

@@ -229,4 +229,30 @@ describe("git tool security", () => {
         "Refusing to commit staged file outside the agent selected paths: secret.txt",
     });
   });
+
+  it("refuses to commit an already-staged sensitive file even when no read-path scope is active", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    fs.writeFileSync(path.join(root, ".env"), "API_KEY=abc123\n");
+    // Staged outside this app's own tools (e.g. by the user in their own
+    // terminal before the session started), so gitAdd()'s sensitive-file
+    // check never saw it.
+    execFileSync("git", ["add", "allowed.txt", ".env"], { cwd: root });
+
+    // No runWithAllowedReadPaths() wrapper: getAllowedReadPaths() is undefined.
+    const result = await gitCommit("test commit", false);
+
+    expect(result).toEqual({ error: "Refusing to commit sensitive file: .env" });
+  });
+
+  it("still previews a commit of non-sensitive staged files when no read-path scope is active", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", "allowed.txt"], { cwd: root });
+
+    const result = await gitCommit("test commit", false);
+
+    expect(result).toMatchObject({
+      requires_confirmation: true,
+      commit_message: "test commit",
+    });
+  });
 });
