@@ -2552,15 +2552,26 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
     """
 
     try:
-        file_path = safe_path(path)
+        # Keep the final component lexical so restoring a symlink operates on the link entry itself.
+        # This also permits restoring a path whose working-tree entry has been deleted.
+        file_path = safe_write_path(path)
     except ValueError as exc:
         return {"error": str(exc)}
 
     if is_sensitive_path(file_path):
         return {"error": f"Refusing to restore sensitive file: {path}"}
 
-    if not file_path.exists():
-        return {"error": f"File does not exist: {path}"}
+    try:
+        lexical_stat = file_path.lstat()
+    except FileNotFoundError:
+        lexical_stat = None
+    except OSError as exc:
+        return {"error": f"Could not inspect file: {exc}"}
+
+    if lexical_stat is not None and stat.S_ISDIR(lexical_stat.st_mode):
+        return {
+            "error": "git_restore can only restore a single file, not a directory."
+        }
 
     rel_path = str(file_path.relative_to(PROJECT_ROOT))
 

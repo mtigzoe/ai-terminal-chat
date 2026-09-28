@@ -949,6 +949,44 @@ def test_git_restore_staged_confirm_true_unstages(git_repo):
     assert result.get("restored") is False
 
 
+def test_git_restore_restores_symlink_entry_without_following_target(git_repo):
+    target = git_repo / "target.txt"
+    other = git_repo / "other.txt"
+    link = git_repo / "link.txt"
+    target.write_text("target original\n")
+    other.write_text("other original\n")
+    try:
+        link.symlink_to(target.name)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symbolic links unavailable: {exc}")
+
+    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+
+    other.write_text("other modified\n")
+    link.unlink()
+    link.symlink_to(other.name)
+
+    result = tools.git_restore("link.txt", confirm=True)
+    assert result.get("restored") is True
+    assert link.is_symlink()
+    assert link.readlink() == Path(target.name)
+    assert other.read_text() == "other modified\n"
+
+
+def test_git_restore_can_restore_deleted_worktree_path(git_repo):
+    file_path = git_repo / "file.txt"
+    file_path.write_text("hello\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
+    file_path.unlink()
+
+    result = tools.git_restore("file.txt", confirm=True)
+    assert result.get("restored") is True
+    assert file_path.read_text() == "hello\n"
+
+
+
 def test_git_restore_rejects_sensitive_files(git_repo):
     (git_repo / ".env").write_text("SECRET=1")
     result = tools.git_restore(".env")
