@@ -212,18 +212,6 @@ def test_atomic_replace_text_replaces_symlink_without_following_target(tmp_path)
     assert sentinel.read_text(encoding="utf-8") == "sentinel"
 
 
-def test_atomic_replace_text_replaces_symlink_without_following_target(tmp_path):
-    target = tmp_path / "config"
-    sentinel = tmp_path / "outside"
-    sentinel.write_text("sentinel", encoding="utf-8")
-    target.symlink_to(sentinel)
-
-    tools._atomic_replace_text(target, "safe")
-
-    assert target.read_text(encoding="utf-8") == "safe"
-    assert sentinel.read_text(encoding="utf-8") == "sentinel"
-
-
 def test_atomic_replace_text_rejects_symlinked_parent_on_posix(tmp_path):
     if os.name != "posix":
         pytest.skip("POSIX directory-descriptor hardening test")

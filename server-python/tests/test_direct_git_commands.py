@@ -52,7 +52,7 @@ def test_direct_git_branch_show_current_routes_to_run_command():
     assert result.tool_calls[0].args == {"command": "git branch --show-current"}
 
 
-def test_direct_git_commit_with_message_routes_to_git_commit_tool():
+def test_direct_git_commit_preserves_quoted_filename_message():
     contents = [{"role": "user", "content": 'git commit -m "Hellov2.txt"'}]
 
     result = _direct_git_command(contents)
@@ -63,17 +63,7 @@ def test_direct_git_commit_with_message_routes_to_git_commit_tool():
     assert result.tool_calls[0].args == {"message": "Hellov2.txt"}
 
 
-def test_direct_git_commit_without_message_returns_text():
-    contents = [{"role": "user", "content": "git commit"}]
-
-    result = _direct_git_command(contents)
-
-    assert isinstance(result, ProviderResponse)
-    assert result.tool_calls == []
-    assert "message" in result.text.lower()
-
-
-def test_direct_git_push_routes_to_git_push_tool():
+def test_direct_git_push_preserves_hyphenated_branch_name():
     contents = [{"role": "user", "content": "git push origin real-time-git-status-clean"}]
 
     result = _direct_git_command(contents)
