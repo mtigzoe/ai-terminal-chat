@@ -2357,7 +2357,9 @@ def git_add(path: str, confirm: bool = False) -> dict:
             text=False,
         )
         if hashed.returncode != 0:
-            return {"error": f"git add failed: {(hashed.stderr or b"").decode("utf-8", errors="replace").strip() or (hashed.stdout or b"").decode("utf-8", errors="replace").strip()}"}
+            stderr = (hashed.stderr or b"").decode("utf-8", errors="replace").strip()
+            stdout = (hashed.stdout or b"").decode("utf-8", errors="replace").strip()
+            return {"error": f"git add failed: {stderr or stdout}"}
         oid = hashed.stdout.decode("ascii", errors="replace").strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", oid, re.IGNORECASE):
             return {"error": "git add failed: unexpected hash-object output."}
