@@ -21,15 +21,15 @@ Scripts for linting, type-checking, and running tests across the project.
 From the **repository root**:
 
 ```bash
-chmod +x static-checks/*.sh
+chmod +x scripts/static-checks/*.sh
 
 # Static analysis
-./static-checks/check-python.sh
-./static-checks/check-typescript.sh
-./static-checks/check-react.sh
+./scripts/static-checks/check-python.sh
+./scripts/static-checks/check-typescript.sh
+./scripts/static-checks/check-react.sh
 
 # All unit/integration tests
-./static-checks/run-all-tests.sh
+./scripts/static-checks/run-all-tests.sh
 ```
 
 ## Notes

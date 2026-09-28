@@ -2,7 +2,7 @@
 # Static checks for client-react
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT/client-react"
 
 echo "==> React static checks (client-react)"

@@ -2,7 +2,7 @@
 # Static checks for server-python
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT/server-python"
 
 echo "==> Python static checks (server-python)"
