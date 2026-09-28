@@ -1775,6 +1775,7 @@ def _run_git(
     args: list,
     timeout: float,
     input_text: str | None = None,
+    input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess:
     """Run git with config/SSH isolation matching the TypeScript backend.
 
@@ -1831,6 +1832,8 @@ def _run_git(
                 cwd=PROJECT_ROOT,
                 timeout=timeout,
                 input_text=input_text,
+                input_bytes=input_bytes,
+                text=input_bytes is None,
                 env=env,
             )
         finally:
@@ -2353,11 +2356,13 @@ def git_add(path: str, confirm: bool = False) -> dict:
         hashed = _run_git(
             ["hash-object", "-w", "--stdin", "--no-filters"],
             timeout=15,
-            input_text=payload.decode("utf-8", errors="surrogateescape"),
+            input_bytes=payload,
         )
         if hashed.returncode != 0:
-            return {"error": f"git add failed: {hashed.stderr.strip() or hashed.stdout.strip()}"}
-        oid = hashed.stdout.strip()
+            stderr = (hashed.stderr or b"").decode("utf-8", errors="replace").strip()
+            stdout = (hashed.stdout or b"").decode("utf-8", errors="replace").strip()
+            return {"error": f"git add failed: {stderr or stdout}"}
+        oid = hashed.stdout.decode("ascii", errors="replace").strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", oid, re.IGNORECASE):
             return {"error": "git add failed: unexpected hash-object output."}
         indexed = _run_git(
