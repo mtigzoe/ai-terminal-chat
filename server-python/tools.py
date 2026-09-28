@@ -2254,7 +2254,11 @@ def git_diff(path: str = "", staged: bool = False) -> dict:
         except ValueError as exc:
             return {"error": str(exc)}
 
-        args.append(str(file_path.relative_to(PROJECT_ROOT)))
+        # End option parsing before the path. safe_path() accepts a value
+        # such as "--output=../outside.txt" because the ".." stays inside one
+        # path component. Git would otherwise treat that argument as
+        # --output and write the diff outside the project.
+        args.extend(["--", str(file_path.relative_to(PROJECT_ROOT))])
     elif not staged and get_allowed_read_paths() is not None:
         # Project-page file selection restricts which files the model can
         # read (read_file, and an unscoped diff would let it see arbitrary
