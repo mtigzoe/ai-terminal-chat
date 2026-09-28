@@ -1772,6 +1772,114 @@ def _git_line_ending_overrides() -> list[str]:
     return overrides
 
 
+def _validate_git_repository_paths() -> None:
+    """Reject Git repository discovery/metadata that escapes the selected worktree."""
+    root = PROJECT_ROOT.resolve()
+    current = root
+    git_entry = None
+    repository_root = None
+    while True:
+        candidate = current / ".git"
+        if candidate.is_dir() or candidate.is_file():
+            git_entry = candidate
+            repository_root = current
+            break
+        if current.parent == current:
+            break
+        current = current.parent
+    if git_entry is None:
+        raise ValueError("Project root is not inside a Git worktree.")
+
+    try:
+        if git_entry.is_dir():
+            git_dir = git_entry.resolve(strict=True)
+        else:
+            line = git_entry.read_text(encoding="utf-8").splitlines()[0].strip()
+            if not line.lower().startswith("gitdir:"):
+                raise ValueError("Invalid .git gitfile.")
+            target = Path(line[7:].strip())
+            git_dir = (git_entry.parent / target).resolve(strict=True) if not target.is_absolute() else target.resolve(strict=True)
+    except (OSError, IndexError) as exc:
+        raise ValueError("Could not resolve the project's Git repository metadata.") from exc
+
+    # A normal repository may legitimately keep its .git directory in an
+    # ancestor of the selected project root. A .git gitfile at the selected
+    # root is allowed outside the root only for a genuine linked worktree:
+    # Git stores its private metadata under common_dir/worktrees/<id> and
+    # records the worktree's .git file path in worktrees/<id>/gitdir.
+    if git_entry.parent == root and git_entry.is_file():
+        common_file = git_dir / "commondir"
+        gitdir_file = git_dir / "gitdir"
+        try:
+            common_value = common_file.read_text(encoding="utf-8").strip()
+            common_dir = (git_dir / common_value).resolve(strict=True) if common_value else git_dir
+            worktree_gitdir = Path(gitdir_file.read_text(encoding="utf-8").strip()).resolve(strict=True)
+            expected_gitfile = git_entry.resolve(strict=True)
+            worktrees_root = (common_dir / "worktrees").resolve(strict=True)
+            git_dir.relative_to(worktrees_root)
+            if worktree_gitdir != expected_gitfile:
+                raise ValueError("Git repository metadata points outside the project root.")
+        except (OSError, ValueError) as exc:
+            raise ValueError("Git repository metadata points outside the project root.") from exc
+    elif repository_root == root:
+        try:
+            git_dir.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Git repository metadata points outside the project root.") from exc
+
+    common_file = git_dir / "commondir"
+    common_dir = git_dir
+    if common_file.is_file():
+        try:
+            value = common_file.read_text(encoding="utf-8").strip()
+            common_dir = (git_dir / value).resolve(strict=True) if value else git_dir
+            if repository_root == root and git_entry.is_dir():
+                common_dir.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise ValueError("Git common repository metadata points outside the project root.") from exc
+
+    # Git can borrow objects from an arbitrary object store through
+    # objects/info/alternates. That store is not part of the selected project
+    # unless it stays under the repository's trusted metadata root. Otherwise
+    # git log/show/diff and other object readers can expose data from outside
+    # PROJECT_ROOT. For linked worktrees, common_dir is the intentionally
+    # trusted external repository metadata root.
+    object_dir = (common_dir / "objects").resolve(strict=True)
+    trusted_object_root = common_dir if git_entry.is_file() and repository_root == root else root
+    try:
+        object_dir.relative_to(trusted_object_root)
+    except ValueError as exc:
+        raise ValueError("Git object storage points outside the project root.") from exc
+
+    alternates_file = object_dir / "info" / "alternates"
+    if alternates_file.is_file():
+        try:
+            for raw in alternates_file.read_text(encoding="utf-8").splitlines():
+                value = raw.strip()
+                if not value:
+                    continue
+                alternate = Path(value)
+                alternate_dir = (
+                    (object_dir / alternate).resolve(strict=True)
+                    if not alternate.is_absolute()
+                    else alternate.resolve(strict=True)
+                )
+                alternate_dir.relative_to(trusted_object_root)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise ValueError("Git alternate object storage points outside the project root.") from exc
+
+    # HTTP alternates are repository-controlled network destinations. They are
+    # not part of the configured remote and can cause Git fetches to contact
+    # arbitrary URLs, bypassing the app's explicit remote/network boundary.
+    http_alternates = object_dir / "info" / "http-alternates"
+    try:
+        if http_alternates.is_file() and http_alternates.read_text(encoding="utf-8").strip():
+            raise ValueError("Git HTTP alternate object storage is not allowed.")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError("Could not validate Git HTTP alternate object storage.") from exc
+
+
+
 def _run_git(
     args: list,
     timeout: float,
@@ -1783,6 +1891,7 @@ def _run_git(
     Local .git/config is still loaded by Git; GIT_CONFIG does not replace it.
     Process isolation relies on -c overrides, SSH env, and pager env.
     """
+    _validate_git_repository_paths()
     isolation = tempfile.mkdtemp(prefix="git-isolation-")
     empty_config = os.path.join(isolation, "config")
     try:

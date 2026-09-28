@@ -72,6 +72,90 @@ test("gitDiff rejects an absolute path", async () => {
   assert.equal("error" in result, true);
 });
 
+test("runIsolatedGit rejects an external .git gitfile", async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-gitfile-project-"));
+  const outside = mkdtempSync(join(tmpdir(), "git-gitfile-outside-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: outside });
+    writeFileSync(join(temp, ".git"), "gitdir: " + join(outside, ".git") + "\n");
+    __setProjectRootForTests(temp);
+    await assert.rejects(() => runIsolatedGit(["status"]), /outside the project root/);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedGit rejects an external commondir", async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-commondir-project-"));
+  const outside = mkdtempSync(join(tmpdir(), "git-commondir-outside-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    execFileSync("git", ["init", "-q"], { cwd: outside });
+    writeFileSync(join(temp, ".git", "commondir"), join(outside, ".git") + "\n");
+    __setProjectRootForTests(temp);
+    await assert.rejects(() => runIsolatedGit(["status"]), /outside the project root/);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedGit rejects external alternate object storage", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-alternate-"));
+  const external = mkdtempSync(join(tmpdir(), "git-alternate-external-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: external });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: external });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: external });
+    writeFileSync(join(external, "outside.txt"), "outside-object-secret\n");
+    execFileSync("git", ["add", "outside.txt"], { cwd: external });
+    execFileSync("git", ["commit", "-qm", "outside"], { cwd: external });
+    const externalHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: external, encoding: "utf8" }).trim();
+
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    mkdirSync(join(temp, ".git", "objects", "info"), { recursive: true });
+    writeFileSync(join(temp, ".git", "objects", "info", "alternates"), join(external, ".git", "objects") + "\n");
+    writeFileSync(join(temp, ".git", "refs", "heads", "main"), externalHead + "\n");
+    writeFileSync(join(temp, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    __setProjectRootForTests(temp);
+    await assert.rejects(
+      () => runIsolatedGit(["log", "-1", "--oneline"]),
+      /alternate object storage|object storage|project root/i,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("runIsolatedGit rejects repository-controlled HTTP alternates", async () => {
+  const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-http-alternate-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    mkdirSync(join(temp, ".git", "objects", "info"), { recursive: true });
+    writeFileSync(join(temp, ".git", "objects", "info", "http-alternates"), "http://127.0.0.1:9/objects/info/\n");
+
+    __setProjectRootForTests(temp);
+    await assert.rejects(
+      () => runIsolatedGit(["status", "--short"]),
+      /HTTP alternate object storage|alternate/i,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+
 test("runIsolatedGit blocks repository-enabled external protocols", async () => {
   const { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -85,9 +169,9 @@ test("runIsolatedGit blocks repository-enabled external protocols", async () => 
     writeFileSync(
       configPath,
       readFileSync(configPath, "utf8")
-        + "\n[protocol \\\"ext\\\"]\\n\\tallow = always\\n"
-        + "[remote \\\"origin\\\"]\\n\\turl = ext::node git-ext-helper.mjs %S\\n"
-        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\\n",
+        + "\n[protocol \\\"ext\\\"]\n\\tallow = always\n"
+        + "[remote \\\"origin\\\"]\n\\turl = ext::node git-ext-helper.mjs %S\n"
+        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
     );
 
     __setProjectRootForTests(temp);
@@ -110,7 +194,7 @@ test("runIsolatedGit neutralizes URL-specific HTTP headers", async () => {
     writeFileSync(
       configPath,
       readFileSync(configPath, "utf8")
-        + "\n[http \\\"https://example.invalid/\\\"]\\n\\textraHeader = Authorization: Bearer repository-secret\\n",
+        + "\n[http \\\"https://example.invalid/\\\"]\n\\textraHeader = Authorization: Bearer repository-secret\n",
     );
     __setProjectRootForTests(temp);
     const result = await runIsolatedGit(["config", "--get", "http.https://example.invalid/.extraHeader"]);

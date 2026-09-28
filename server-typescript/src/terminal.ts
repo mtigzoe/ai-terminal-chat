@@ -1494,7 +1494,7 @@ export async function runCommand(
       });
 
       const remoteOutput =
-        args[0].toLowerCase() === "remote"
+        args[1]?.toLowerCase() === "remote"
           ? sanitizeGitRemoteOutput(String(result.stdout ?? ""))
           : String(result.stdout ?? "");
       const out = capOutput(remoteOutput);
