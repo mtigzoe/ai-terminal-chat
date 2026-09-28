@@ -2,7 +2,7 @@
 # Run tests for Python, TypeScript, and React
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 FAILED=0
 
 echo "========================================"
