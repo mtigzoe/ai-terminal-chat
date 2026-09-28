@@ -1184,23 +1184,14 @@ def test_git_commit_confirm_true_commits(git_repo):
     assert result.get("commit_message") == "update file"
 
 
-def test_git_commit_preview_works_with_no_files_selected(git_repo):
-    """Regression test: git_commit's confirmation preview (git_diff of
-    staged changes) must not be blocked by the Project-page file-selection
-    restriction. A file only reaches the staging area after git_add has
-    already gone through its own separate confirmation, so showing that
-    staged diff isn't a way to bypass file selection — and since the real
-    client sends allowed_paths: [] on every request unless the user has
-    actively selected files, an unqualified block here would break
-    git_commit's preview (and therefore every "commit my changes" request)
-    for anyone not using that feature."""
+def test_git_commit_preview_works_with_staged_file_selected(git_repo):
     (git_repo / "file.txt").write_text("hello\n")
     subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=git_repo, check=True)
     (git_repo / "file.txt").write_text("v2\n")
     subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
 
-    security.set_allowed_read_paths([])
+    security.set_allowed_read_paths(["file.txt"])
     try:
         preview = tools.git_commit("update file")
         assert preview.get("requires_confirmation") is True
@@ -1210,6 +1201,45 @@ def test_git_commit_preview_works_with_no_files_selected(git_repo):
         assert result.get("committed") is True
     finally:
         security.clear_allowed_read_paths()
+
+
+def test_git_commit_refuses_staged_path_outside_agent_selection(git_repo):
+    (git_repo / "allowed.txt").write_text("allowed\n")
+    (git_repo / "other.txt").write_text("outside selection\n")
+    subprocess.run(
+        ["git", "add", "allowed.txt", "other.txt"], cwd=git_repo, check=True
+    )
+
+    security.set_allowed_read_paths(["allowed.txt"])
+    try:
+        result = tools.git_commit("test commit")
+    finally:
+        security.clear_allowed_read_paths()
+
+    assert result == {
+        "error": (
+            "Refusing to commit staged file outside the agent selected paths: "
+            "other.txt"
+        )
+    }
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_git_commit_refuses_pre_staged_sensitive_file(git_repo, confirm):
+    (git_repo / ".env").write_text("API_KEY=do-not-expose\n")
+    subprocess.run(["git", "add", ".env"], cwd=git_repo, check=True)
+
+    result = tools.git_commit("test commit", confirm=confirm)
+
+    assert result == {"error": "Refusing to commit sensitive file: .env"}
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=git_repo,
+            capture_output=True,
+        ).returncode
+        != 0
+    )
 
 
 def test_git_commit_no_staged_changes_returns_error(git_repo):

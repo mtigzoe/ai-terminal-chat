@@ -2739,6 +2739,46 @@ def git_restore(path: str, staged: bool = False, confirm: bool = False) -> dict:
     return {"path": rel_path, "restored": not staged, "unstaged": staged}
 
 
+def _validate_git_commit_scope() -> dict | None:
+    """Refuse to expose or commit staged paths outside the agent boundary."""
+
+    try:
+        result = _run_git(
+            ["diff", "--cached", "--name-only", "-z"],
+            timeout=GIT_COMMIT_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"error": "git is not installed or not on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"error": "Inspecting staged files timed out."}
+    except Exception as exc:
+        return {"error": f"Could not inspect staged files: {exc}"}
+
+    if result.returncode != 0:
+        return {
+            "error": result.stderr.strip() or "Could not inspect staged files."
+        }
+
+    for staged_path in (result.stdout or "").split("\0"):
+        if not staged_path:
+            continue
+        if not is_read_allowed(staged_path):
+            return {
+                "error": (
+                    "Refusing to commit staged file outside the agent selected "
+                    f"paths: {staged_path}"
+                )
+            }
+        try:
+            file_path = safe_path(staged_path)
+        except ValueError:
+            return {"error": f"Refusing to commit invalid staged path: {staged_path}"}
+        if is_sensitive_path(file_path):
+            return {"error": f"Refusing to commit sensitive file: {staged_path}"}
+
+    return None
+
+
 def git_commit(message: str, confirm: bool = False) -> dict:
     """Commit staged changes with a message.
 
@@ -2759,6 +2799,10 @@ def git_commit(message: str, confirm: bool = False) -> dict:
         return {"error": "A commit message is required."}
 
     message = message.strip()
+
+    scope_error = _validate_git_commit_scope()
+    if scope_error:
+        return scope_error
 
     if not confirm:
         diff_result = git_diff(staged=True)
