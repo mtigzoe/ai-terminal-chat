@@ -26,6 +26,30 @@ test("gitStatus returns structured status output", async () => {
   }
 });
 
+test("git operations ignore repository core.worktree escapes", async () => {
+  const { mkdtempSync, rmSync, writeFileSync, realpathSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const temp = mkdtempSync(join(tmpdir(), "git-worktree-isolation-"));
+  const outside = mkdtempSync(join(tmpdir(), "git-worktree-outside-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: temp });
+    writeFileSync(join(outside, "outside-secret.txt"), "outside\n");
+    execFileSync("git", ["config", "core.worktree", outside], { cwd: temp });
+
+    __setProjectRootForTests(temp);
+    const root = await runIsolatedGit(["rev-parse", "--show-toplevel"]);
+    assert.equal(root.code, 0);
+    assert.equal(resolve(root.stdout.trim()), resolve(realpathSync.native(temp)));
+
+    const result = await gitStatus();
+    assert.equal("error" in result, false);
+    assert.equal(String(result.status ?? "").includes("outside-secret.txt"), false);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("gitBranch returns structured branch output", async () => {
   const result = await gitBranch();
   assert.equal("error" in result, false);
@@ -182,7 +206,7 @@ test("runIsolatedGit ignores inherited Git repository and transport environment"
     // Git prints a forward-slash path even on Windows while path.resolve()
     // produces backslashes there, so compare with one separator convention.
     const normalize = (value: string) => value.replace(/\\/g, "/");
-    assert.equal(normalize(result.stdout.trim()), normalize(resolve(process.cwd(), "..")));
+    assert.equal(normalize(result.stdout.trim()), normalize(process.cwd()));
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete process.env[key];
