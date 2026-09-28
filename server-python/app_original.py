@@ -25,8 +25,10 @@ from security import (
     PROJECT_ROOT,
     clear_allowed_read_paths,
     get_project_root,
+    is_sensitive_filename,
     load_provider_selection,
     persist_provider_selection,
+    safe_path,
     set_allowed_read_paths,
     set_project_root,
 )
@@ -39,6 +41,7 @@ from tools import (
     WRITE_TOOL_NAMES,
     add_allowed_command,
     get_allowed_commands,
+    is_command_allowed,
     list_files,
     read_file,
     remove_allowed_command,
