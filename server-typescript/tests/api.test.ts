@@ -778,11 +778,46 @@ describe("POST /confirm", () => {
       expect(res.status).toBe(409);
       const data = await res.json();
       expect(String(data.error).toLowerCase()).toContain("project root differs");
+      const preserved = (await import("../src/pending.js")).getPending(action.action_id);
+      expect(preserved?.action_id).toBe(action.action_id);
     } finally {
       setProjectRoot(originalRoot);
       clearPending();
       fs.rmSync(first, { recursive: true, force: true });
       fs.rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("allows git_fetch pending actions to be declined", async () => {
+    const originalRoot = getProjectRoot();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "confirm-git-fetch-"));
+    try {
+      execSync("git init -q", { cwd: root, stdio: "ignore" });
+      setProjectRoot(root);
+      const provider = getProvider();
+      const action = createPending("git_fetch", { remote: "origin" }, { requires_confirmation: true }, {
+        provider_fingerprint: providerFingerprint(provider),
+        project_root: root,
+        contents: [],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [],
+        last_call_signature: null,
+        consecutive_repeat_count: 0,
+        consecutive_error_count: 0,
+      });
+      const res = await createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: false }),
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data).toMatchObject({ confirmed: false, action_id: action.action_id, tool: "git_fetch", cancelled: true });
+    } finally {
+      setProjectRoot(originalRoot);
+      clearPending();
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
