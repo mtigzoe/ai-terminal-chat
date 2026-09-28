@@ -391,6 +391,38 @@ def test_git_inspection_output_redirection_is_blocked(project_root, command):
     assert existing.read_text() == "do not overwrite\n"
 
 
+def test_git_diff_path_is_not_an_output_option(git_repo, tmp_path):
+    """git_diff() must not let a path act as Git's --output option.
+
+    safe_path() accepts '--output=../<file>' because the '..' is embedded in
+    a path component rather than a parent segment. Passing that string to
+    git diff without a '--' separator makes Git write the diff outside the
+    project and return an empty stdout payload.
+    """
+    readme = git_repo / "readme.txt"
+    readme.write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "readme.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=git_repo, check=True)
+    readme.write_text("hello\nchanged\n", encoding="utf-8")
+
+    generated = git_repo / "generated.txt"
+    generated.write_text("do not overwrite\n", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-git-diff-outside.txt"
+    outside.unlink(missing_ok=True)
+
+    try:
+        tools.git_diff(path=f"--output=../{outside.name}")
+        tools.git_diff(path="--output=generated.txt")
+
+        assert not outside.exists()
+        assert generated.read_text(encoding="utf-8") == "do not overwrite\n"
+
+        legitimate = tools.git_diff(path="readme.txt")
+        assert "changed" in legitimate.get("diff", "")
+    finally:
+        outside.unlink(missing_ok=True)
+
+
 def test_run_command_rejects_secret_access():
     result = app.run_command("cat .env")
     assert "blocked" in result["error"].lower() or "not allowed" in result["error"].lower()
