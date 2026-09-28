@@ -1,6 +1,5 @@
 """Provider-agnostic tool-calling loop with explicit write confirmation."""
 
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextvars import copy_context
 from queue import Empty, Queue
 from threading import Event, Thread
@@ -15,7 +14,6 @@ from security import get_project_root
 from tools import (
     DEFAULT_TOOL_TIMEOUT,
     GIT_CONFIRM_TOOL_NAMES,
-    TOOL_EXECUTOR,
     TOOL_FUNCTIONS,
     TOOL_TIMEOUTS,
     WRITE_TOOL_NAMES,

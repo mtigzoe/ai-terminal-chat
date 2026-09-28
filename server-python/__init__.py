@@ -14,7 +14,7 @@ from providers.base import Provider, ProviderResponse, ToolCall
 __all__ = ["Provider", "ProviderResponse", "ToolCall", "get_provider"]
 
 
-def get_provider(name: str = None) -> Provider:
+def get_provider(name: str | None = None) -> Provider:
     name = (name or os.getenv("PROVIDER", "gemini")).lower()
 
     if name == "gemini":

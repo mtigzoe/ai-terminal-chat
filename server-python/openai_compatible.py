@@ -407,7 +407,7 @@ class OpenAICompatibleProvider(Provider):
                 "tool_call_id": call_id,
                 "content": json.dumps(item["result"]),
             }
-            for call_id, item in zip(call_ids, results)
+            for call_id, item in zip(call_ids, results, strict=True)
         ]
 
         return contents + new_messages

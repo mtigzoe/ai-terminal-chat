@@ -293,7 +293,7 @@ def safe_write_path(path: str) -> Path:
     try:
         parent.relative_to(root)
     except ValueError:
-        raise ValueError("Access outside the project directory is not allowed.")
+        raise ValueError("Access outside the project directory is not allowed.") from None
 
     return lexical
 
@@ -329,7 +329,7 @@ def safe_path(path: str) -> Path:
     try:
         requested.relative_to(root)
     except ValueError:
-        raise ValueError("Access outside the project directory is not allowed.")
+        raise ValueError("Access outside the project directory is not allowed.") from None
 
     return requested
 
