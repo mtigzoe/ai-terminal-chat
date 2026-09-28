@@ -253,7 +253,14 @@ def test_confirm_route_falls_back_when_provider_changed(git_repo_with_remote, mo
     monkeypatch.setattr(app, "provider", provider_a)
 
     client = app.app.test_client()
-    chat_response = client.post("/chat", json={"chat": "add file.txt", "history": []})
+    chat_response = client.post(
+        "/chat",
+        json={
+            "chat": "add file.txt",
+            "history": [],
+            "allowed_paths": ["file.txt"],
+        },
+    )
     pending = [e for e in chat_response.get_json()["tool_activity"] if e.get("type") == "pending_confirmation"]
     action_id = pending[0]["action_id"]
 
@@ -262,7 +269,14 @@ def test_confirm_route_falls_back_when_provider_changed(git_repo_with_remote, mo
 
     monkeypatch.setattr(app, "provider", OtherProvider([]))
 
-    confirm_response = client.post("/confirm", json={"action_id": action_id, "confirmed": True})
+    confirm_response = client.post(
+        "/confirm",
+        json={
+            "action_id": action_id,
+            "confirmed": True,
+            "allowed_paths": ["file.txt"],
+        },
+    )
     assert confirm_response.status_code == 200
     body = confirm_response.get_json()
     # Legacy fallback shape: a flat single result, no tool_activity/pending_confirmation.

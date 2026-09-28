@@ -228,11 +228,12 @@ def test_context_manager_empty_list_is_restrictive(project_root):
 
 # --- git content tools under restriction ---
 
-def test_git_diff_requires_allowed_path_when_restricted(project_root):
+def test_git_diff_without_path_is_scoped_when_restricted(project_root):
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project_root, check=True)
     security.set_allowed_read_paths(["README.md"])
     result = tools.git_diff(path="")
-    assert "error" in result
-    assert "path" in result["error"].lower() or "allowed" in result["error"].lower()
+    assert "error" not in result
+    assert result["diff"] == ""
 
 
 def test_git_diff_denies_unselected_path(project_root):
@@ -242,12 +243,7 @@ def test_git_diff_denies_unselected_path(project_root):
     assert "denied" in result["error"].lower() or "not in the set" in result["error"].lower()
 
 
-def test_git_diff_staged_allowed_with_no_path_even_when_restricted(project_root):
-    """Unlike an unstaged diff, a staged diff is scoped to files that
-    already passed their own git_add confirmation, so it isn't gated by
-    file selection — this is what lets git_commit's preview work at all
-    when no files have been explicitly selected (the default for anyone
-    not using that feature)."""
+def test_git_diff_staged_with_no_selection_exposes_nothing(project_root):
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project_root, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_root, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=project_root, check=True)
@@ -255,7 +251,53 @@ def test_git_diff_staged_allowed_with_no_path_even_when_restricted(project_root)
     security.set_allowed_read_paths([])
     result = tools.git_diff(staged=True)
     assert "error" not in result
-    assert "diff" in result
+    assert result == {"diff": "", "truncated": False}
+
+
+def test_git_diff_staged_is_scoped_to_selected_files(project_root):
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project_root, check=True)
+    subprocess.run(
+        ["git", "add", "README.md", "other.md"], cwd=project_root, check=True
+    )
+    security.set_allowed_read_paths(["README.md"])
+
+    result = tools.git_diff(staged=True)
+
+    assert "error" not in result
+    assert "readme content" in result["diff"]
+    assert "other content" not in result["diff"]
+    assert "other.md" not in result["diff"]
+
+
+def test_git_diff_refuses_explicit_sensitive_path(project_root):
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project_root, check=True)
+    subprocess.run(["git", "add", ".env"], cwd=project_root, check=True)
+    security.set_allowed_read_paths([".env"])
+
+    result = tools.git_diff(path=".env", staged=True)
+
+    assert "error" in result
+    assert "sensitive" in result["error"].lower()
+    assert "SECRET=1" not in str(result)
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_git_add_denies_unselected_file(project_root, confirm):
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project_root, check=True)
+    security.set_allowed_read_paths(["README.md"])
+
+    result = tools.git_add("other.md", confirm=confirm)
+
+    assert "error" in result
+    assert "access denied" in result["error"].lower()
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert staged.stdout == ""
 
 
 def test_read_file_nonexistent_returns_file_missing_not_permission_error(project_root):
