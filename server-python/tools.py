@@ -2357,7 +2357,6 @@ def git_add(path: str, confirm: bool = False) -> dict:
             ["hash-object", "-w", "--stdin", "--no-filters"],
             timeout=15,
             input_bytes=payload,
-            text=False,
         )
         if hashed.returncode != 0:
             stderr = (hashed.stderr or b"").decode("utf-8", errors="replace").strip()
