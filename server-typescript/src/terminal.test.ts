@@ -16,6 +16,7 @@ import {
   DANGEROUS_COMMAND_CHARACTERS,
   isCommandAllowed,
   runCommand,
+  sanitizeGitRemoteOutput,
   sanitizedTerminalEnv,
   tokenizeCommand,
   getAllowedCommands,
@@ -27,6 +28,17 @@ void DANGEROUS_COMMAND_CHARACTERS;
 
 // Restore the default allowlist after every test so mutations do not leak
 // into other test files that share the same process/module cache.
+test("sanitizeGitRemoteOutput removes embedded remote credentials", () => {
+  const output = "origin https://user:secret@example.com/repo.git (fetch)\n" +
+    "origin ssh://token:password@example.com/repo.git (push)\n" +
+    "origin https://example.com/public.git (fetch)";
+  const sanitized = sanitizeGitRemoteOutput(output);
+  assert.equal(sanitized.includes("user:secret@"), false);
+  assert.equal(sanitized.includes("token:password@"), false);
+  assert.equal(sanitized.includes("https://example.com/public.git"), true);
+});
+
+
 test("sanitizedTerminalEnv strips execution-injection variables", () => {
   const original = { ...process.env };
   process.env.NODE_OPTIONS = "--require ./outside.js";

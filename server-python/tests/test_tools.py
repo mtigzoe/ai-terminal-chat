@@ -39,6 +39,47 @@ def git_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_run_git_rejects_external_alternate_object_storage(git_repo, tmp_path):
+    external = tmp_path.parent / f"git-alternate-external-{tmp_path.name}"
+    external.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=external, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=external, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=external, check=True)
+    (external / "outside.txt").write_text("outside-object-secret\n", encoding="utf-8")
+    subprocess.run(["git", "add", "outside.txt"], cwd=external, check=True)
+    subprocess.run(["git", "commit", "-qm", "outside"], cwd=external, check=True)
+    external_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=external, text=True
+    ).strip()
+
+    objects_info = git_repo / ".git" / "objects" / "info"
+    objects_info.mkdir(parents=True, exist_ok=True)
+    (objects_info / "alternates").write_text(
+        str(external / ".git" / "objects") + "\n", encoding="utf-8"
+    )
+    (git_repo / ".git" / "refs" / "heads" / "main").write_text(
+        external_head + "\n", encoding="utf-8"
+    )
+    (git_repo / ".git" / "HEAD").write_text(
+        "ref: refs/heads/main\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="alternate object storage|object storage|project root"):
+        tools._run_git(["log", "-1", "--oneline"], timeout=10)
+
+
+def test_run_git_rejects_http_alternates(git_repo):
+    objects_info = git_repo / ".git" / "objects" / "info"
+    objects_info.mkdir(parents=True, exist_ok=True)
+    (objects_info / "http-alternates").write_text(
+        "http://127.0.0.1:9/objects/info/\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="HTTP alternate object storage|alternate"):
+        tools._run_git(["status", "--short"], timeout=10)
+
+
+
 def _git_porcelain(repo_path):
     result = subprocess.run(
         ["git", "status", "--porcelain"],
@@ -82,6 +123,27 @@ def test_terminal_env_strips_execution_injection_variables(monkeypatch):
         assert env["NORMAL_TERMINAL_VALUE"] == "kept"
 
 
+def test_run_git_rejects_external_gitfile(git_repo):
+    outside = git_repo.parent / "external-git-dir"
+    subprocess.run(["git", "init", "-q", str(outside)], check=True)
+    import shutil
+    shutil.rmtree(git_repo / ".git")
+    (git_repo / ".git").write_text(f"gitdir: {outside / '.git'}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside the project root"):
+        tools._run_git(["status"], timeout=10)
+
+
+def test_run_git_rejects_external_commondir(git_repo):
+    outside = git_repo.parent / "external-common-git-dir"
+    subprocess.run(["git", "init", "-q", str(outside)], check=True)
+    (git_repo / ".git" / "commondir").write_text(str(outside / ".git") + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside the project root"):
+        tools._run_git(["status"], timeout=10)
+
+
+
 def test_run_git_ignores_inherited_git_repository_environment(git_repo, tmp_path, monkeypatch):
     outside = tmp_path / "outside-repo"
     outside.mkdir()
@@ -112,9 +174,9 @@ def test_run_git_blocks_repository_enabled_external_protocol(git_repo):
     config_path = git_repo / ".git" / "config"
     config_path.write_text(
         config_path.read_text(encoding="utf-8")
-        + "\\n[protocol \\\"ext\\\"]\\n\\tallow = always\\n"
-        + "[remote \\\"origin\\\"]\\n\\turl = ext::python git-ext-helper.py %S\\n"
-        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\\n",
+        + "\n[protocol \\\"ext\\\"]\n\\tallow = always\n"
+        + "[remote \\\"origin\\\"]\n\\turl = ext::python git-ext-helper.py %S\n"
+        + "\\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
         encoding="utf-8",
     )
 

@@ -6,8 +6,8 @@
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, rmSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync, renameSync, lstatSync, readFileSync, realpathSync, existsSync } from "node:fs";
+import { dirname, join, resolve, sep, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 
 import { getAllowedReadPaths, getProjectRoot, isReadAllowed, isSensitivePath, safePath, writeFileWithinProject, openWithinProject } from "./security.ts";
@@ -341,8 +341,134 @@ async function withSanitizedGitConfigUnlocked<T>(fn: () => Promise<T>): Promise<
     }
 }
 
+function validateGitRepositoryPaths(): void {
+  const root = resolve(getProjectRoot());
+  let current = root;
+  let gitEntry: string | undefined;
+  let repositoryRoot: string | undefined;
+  while (true) {
+    const candidate = join(current, ".git");
+    if (existsSync(candidate)) {
+      gitEntry = candidate;
+      repositoryRoot = current;
+      break;
+    }
+    const parent = resolve(current, "..");
+    if (parent === current) break;
+    current = parent;
+  }
+  if (!gitEntry || !repositoryRoot) throw new Error("Project root is not inside a Git worktree.");
+
+  let gitDir: string;
+  try {
+    const stat = lstatSync(gitEntry);
+    if (stat.isDirectory()) {
+      gitDir = realpathSync.native(gitEntry);
+    } else if (stat.isFile()) {
+      const line = readFileSync(gitEntry, "utf8").split(/\r?\n/)[0].trim();
+      if (!line.toLowerCase().startsWith("gitdir:")) throw new Error("Invalid .git gitfile.");
+      const target = line.slice(7).trim();
+      gitDir = realpathSync.native(target ? (isAbsolute(target) ? target : join(dirname(gitEntry), target)) : gitEntry);
+    } else {
+      throw new Error("Invalid .git repository entry.");
+    }
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : "Could not resolve the project's Git repository metadata.");
+  }
+
+  const canonicalRoot = realpathSync.native(root);
+  const within = (candidate: string, base: string) => {
+    const normalizedBase = realpathSync.native(resolve(base)).replace(/[\\\\/]+$/, "").toLowerCase();
+    const normalized = realpathSync.native(resolve(candidate)).toLowerCase();
+    return normalized === normalizedBase || normalized.startsWith(normalizedBase + sep);
+  };
+
+  if (repositoryRoot === root && lstatSync(gitEntry).isFile()) {
+    const commonFile = join(gitDir, "commondir");
+    const gitdirFile = join(gitDir, "gitdir");
+    try {
+      if (!existsSync(commonFile) || !existsSync(gitdirFile)) {
+        throw new Error("Git repository metadata points outside the project root.");
+      }
+      const commonValue = readFileSync(commonFile, "utf8").trim();
+      const commonDir = realpathSync.native(commonValue ? (isAbsolute(commonValue) ? commonValue : join(gitDir, commonValue)) : gitDir);
+      const worktreeGitdir = realpathSync.native(readFileSync(gitdirFile, "utf8").trim());
+      const expectedGitfile = realpathSync.native(gitEntry);
+      if (!within(gitDir, join(commonDir, "worktrees")) || worktreeGitdir !== expectedGitfile) {
+        throw new Error("Git repository metadata points outside the project root.");
+      }
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : "Git repository metadata points outside the project root.");
+    }
+  } else if (repositoryRoot === root && !within(gitDir, canonicalRoot)) {
+    throw new Error("Git repository metadata points outside the project root.");
+  }
+
+  const commonFile = join(gitDir, "commondir");
+  let commonDir = gitDir;
+  try {
+    if (lstatSync(commonFile).isFile()) {
+      const value = readFileSync(commonFile, "utf8").trim();
+      commonDir = realpathSync.native(value ? (isAbsolute(value) ? value : join(gitDir, value)) : gitDir);
+      if (repositoryRoot === root && lstatSync(gitEntry).isDirectory() && !within(commonDir, canonicalRoot)) {
+        throw new Error("Git common repository metadata points outside the project root.");
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && /outside the project root/.test(error.message)) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error("Could not validate Git common repository metadata.");
+    }
+  }
+
+  // Git can borrow objects from an arbitrary object store through
+  // objects/info/alternates. Keep that store inside the trusted repository
+  // metadata boundary so object readers cannot expose files from elsewhere.
+  const objectDir = realpathSync.native(join(commonDir, "objects"));
+  const trustedObjectRoot = commonDir;
+  if (!within(objectDir, trustedObjectRoot)) {
+    throw new Error("Git object storage points outside the project root.");
+  }
+
+  const alternatesFile = join(objectDir, "info", "alternates");
+  try {
+    if (lstatSync(alternatesFile).isFile()) {
+      for (const raw of readFileSync(alternatesFile, "utf8").split(/\r?\n/)) {
+        const value = raw.trim();
+        if (!value) continue;
+        const alternateDir = realpathSync.native(isAbsolute(value) ? value : join(objectDir, value));
+        if (!within(alternateDir, trustedObjectRoot)) {
+          throw new Error("Git alternate object storage points outside the project root.");
+        }
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && /outside the project root/.test(error.message)) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error("Could not validate Git alternate object storage.");
+    }
+  }
+
+  // HTTP alternates are repository-controlled network destinations and can
+  // make Git fetch arbitrary URLs outside the explicitly configured remote.
+  const httpAlternates = join(objectDir, "info", "http-alternates");
+  try {
+    if (lstatSync(httpAlternates).isFile() && readFileSync(httpAlternates, "utf8").trim()) {
+      throw new Error("Git HTTP alternate object storage is not allowed.");
+    }
+  } catch (error) {
+    if (error instanceof Error && /not allowed/.test(error.message)) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error("Could not validate Git HTTP alternate object storage.");
+    }
+  }
+}
+
+
+
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   if (!options.holdLock) return gitOperationMutex.runExclusive(() => runIsolatedGit(args, { ...options, holdLock: true }));
+  validateGitRepositoryPaths();
   const timeout = options.timeout ?? 15_000;
   const maxBuffer = options.maxBuffer ?? Math.max(GIT_DIFF_MAX_CHARS * 2, 100_000);
   const isolationDir = mkdtempSync(join(tmpdir(), "git-isolation-"));
