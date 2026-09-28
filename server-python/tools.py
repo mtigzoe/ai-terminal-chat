@@ -1806,6 +1806,11 @@ def _run_git(
             {
                 "GIT_CONFIG": empty_config,
                 "GIT_CONFIG_NOSYSTEM": "1",
+                # Force Git\'s work tree to the validated project root. A
+                # repository-local core.worktree setting is untrusted and
+                # could otherwise redirect checkout/status/pull operations
+                # to an arbitrary directory outside the project.
+                "GIT_WORK_TREE": str(PROJECT_ROOT),
                 "GIT_CONFIG_GLOBAL": "NUL" if os.name == "nt" else "/dev/null",
                 "GIT_TERMINAL_PROMPT": "0",
                 "GIT_ASKPASS": "",

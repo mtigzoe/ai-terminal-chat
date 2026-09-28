@@ -356,6 +356,23 @@ def test_git_add_rejects_absolute_path(git_repo):
     assert "not allowed" in result["error"].lower()
 
 
+def test_git_operations_ignore_repository_core_worktree_escape(git_repo):
+    outside = git_repo.parent / "git-worktree-escape"
+    outside.mkdir()
+    (outside / "outside-secret.txt").write_text("outside\n")
+    subprocess.run(
+        ["git", "config", "core.worktree", str(outside)],
+        cwd=git_repo,
+        check=True,
+    )
+
+    result = tools.git_status()
+
+    assert "error" not in result
+    assert "outside-secret.txt" not in str(result)
+
+
+
 @pytest.mark.parametrize(
     "filename",
     [".env", "credentials.json", "id_rsa", "server.pem"],
