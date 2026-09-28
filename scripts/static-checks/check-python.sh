@@ -24,6 +24,12 @@ echo "--- ruff format --check ---"
 ruff format --check .
 
 echo "--- mypy ---"
-mypy . --ignore-missing-imports || true
+# Soft-fail: report issues but do not fail the script (many third-party
+# stubs missing). Capture exit for logging only.
+if mypy . --ignore-missing-imports; then
+  echo "mypy: clean"
+else
+  echo "mypy: issues reported (non-blocking)"
+fi
 
 echo "Python static checks finished."
