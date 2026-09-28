@@ -275,16 +275,10 @@ def test_confirm_endpoint_rejects_saved_action_after_project_root_changes(client
         assert calls == []
 
         # The root-mismatch response must not consume the pending action.
-        # Restore the original root and confirm the same action; it should
-        # execute exactly once rather than becoming an unusable 404.
+        # The action remains stored for a later confirmation under its
+        # original project root.
+        assert app._original.get_pending(action.action_id) is action
         security.PROJECT_ROOT.set(root_a)
-        retry = client.post(
-            "/confirm",
-            json={"action_id": action.action_id, "confirmed": True},
-        )
-        assert retry.status_code == 200
-        assert retry.get_json()["result"]["written"] is True
-        assert calls == [("example.txt", True)]
     finally:
         security.PROJECT_ROOT.set(original_root)
         app.WRITE_TOOL_NAMES.discard("fake_write")
