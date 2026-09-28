@@ -746,6 +746,46 @@ describe("POST /confirm", () => {
     expect(data.error).toBeDefined();
   });
 
+  it("returns 409 and preserves the action when the project root changed", async () => {
+    const first = fs.mkdtempSync(path.join(os.tmpdir(), "confirm-root-a-"));
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), "confirm-root-b-"));
+    const originalRoot = getProjectRoot();
+    try {
+      setProjectRoot(first);
+      const provider = getProvider();
+      const action = createPending(
+        "git_fetch",
+        { remote: "origin" },
+        { requires_confirmation: true },
+        {
+          provider_fingerprint: providerFingerprint(provider),
+          project_root: first,
+          contents: [],
+          round_index: 0,
+          tool_results: [],
+          remaining_calls: [],
+          last_call_signature: null,
+          consecutive_repeat_count: 0,
+          consecutive_error_count: 0,
+        },
+      );
+      setProjectRoot(second);
+      const res = await createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: true }),
+      });
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(String(data.error).toLowerCase()).toContain("project root differs");
+    } finally {
+      setProjectRoot(originalRoot);
+      clearPending();
+      fs.rmSync(first, { recursive: true, force: true });
+      fs.rmSync(second, { recursive: true, force: true });
+    }
+  });
+
   it("returns 404 for unknown action_id", async () => {
     const res = await createTestApp().request("http://localhost/confirm", {
       method: "POST",

@@ -385,7 +385,7 @@ export function confirmationPathsForPending(
   if (toolName === "git_fetch") {
     const remote = typeof args.remote === "string" ? args.remote.trim() : "";
     return [
-      remote && /^[\\w.-]+$/.test(remote) ? `${GIT_REMOTE_PREFIX}${remote}` : `${GIT_REMOTE_PREFIX}<default>`,
+      remote && /^[\w.-]+$/.test(remote) ? `${GIT_REMOTE_PREFIX}${remote}` : `${GIT_REMOTE_PREFIX}<default>`,
     ];
   }
   if (toolName === "git_push") {
