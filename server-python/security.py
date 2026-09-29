@@ -111,6 +111,27 @@ def _load_config() -> dict:
     return {}
 
 
+def _read_config_for_update() -> dict:
+    """Load config for a read-modify-write, propagating read failures.
+
+    A missing file is an empty configuration. Other I/O errors must abort the
+    update so a transient lock or permission failure cannot erase saved keys.
+    """
+
+    try:
+        raw = _CONFIG_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except (ValueError, TypeError):
+        pass
+    return {}
+
+
 def _persist_config(payload: dict) -> None:
     """Persist the full configuration dict atomically outside the project.
 
@@ -153,7 +174,7 @@ def _persist_project_root(root: Path) -> None:
     allowed_commands) are preserved.
     """
 
-    payload = _load_config()
+    payload = _read_config_for_update()
     payload["project_root"] = str(root)
     _persist_config(payload)
 
@@ -193,7 +214,7 @@ def persist_provider_selection(
     across provider switches.
     """
 
-    payload = _load_config()
+    payload = _read_config_for_update()
     payload["provider"] = str(provider).strip().lower()
     if model is not None:
         model_s = str(model).strip()
