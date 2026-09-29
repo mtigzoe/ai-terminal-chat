@@ -136,7 +136,7 @@ export function isPathWithinRoot(
   options: { caseInsensitive?: boolean } = {},
 ): boolean {
   const caseInsensitive = options.caseInsensitive ?? process.platform === "win32";
-  const backslash = "\\\\";
+  const backslash = "\\";
   const first = root.charCodeAt(0);
   const startsWithDrive =
     root.length >= 2 && root[1] === ":" &&
