@@ -664,3 +664,21 @@ test('keeps project selections in session storage when persistent memory is disa
   expect(localStorage.getItem('ai-terminal-chat:allowed-paths')).toBeNull();
   expect(localStorage.getItem(`project-explorer:${host}:selected`)).toBeNull();
 });
+
+test('reports the number of files selected across the entire project', async () => {
+  const user = userEvent.setup();
+  mockProjectList({
+    '.': [
+      { name: 'README.md', type: 'file' },
+      { name: 'src', type: 'directory' },
+    ],
+    src: [{ name: 'index.js', type: 'file' }],
+  });
+
+  render(<ProjectExplorer host={host} />);
+  await screen.findByRole('checkbox', { name: /select readme\.md for the agent/i });
+
+  await user.click(screen.getByRole('button', { name: /select all files/i }));
+
+  expect(await screen.findByText('Selected 2 files across the entire project.')).toBeInTheDocument();
+});
