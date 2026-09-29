@@ -214,6 +214,35 @@ def _fingerprint_git_index() -> dict:
         return {"kind": "git_index", "path": marker, "status": "unavailable", "sha256": None}
 
 
+def _read_git_ref_state(git_dir: Path, ref: str) -> str:
+    """Resolve a ref to its object id, from the loose ref or packed-refs.
+
+    Both callers must use this: the branch path and the symbolic-HEAD path
+    previously had separate copies, and the symbolic one omitted the
+    packed-refs fallback. After `git pack-refs` / `git gc` / a fresh clone the
+    loose ref is gone, so the symbolic path hashed the constant
+    "<missing-ref>" and the git_head fingerprint stopped changing when the
+    branch tip moved -- leaving git_pull / git_push confirmations valid across
+    a repository change. The TypeScript backend resolves the ref once through a
+    single code path, so this restores parity.
+    """
+    ref_path = git_dir / ref
+    try:
+        if ref_path.is_file():
+            return ref_path.read_text(encoding="utf-8", errors="replace").strip()
+        packed = git_dir / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("#") or not line.strip():
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[-1] == ref:
+                    return parts[0]
+    except OSError:
+        return "<missing-ref>"
+    return "<missing-ref>"
+
+
 def _fingerprint_git_head(branch: Optional[str] = None) -> dict:
     marker = f"{GIT_PUSH_HEAD_PREFIX}{branch}" if branch else GIT_HEAD_MARKER
     try:
@@ -230,29 +259,11 @@ def _fingerprint_git_head(branch: Optional[str] = None) -> dict:
         is_symbolic = head.startswith("ref:")
         if branch:
             ref = f"refs/heads/{branch}"
-            ref_path = git_dir / ref
-            if ref_path.is_file():
-                ref_state = ref_path.read_text(encoding="utf-8", errors="replace").strip()
-            else:
-                # Fall back to packed-refs
-                packed = git_dir / "packed-refs"
-                ref_state = "<missing-ref>"
-                if packed.is_file():
-                    for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
-                        if line.startswith("#") or not line.strip():
-                            continue
-                        parts = line.split()
-                        if len(parts) >= 2 and parts[-1] == ref:
-                            ref_state = parts[0]
-                            break
+            ref_state = _read_git_ref_state(git_dir, ref)
             state = ref_state
         elif is_symbolic:
             ref = head[4:].strip()
-            ref_path = git_dir / ref
-            if ref_path.is_file():
-                ref_state = ref_path.read_text(encoding="utf-8", errors="replace").strip()
-            else:
-                ref_state = "<missing-ref>"
+            ref_state = _read_git_ref_state(git_dir, ref)
             state = head + "\n" + ref_state
         else:
             state = head
