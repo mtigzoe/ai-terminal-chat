@@ -184,3 +184,47 @@ test("safeFetch keeps the pinned dispatcher alive until the response body is con
     );
   }
 });
+
+test("safeFetch resolves relative redirect locations before validating them", async () => {
+  const server = createServer((request, response) => {
+    if (request.url === "/start") {
+      response.writeHead(302, { location: "/final" });
+      response.end();
+      return;
+    }
+    if (request.url === "/final") {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("redirected safely");
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const lookup: LookupAll = async () => [
+      { address: "127.0.0.1", family: 4 },
+    ];
+
+    const response = await safeFetch(
+      `http://localhost:${address.port}/start`,
+      {},
+      {
+        originalHostname: "localhost",
+        lookupAll: lookup,
+        followRedirects: true,
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "redirected safely");
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});

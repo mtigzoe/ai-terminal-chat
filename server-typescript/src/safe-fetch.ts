@@ -413,7 +413,11 @@ export async function safeFetch(
     if (status >= 300 && status < 400) {
       const location = response.headers.get("location");
       if (location) {
-        const redirectCheck = validateRedirectUrl(location, options.originalHostname);
+        const next = new URL(location, url);
+        const redirectCheck = validateRedirectUrl(
+          next.toString(),
+          options.originalHostname,
+        );
         if (!redirectCheck.valid) {
           response.body?.cancel?.();
           throw new Error(
@@ -421,7 +425,6 @@ export async function safeFetch(
           );
         }
         if (options.followRedirects) {
-          const next = new URL(location, url);
           response.body?.cancel?.();
           return safeFetch(next, { ...init, method: "GET", body: undefined }, {
             ...options,
