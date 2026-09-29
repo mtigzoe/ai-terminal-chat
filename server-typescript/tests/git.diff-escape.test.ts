@@ -84,6 +84,18 @@ describe("git diff: external diff drivers are neutralized, not broken", () => {
     expect(String(result.stdout ?? "")).toContain("diff --git");
   });
 
+  test("external diff stays disabled when show uses the -- path separator", async () => {
+    const evil = join(root, "evil-diff.sh");
+    writeFileSync(evil, `#!/bin/sh\\necho ${MARKER} > diff-ran\\n`, "utf8");
+    execFileSync("git", ["config", "diff.external", evil], { cwd: root, stdio: "ignore" });
+    addAllowedCommand("git show");
+
+    const result = (await runCommand("git show HEAD -- a.txt", true)) as Record<string, unknown>;
+    expect(String(result.error ?? "")).not.toMatch(/external diff died/i);
+    expect(String(result.stdout ?? "")).toContain("diff --git");
+    expect(existsSync(join(root, "diff-ran"))).toBe(false);
+  });
+
   test("the harmful diff.external= override is gone", () => {
     expect(GIT_CONFIG_OVERRIDES).not.toContain("diff.external=");
   });
