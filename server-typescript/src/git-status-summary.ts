@@ -48,11 +48,14 @@ export function summarizeGitStatus(status: string): GitStatusSummary {
   // banner ("## No commits yet on main", "## Initial commit on master",
   // "## HEAD (no branch)") instead of naming the branch directly. Strip those
   // known forms so the banner text is never reported as the branch name.
-  const branchMatch = branchLine.match(
-    /^##\s+(?:(?:No commits yet on|Initial commit on)\s+)?(.+?)(?:\.\.\.|$)/
-  );
+  const detachedHead = /^##\s+HEAD \(no branch\)(?:\.\.\.|$)/.test(branchLine);
+  const branchMatch = detachedHead
+    ? null
+    : branchLine.match(
+        /^##\s+(?:(?:No commits yet on|Initial commit on)\s+)?(.+?)(?:\.\.\.|$)/
+      );
   const branch = branchMatch?.[1]?.trim() || null;
-  const hasRemote = branchLine.includes("...");
+  const hasRemote = !detachedHead && branchLine.includes("...");
 
   let ahead = 0;
   let behind = 0;
@@ -129,6 +132,10 @@ export function summarizeGitStatus(status: string): GitStatusSummary {
     parts.push(
       `${staged} file${staged === 1 ? " is" : "s are"} staged for the next commit.`
     );
+  }
+
+  if (detachedHead) {
+    parts.push("Git is in detached HEAD state.");
   }
 
   if (ahead > 0 && behind > 0) {
