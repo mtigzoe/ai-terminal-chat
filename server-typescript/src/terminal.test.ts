@@ -96,6 +96,12 @@ test.afterEach(() => {
   __resetProjectRootForTests();
 });
 
+test("an explicitly empty allowlist is not replaced by the defaults on reload", () => {
+  persistAllowedCommands([]);
+  assert.deepEqual(reloadAllowedCommands(), []);
+  assert.equal(isCommandAllowed("git status"), false);
+});
+
 // ---------------------------------------------------------------------------
 // git show read-permission regression tests
 // ---------------------------------------------------------------------------
@@ -119,6 +125,23 @@ test("git show --no-patch HEAD is allowed even when read restrictions are active
   await runWithAllowedReadPaths([], async () => {
     const result = await runCommand("git show --no-patch HEAD");
     assert.ok(!isToolError(result), "git show --no-patch HEAD must be allowed: no file contents shown");
+  });
+});
+
+for (const flag of ["--stat", "--no-patch", "--quiet", "--name-only", "--name-status"]) {
+  test(`git show ${flag} HEAD:README.md is denied when README.md is not selected`, async () => {
+    await runWithAllowedReadPaths(["other.md"], async () => {
+      const result = await runCommand(`git show ${flag} HEAD:README.md`);
+      assert.ok(isToolError(result), `${flag} must not bypass the blob read check`);
+      assert.ok(result.error.includes("Access denied"), "error must mention Access denied");
+    });
+  });
+}
+
+test("git show --stat HEAD:README.md is allowed when README.md is selected", async () => {
+  await runWithAllowedReadPaths(["README.md"], async () => {
+    const result = await runCommand("git show --stat HEAD:README.md");
+    assert.ok(!isToolError(result));
   });
 });
 

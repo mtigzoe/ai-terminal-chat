@@ -899,6 +899,21 @@ def test_add_and_remove_allowed_command_persists(tmp_path, monkeypatch):
     assert "echo" not in tools.ALLOWED_COMMAND_PREFIXES
 
 
+def test_empty_allowlist_persists_and_is_not_replaced_by_defaults(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_file = config_dir / "config.json"
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+    saved = list(tools.ALLOWED_COMMAND_PREFIXES)
+    try:
+        tools._persist_allowed_commands([])
+        tools.reload_allowed_commands()
+        assert tools.ALLOWED_COMMAND_PREFIXES == []
+        assert not tools.is_command_allowed("git status")
+    finally:
+        tools.ALLOWED_COMMAND_PREFIXES[:] = saved
+
+
 def test_failed_allowed_command_persistence_does_not_change_live_permissions(monkeypatch):
     original = list(tools.ALLOWED_COMMAND_PREFIXES)
 

@@ -359,6 +359,23 @@ def test_git_show_colon_path_allowed_for_selected_file(project_root):
     assert "error" not in result
 
 
+@pytest.mark.parametrize(
+    "flag", ["--stat", "--no-patch", "--quiet", "--name-only", "--name-status"]
+)
+def test_git_show_suppress_flags_do_not_bypass_blob_permission(project_root, flag):
+    """These flags suppress diff output only; a <rev>:<path> blob is still printed."""
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command(f"git show {flag} HEAD:other.md")
+    assert "error" in result
+    assert "access denied" in result["error"].lower()
+
+
+def test_git_show_suppress_flag_allows_selected_blob(project_root):
+    security.set_allowed_read_paths(["README.md"])
+    result = tools.run_command("git show --stat HEAD:README.md")
+    assert "error" not in result
+
+
 def test_git_show_colon_path_denied_for_unselected_file(project_root):
     """git show HEAD:other.md must be denied when other.md is not selected."""
     security.set_allowed_read_paths(["README.md"])

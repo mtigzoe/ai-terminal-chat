@@ -662,6 +662,10 @@ def _load_allowed_commands_from_config() -> list[str] | None:
     raw = data.get("allowed_commands")
     if not isinstance(raw, list):
         return None
+    if not raw:
+        # An explicitly empty allowlist (every prefix removed) must stay
+        # empty rather than silently reverting to the defaults.
+        return []
     prefixes: list[str] = []
     for item in raw:
         if not isinstance(item, str):
@@ -868,7 +872,24 @@ def _run_command_respects_read_permissions(command: str) -> dict | None:
     # and properly extract paths from commit:path and -- path syntax.
     if len(args) >= 2 and args[0].lower() == "git" and args[1].lower() == "show":
         args_after_show = args[2:]
-        
+
+        # A <rev>:<path> argument prints the blob itself. --stat, --no-patch,
+        # --quiet and --name-only only suppress diff output, so they must not
+        # short-circuit the read-permission check for blob specs. Arguments
+        # after "--" are pathspecs, not blob specs.
+        for arg in args_after_show:
+            if arg == "--":
+                break
+            if arg.startswith("-") or ":" not in arg:
+                continue
+            if not is_read_allowed(arg.split(":", 1)[1]):
+                return {
+                    "error": (
+                        "Access denied: git show can expose file contents and "
+                        "the requested file was not selected on the Project page."
+                    )
+                }
+
         # --name-only and --name-status suppress patch output even when
         # combined with --patch, so they are always safe.
         if any(arg in ("--name-only", "--name-status") for arg in args_after_show):

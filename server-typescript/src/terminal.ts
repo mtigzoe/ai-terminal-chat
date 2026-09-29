@@ -323,6 +323,9 @@ export function isForbiddenPrefix(prefix: string): boolean {
 function loadAllowedCommandsFromConfig(): string[] | null {
   const raw = loadAppConfig().allowed_commands;
   if (!Array.isArray(raw)) return null;
+  // An explicitly empty allowlist (every prefix removed) must stay empty
+  // rather than silently reverting to the defaults.
+  if (raw.length === 0) return [];
 
   const prefixes = raw
     .filter((item): item is string => typeof item === "string")
@@ -679,6 +682,21 @@ function runCommandRespectsReadPermissions(
     }
 
     const argsAfterShow = fullArgs.slice(2);
+
+    // A <rev>:<path> argument prints the blob itself. --stat, --no-patch,
+    // --quiet and --name-only only suppress diff output, so they must not
+    // short-circuit the read-permission check for blob specs. Arguments
+    // after "--" are pathspecs, not blob specs.
+    for (const arg of argsAfterShow) {
+      if (arg === "--") break;
+      if (arg.startsWith("-") || !arg.includes(":")) continue;
+      if (!isReadAllowed(arg.slice(arg.indexOf(":") + 1))) {
+        return (
+          "Access denied: git show can expose file contents and the requested " +
+          "file was not selected on the Project page."
+        );
+      }
+    }
 
     if (
       argsAfterShow.some(
