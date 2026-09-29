@@ -9,6 +9,7 @@ confirmation is invalidated when the repository changes underneath it, so a
 frozen fingerprint silently defeated that guard.
 """
 
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -77,18 +78,23 @@ class TestGitHeadFingerprintTracksHead:
 
         assert pending._fingerprint_git_head()["sha256"] != before["sha256"]
 
-    def test_branch_path_and_symbolic_path_agree(self, tmp_path):
-        """The two paths used to drift apart; they must read the same ref."""
+    def test_branch_path_and_symbolic_path_hash_the_real_ref(self, tmp_path):
         root = _repo(tmp_path, pack=True)
         security.PROJECT_ROOT.set(root)
 
+        sha = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "main"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
         branch_fp = pending._fingerprint_git_head("main")
         symbolic_fp = pending._fingerprint_git_head()
-        assert branch_fp["sha256"] and symbolic_fp["sha256"]
-        # The branch path hashes the raw sha; the symbolic path hashes
-        # "ref: refs/heads/main\n<sha>". Both must embed the real object id,
-        # so neither can be the frozen "<missing-ref>".
-        assert "<missing-ref>" not in str(symbolic_fp["sha256"])
+
+        assert branch_fp["sha256"] == hashlib.sha256(
+            sha.encode("utf-8")
+        ).hexdigest()
+        assert symbolic_fp["sha256"] == hashlib.sha256(
+            f"ref: refs/heads/main\n{sha}".encode("utf-8")
+        ).hexdigest()
 
     def test_pull_state_is_invalidated_when_head_moves(self, tmp_path):
         root = _repo(tmp_path, pack=True)
@@ -112,6 +118,38 @@ class TestGitHeadFingerprintTracksHead:
 
         # The git_head entry alone must now differ.
         assert pending._fingerprint_git_head()["sha256"] != head_entry["sha256"]
+
+
+class TestLinkedWorktreeGitHeadFingerprint:
+    def test_linked_worktree_resolves_branch_ref_from_common_git_dir(self, tmp_path):
+        main = tmp_path / "main"
+        worktree = tmp_path / "linked"
+        main.mkdir()
+        _repo(main, pack=False)
+        _git(main, "worktree", "add", "-q", "-b", "feature", str(worktree))
+        _git(main, "pack-refs", "--all")
+
+        security.PROJECT_ROOT.set(worktree)
+        git_dir = pending._resolve_git_dir(worktree)
+        assert git_dir is not None
+        assert (git_dir / "commondir").is_file()
+
+        sha = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        assert pending._read_git_ref_state(
+            git_dir, "refs/heads/feature"
+        ) == sha
+
+        before = pending._fingerprint_git_head()
+        (worktree / "linked.txt").write_text("linked\n", encoding="utf-8")
+        _git(worktree, "add", "-A")
+        _git(worktree, "commit", "-qm", "linked change")
+        _git(main, "pack-refs", "--all")
+        after = pending._fingerprint_git_head()
+
+        assert after["sha256"] != before["sha256"]
 
 
 class TestReadGitRefState:
