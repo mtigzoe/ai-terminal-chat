@@ -68,6 +68,7 @@ export default function ProjectRootManager({ host }) {
     setBusy(true);
     setError(false);
     setStatus(`Saving project: ${trimmed}`);
+    const previousPath = projectRoot;
 
     try {
       if (window.electronAPI?.isProjectRootAuthorized) {
@@ -81,18 +82,47 @@ export default function ProjectRootManager({ host }) {
 
       const response = await axios.post(`${host}/project-root`, { path: trimmed });
       const savedPath = response.data?.path || trimmed;
+      if (window.electronAPI?.setProjectRoot) {
+        let activationError = null;
+        try {
+          const synchronized = await window.electronAPI.setProjectRoot(savedPath);
+          if (!synchronized) {
+            activationError = new Error(
+              'The desktop app could not authorize the selected project folder. Use "Choose and use project folder" instead.'
+            );
+          }
+        } catch (electronError) {
+          activationError = electronError;
+        }
+
+        if (activationError) {
+          if (previousPath && previousPath !== savedPath) {
+            try {
+              const rollbackResponse = await axios.post(`${host}/project-root`, {
+                path: previousPath,
+              });
+              const restoredPath = rollbackResponse.data?.path || previousPath;
+              setProjectRoot(restoredPath);
+              setPathDraft(restoredPath);
+            } catch (rollbackError) {
+              setProjectRoot(savedPath);
+              setPathDraft(savedPath);
+              throw new Error(
+                `${activationError?.message || 'The desktop app could not activate the selected project.'} ` +
+                  `The backend also could not restore the previous project: ${rollbackError?.response?.data?.error || rollbackError?.message || 'unknown error'}`
+              );
+            }
+          } else {
+            setProjectRoot(savedPath);
+            setPathDraft(savedPath);
+          }
+          throw activationError;
+        }
+      }
       setProjectRoot(savedPath);
       setPathDraft(savedPath);
       setError(false);
       setStatus(`Active project changed to ${savedPath}.`);
-      if (window.electronAPI?.setProjectRoot) {
-        const synchronized = await window.electronAPI.setProjectRoot(savedPath);
-        if (!synchronized) {
-          throw new Error(
-            'The desktop app could not authorize the selected project folder. Use "Choose and use project folder" instead.'
-          );
-        }
-      }
       window.dispatchEvent(
         new CustomEvent('project-root-changed', { detail: { path: savedPath } })
       );

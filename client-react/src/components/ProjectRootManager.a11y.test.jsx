@@ -50,6 +50,35 @@ describe('ProjectRootManager accessibility and project switching', () => {
     });
   });
 
+  test('restores the backend project when Electron activation fails', async () => {
+    window.electronAPI.chooseFolder.mockResolvedValue('C:\\Projects\\new-project');
+    window.electronAPI.isProjectRootAuthorized = vi.fn().mockResolvedValue(true);
+    window.electronAPI.setProjectRoot = vi.fn(async (path) => (
+      path === 'C:\\Projects\\current'
+    ));
+    axios.post.mockImplementation(async (_url, { path }) => ({ data: { path } }));
+
+    render(<ProjectRootManager host="http://localhost:9000" />);
+    await waitFor(() => expect(screen.getByText('C:\\Projects\\current')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /choose and use project folder/i }));
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenNthCalledWith(
+        1,
+        'http://localhost:9000/project-root',
+        { path: 'C:\\Projects\\new-project' }
+      );
+      expect(axios.post).toHaveBeenNthCalledWith(
+        2,
+        'http://localhost:9000/project-root',
+        { path: 'C:\\Projects\\current' }
+      );
+    });
+    expect(screen.getByText('C:\\Projects\\current')).toBeInTheDocument();
+    expect(screen.getByText(/could not authorize the selected project folder/i)).toBeInTheDocument();
+  });
+
   test('leaves the current project unchanged when the native picker is cancelled', async () => {
     window.electronAPI.chooseFolder.mockResolvedValue(null);
 
