@@ -12,7 +12,7 @@
 // base URLs - server-python/providers.py: load_provider_config) are
 // migrated in providers.ts (Phase 4), which will reuse the helpers here.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { holdConfigLock } from "./config-lock.ts";
@@ -60,6 +60,34 @@ export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConf
   } catch {
     // Missing, unreadable, or invalid JSON: use an empty configuration.
   }
+  return {};
+}
+
+/**
+ * Read the config for a read-modify-write. Unlike loadAppConfig, only a
+ * missing file is treated as empty. Other read failures (EBUSY/EPERM from
+ * antivirus or indexers on Windows, EACCES, EIO) are thrown so a transient
+ * error cannot cause the merge below to overwrite every saved key with just
+ * the payload. Unparseable content is preserved as a .corrupt backup before
+ * being replaced.
+ */
+function readConfigForUpdate(configFilePath: string): AppConfig {
+  let raw: string;
+  try {
+    raw = readFileSync(configFilePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw err;
+  }
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (data !== null && typeof data === "object" && !Array.isArray(data)) {
+      return data as AppConfig;
+    }
+  } catch {
+    // Fall through to the backup path below.
+  }
+  copyFileSync(configFilePath, `${configFilePath}.corrupt-${Date.now()}`);
   return {};
 }
 
@@ -133,7 +161,7 @@ export function persistAppConfig(
   configFilePath = defaultConfigFilePath(),
 ): void {
   withConfigLock(configFilePath, (directory) => {
-    const current = loadAppConfig(configFilePath);
+    const current = readConfigForUpdate(configFilePath);
     const merged = { ...current, ...payload };
     writeConfigWhileLocked(merged, configFilePath, directory);
   });

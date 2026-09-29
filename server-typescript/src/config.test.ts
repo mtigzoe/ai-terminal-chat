@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -374,5 +374,40 @@ describe("persistAppConfig concurrency", () => {
     // After write: lock file is cleaned up
     persistAppConfig({ value: 2 }, configPath);
     assert.ok(!fs.existsSync(lockPath));
+  });
+});
+
+describe("persistAppConfig read failures", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "ai-terminal-chat-config-readfail-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a non-ENOENT read error aborts the write instead of clobbering saved keys", () => {
+    // A directory at the config path makes readFileSync throw EISDIR.
+    const configPath = join(dir, "config.json");
+    mkdirSync(configPath);
+    assert.throws(() => persistAppConfig({ allowed_commands: ["git status"] }, configPath));
+  });
+
+  test("a missing config file is created", () => {
+    const configPath = join(dir, "config.json");
+    persistAppConfig({ a: 1 }, configPath);
+    assert.deepEqual(loadAppConfig(configPath), { a: 1 });
+  });
+
+  test("invalid JSON is backed up before being replaced", () => {
+    const configPath = join(dir, "config.json");
+    writeFileSync(configPath, "{not json");
+    persistAppConfig({ a: 1 }, configPath);
+    assert.deepEqual(loadAppConfig(configPath), { a: 1 });
+    const backups = readdirSync(dir).filter((n) => n.startsWith("config.json.corrupt-"));
+    assert.equal(backups.length, 1);
+    assert.equal(readFileSync(join(dir, backups[0]), "utf8"), "{not json");
   });
 });
