@@ -401,4 +401,30 @@ describe("POST /providers/select project_path", () => {
       fs.rmSync(newRoot, { recursive: true, force: true });
     }
   });
+
+  it("does not change project root when config persistence fails", async () => {
+    const before = getProjectRoot();
+    const newRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ai-term-root-"));
+    const normalConfigFile = getConfigFile();
+    const unwritableConfigTarget = path.join(tempConfigDir, "config-target-directory");
+    fs.mkdirSync(unwritableConfigTarget);
+    setConfigFileForTests(unwritableConfigTarget);
+
+    try {
+      const res = await app.request("http://localhost/providers/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "gemini",
+          project_path: newRoot,
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(getProjectRoot()).toBe(before);
+    } finally {
+      setConfigFileForTests(normalConfigFile);
+      fs.rmSync(newRoot, { recursive: true, force: true });
+    }
+  });
 });

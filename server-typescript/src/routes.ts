@@ -329,7 +329,6 @@ app.post("/providers/select", async (c) => {
       // Set project root if provided
       if (pendingProjectPath !== null) {
         setProjectRootInConfig(config, pendingProjectPath);
-        __setProjectRootInMemory(pendingProjectPath);
       }
 
       return newProvider;
@@ -340,6 +339,10 @@ app.post("/providers/select", async (c) => {
       else process.env[envVar] = previous;
     }
     return c.json({ error: `Could not switch to '${name}': ${exc}` }, 400 as any);
+  }
+  // Activate process state only after the atomic config write succeeds.
+  if (pendingProjectPath !== null) {
+    __setProjectRootInMemory(pendingProjectPath);
   }
   activeProvider = candidate;
 
