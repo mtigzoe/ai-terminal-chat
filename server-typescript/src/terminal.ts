@@ -334,9 +334,7 @@ function loadAllowedCommandsFromConfig(): string[] | null {
 
 /** Write the current allowlist to the configuration file. */
 export function persistAllowedCommands(prefixes: string[]): void {
-  const config = loadAppConfig();
-  config.allowed_commands = [...prefixes];
-  persistAppConfig(config);
+  persistAppConfig({ allowed_commands: [...prefixes] });
 }
 
 /** Reload the runtime allowlist from the shared configuration file. */
@@ -367,8 +365,9 @@ export function addAllowedCommand(prefix: string): string[] {
   }
 
   if (!allowedCommandPrefixes.includes(normalized)) {
-    allowedCommandPrefixes.push(normalized);
-    persistAllowedCommands(allowedCommandPrefixes);
+    const next = [...allowedCommandPrefixes, normalized];
+    persistAllowedCommands(next);
+    allowedCommandPrefixes.splice(0, allowedCommandPrefixes.length, ...next);
   }
 
   return getAllowedCommands();
@@ -390,8 +389,11 @@ export function removeAllowedCommand(prefix: string): string[] {
     );
   }
 
-  allowedCommandPrefixes.splice(index, 1);
-  persistAllowedCommands(allowedCommandPrefixes);
+  const next = allowedCommandPrefixes.filter(
+    (_, currentIndex) => currentIndex !== index,
+  );
+  persistAllowedCommands(next);
+  allowedCommandPrefixes.splice(0, allowedCommandPrefixes.length, ...next);
 
   return getAllowedCommands();
 }
