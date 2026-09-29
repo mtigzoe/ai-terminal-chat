@@ -143,6 +143,19 @@ describe('TerminalPanel path insertion', () => {
     expect(screen.getAllByLabelText(/^command$/i)[0].value).toBe('cat notes.txt');
   });
 
+  it('does not duplicate a last argument that contains spaces', () => {
+    const { rerender } = render(
+      <TerminalPanel host={host} pathToInsert="" onPathInserted={() => {}} />
+    );
+    fireEvent.change(screen.getAllByLabelText(/^command$/i)[0], {
+      target: { value: 'cat docs/my notes.txt' },
+    });
+    rerender(
+      <TerminalPanel host={host} pathToInsert="docs/my notes.txt" onPathInserted={() => {}} />
+    );
+    expect(screen.getAllByLabelText(/^command$/i)[0].value).toBe('cat docs/my notes.txt');
+  });
+
   it('inserts into an empty command field', () => {
     render(<TerminalPanel host={host} pathToInsert="notes.txt" onPathInserted={() => {}} />);
     expect(input().value).toBe('notes.txt');
