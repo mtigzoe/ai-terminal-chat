@@ -500,7 +500,10 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
   let trailingNewline = hadTrailingNewline;
 
   for (const hunk of hunks) {
-    const targetStart = hunk.oldStart === 0 ? 0 : hunk.oldStart - 1;
+    // Unified diff coordinates point at the line before an insertion when
+    // oldCount is zero (for example @@ -1,0 +2,1 @@ inserts after line 1).
+    // For non-empty old ranges, oldStart is the normal 1-based first line.
+    const targetStart = hunk.oldCount === 0 ? hunk.oldStart : hunk.oldStart - 1;
     if (
       (hunk.oldStart < 0 || (hunk.oldCount === 0 ? hunk.oldStart < 0 : hunk.oldStart < 1)) ||
       targetStart < srcIndex
@@ -931,7 +934,10 @@ function generateUnifiedDiff(
     return diff.join("\n");
   }
 
-  const oldStart = prefix + 1;
+  // A zero-length side uses the line before the insertion/deletion point.
+  // This is symmetric: pure insertions need oldStart=prefix, while pure
+  // deletions need newStart=prefix.
+  const oldStart = oldChanged.length === 0 ? prefix : prefix + 1;
   // A pure-deletion hunk inserts nothing on the new side, so its new-side
   // start is the line *before* the insertion point (git's convention), not
   // prefix + 1. applyHunksToText() already enforces that rule, so emitting
