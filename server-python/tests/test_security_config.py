@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +29,37 @@ def test_persist_config_fails_closed_when_atomic_replace_fails(tmp_path, monkeyp
     assert not config_file.exists()
     assert sentinel.read_text(encoding="utf-8") == "unchanged"
     assert list(config_dir.glob("config-*.tmp")) == []
+
+
+def test_project_root_update_fails_closed_when_existing_config_cannot_be_read(
+    tmp_path, monkeypatch
+):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_file = config_dir / "config.json"
+    original = {"provider": "anthropic", "allowed_commands": ["git status"]}
+    config_file.write_text(json.dumps(original), encoding="utf-8")
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+    real_read_text = Path.read_text
+    failed = False
+
+    def fail_first_config_read(path, *args, **kwargs):
+        nonlocal failed
+        if path == config_file and not failed:
+            failed = True
+            raise PermissionError("simulated transient read failure")
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_first_config_read)
+
+    with pytest.raises(PermissionError, match="simulated transient read failure"):
+        security._persist_project_root(project_root)
+
+    assert json.loads(config_file.read_text(encoding="utf-8")) == original
 
 
 @pytest.mark.parametrize("address", ["fec0::1", "feff::1"])
