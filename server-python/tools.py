@@ -3493,7 +3493,7 @@ def _extract_patch_target_paths(patch_text: str) -> set:
     new_remaining = 0
     in_hunk = False
     hunk_header = re.compile(
-        r"^@@ -\\d+(?:,(\\d+))? \\+\\d+(?:,(\\d+))? @@"
+        r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@"
     )
 
     for line in patch_text.splitlines():
