@@ -431,19 +431,11 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
         lines: [],
       };
       i += 1;
+      let oldSeen = 0;
+      let newSeen = 0;
       while (i < lines.length) {
         const hl = lines[i] ?? "";
-        // A hunk body line that removes a line beginning with "-- " is
-        // rendered as "--- ". Inside a hunk that is unambiguously a removal,
-        // not a file header, so only treat it as one when the matching "+++ "
-        // header follows. The hunk line-count check ends the hunk regardless.
-        if (
-          hl.startsWith("@@ ") ||
-          hl.startsWith("diff --git") ||
-          (hl.startsWith("--- ") && /^\+\+\+ /.test(lines[i + 1] ?? ""))
-        ) {
-          break;
-        }
+
         if (hl.startsWith("\\")) {
           if (hl !== "\\ No newline at end of file") {
             throw new Error("Malformed unified diff newline marker.");
@@ -463,17 +455,54 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
           i += 1;
           continue;
         }
-        if (hl.startsWith(" ") || hl.startsWith("+") || hl.startsWith("-")) {
+
+        const complete = oldSeen === hunk.oldCount && newSeen === hunk.newCount;
+        if (complete) {
+          if (
+            hl.length === 0 ||
+            hl.startsWith("@@ ") ||
+            hl.startsWith("diff --git") ||
+            (hl.startsWith("--- ") && /^\+\+\+ /.test(lines[i + 1] ?? ""))
+          ) {
+            break;
+          }
+          if (hl.startsWith(" ") || hl.startsWith("+") || hl.startsWith("-")) {
+            throw new Error("Patch hunk contains more lines than its header declares.");
+          }
+        }
+
+        if (hl.startsWith(" ")) {
+          oldSeen += 1;
+          newSeen += 1;
           hunk.lines.push(hl);
           i += 1;
-          continue;
+        } else if (hl.startsWith("+")) {
+          newSeen += 1;
+          hunk.lines.push(hl);
+          i += 1;
+        } else if (hl.startsWith("-")) {
+          oldSeen += 1;
+          hunk.lines.push(hl);
+          i += 1;
+        } else {
+          // Structural markers before the declared counts are satisfied leave
+          // an incomplete hunk; applyHunksToText() will report the mismatch.
+          if (
+            hl.startsWith("@@ ") ||
+            hl.startsWith("diff --git") ||
+            (hl.startsWith("--- ") && /^\+\+\+ /.test(lines[i + 1] ?? ""))
+          ) {
+            break;
+          }
+          if (hl.length > 0) {
+            throw new Error(`Malformed unified diff line: ${hl}`);
+          }
+          break;
         }
-        // Blank line ends the hunk (not context). Any other non-diff
-        // line inside a hunk is malformed and must not be silently ignored.
-        if (hl.length > 0) {
-          throw new Error(`Malformed unified diff line: ${hl}`);
+
+        if (oldSeen > hunk.oldCount || newSeen > hunk.newCount) {
+          throw new Error("Patch hunk contains more lines than its header declares.");
         }
-        break;
       }
       current.hunks.push(hunk);
       continue;
