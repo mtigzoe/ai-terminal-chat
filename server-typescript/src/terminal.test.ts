@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
   __setAllowedCommandsForTests,
   addAllowedCommand,
+  removeAllowedCommand,
   isExecutionRiskCommand,
   isForbiddenPrefix,
   persistAllowedCommands,
@@ -294,6 +295,34 @@ test("isCommandAllowed: broad prefix that would enable forbidden commands is den
     false,
     "specific npm subcommands must not be forbidden"
   );
+});
+
+test("a failed allowlist write does not change live command permissions", () => {
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+  const originalAllowedCommands = getAllowedCommands();
+  const isolatedHome = mkdtempSync(join(tmpdir(), "terminal-allowlist-failure-"));
+  const configTarget = join(isolatedHome, ".ai-terminal-chat", "config.json");
+  mkdirSync(configTarget, { recursive: true });
+  process.env.HOME = isolatedHome;
+  process.env.USERPROFILE = isolatedHome;
+  __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
+
+  try {
+    assert.throws(() => addAllowedCommand("echo"));
+    assert.equal(isCommandAllowed("echo hello"), false);
+
+    __setAllowedCommandsForTests(["git status", "echo"]);
+    assert.throws(() => removeAllowedCommand("echo"));
+    assert.equal(isCommandAllowed("echo hello"), true);
+  } finally {
+    __setAllowedCommandsForTests(originalAllowedCommands);
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    rmSync(isolatedHome, { recursive: true, force: true });
+  }
 });
 
 test("isCommandAllowed: leading and trailing whitespace is ignored", () => {
