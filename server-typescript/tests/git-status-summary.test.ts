@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { summarizeGitStatus } from "../src/git-status-summary.ts";
 
+// Regression coverage: unresolved merge conflicts are reported as conflicts,
+// never as ordinary staged changes. server-python's git_status() already did
+// this (GIT_CONFLICT_STATUS_CODES in tools.py) but the TypeScript summary
+// counted "UU"/"AA"/"DD" as staged work, so the model could tell a user a
+// conflicted file was ready to commit.
 describe("summarizeGitStatus", () => {
   it.each(["DD", "AU", "UD", "UA", "DU", "AA", "UU"])(
     "reports %s as an unresolved conflict instead of a staged file",
@@ -24,14 +29,49 @@ describe("summarizeGitStatus", () => {
     },
   );
 
+  it("pluralizes the conflict warning for multiple conflicted files", () => {
+    const result = summarizeGitStatus("## main\nUU a.txt\nAA b.txt\n");
+
+    expect(result).toMatchObject({ changed: 2, staged: 0, conflicts: 2 });
+    expect(result.summary).toContain(
+      "2 files have an unresolved merge conflict and must be resolved before you can commit.",
+    );
+  });
+
   it("continues to count ordinary staged changes separately", () => {
     const result = summarizeGitStatus("## main\nM  staged.txt\nUU conflict.txt\n");
 
-    expect(result).toMatchObject({
-      changed: 2,
-      staged: 1,
-      conflicts: 1,
-    });
+    expect(result).toMatchObject({ changed: 2, staged: 1, conflicts: 1 });
     expect(result.summary).toContain("1 file is staged for the next commit.");
+  });
+
+  it("does not treat untracked files as conflicts", () => {
+    const result = summarizeGitStatus("## main\n?? new.txt\n");
+
+    expect(result).toMatchObject({
+      clean: false,
+      untracked: 1,
+      changed: 0,
+      conflicts: 0,
+    });
+    expect(result.details).toEqual(["new.txt — new file, not tracked by Git"]);
+  });
+
+  it("keeps reporting tracking state for a clean branch", () => {
+    const result = summarizeGitStatus(
+      "## main...origin/main [ahead 1, behind 2]\n",
+    );
+
+    expect(result).toMatchObject({
+      branch: "main",
+      clean: true,
+      conflicts: 0,
+      staged: 0,
+      changed: 0,
+      ahead: 1,
+      behind: 2,
+      hasRemote: true,
+      synchronized: false,
+    });
   });
 });

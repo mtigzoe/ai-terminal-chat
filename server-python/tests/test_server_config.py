@@ -1,4 +1,13 @@
-"""Regression tests for Python server runtime configuration."""
+"""Regression tests for Python server runtime configuration.
+
+Every Flask entry point (``app.py``, ``app_original.py``, and
+``secure_server.py``) used to bind its port with a bare
+``int(os.getenv("PORT", "9000"))``. A malformed ``PORT`` therefore raised an
+unhandled ``ValueError`` at startup, so the server could not boot at all
+(and ``secure_server.py`` could not even be imported). The port is now
+validated in ``server_config.py``, mirroring the TypeScript server's
+``loadServerConfig()``.
+"""
 
 import os
 import subprocess
@@ -42,39 +51,59 @@ def test_get_server_port_reads_the_environment(monkeypatch):
     assert get_server_port() == 9000
 
 
-@pytest.mark.parametrize(
-    "entrypoint",
-    ["app.py", "app_original.py", "secure_server.py"],
-)
-def test_server_entrypoint_uses_validated_port(entrypoint, tmp_path):
-    runner = """
+def test_get_server_port_preserves_a_valid_environment_value(monkeypatch):
+    monkeypatch.setenv("PORT", "8080")
+
+    assert get_server_port() == 8080
+
+
+# Run an entry point in a subprocess with Flask.run() replaced, so the bound
+# port is observable without actually starting a listening server.
+WORKER = """
 import runpy
 import sys
+
 from flask import Flask
 
 Flask.run = lambda self, **kwargs: print(f"PORT={kwargs['port']}")
 runpy.run_path(sys.argv[1], run_name="__main__")
 """
+
+
+@pytest.mark.parametrize(
+    ("raw_port", "expected_port"),
+    [("not-a-number", "9000"), ("99999", "9000"), ("8080", "8080")],
+)
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["app.py", "app_original.py", "secure_server.py"],
+)
+def test_server_entrypoints_bind_a_validated_port(
+    entrypoint, raw_port, expected_port, tmp_path
+):
+    """A malformed PORT must not stop the server from starting."""
+
     env = os.environ.copy()
     env.update(
         {
+            # Keep config reads/writes (and the project root) inside tmp_path.
             "HOME": str(tmp_path),
-            "HOST": "127.0.0.1",
-            "PORT": "not-a-number",
-            "PROVIDER": "ollama",
             "USERPROFILE": str(tmp_path),
+            "HOST": "127.0.0.1",
+            "PORT": raw_port,
+            "PROVIDER": "ollama",
         }
     )
 
     result = subprocess.run(
-        [sys.executable, "-c", runner, str(SERVER_DIR / entrypoint)],
+        [sys.executable, "-c", WORKER, str(SERVER_DIR / entrypoint)],
         cwd=SERVER_DIR,
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
         check=False,
     )
 
     assert result.returncode == 0, result.stderr
-    assert "PORT=9000" in result.stdout
+    assert f"PORT={expected_port}" in result.stdout

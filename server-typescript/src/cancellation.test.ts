@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { clear, register } from "./cancellation.ts";
+import {
+  bindRequestCancellation,
+  cancel,
+  clear,
+  register,
+  release,
+} from "./cancellation.ts";
 
 describe("cancellation request tracking", () => {
   afterEach(() => {
@@ -30,5 +36,37 @@ describe("cancellation request tracking", () => {
 
     expect(first.aborted).toBe(true);
     expect(second.aborted).toBe(true);
+  });
+
+  it("honors a cancel that arrives before the request registers", () => {
+    expect(cancel("early")).toBe(true);
+
+    const signal = register("early");
+
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("does not release a newer request that reused an evicted request id", () => {
+    const evicted = register("shared");
+    for (let index = 0; index < 200; index += 1) register(`filler-${index}`);
+    const reused = register("shared");
+
+    release("shared", evicted);
+
+    expect(cancel("shared")).toBe(true);
+    expect(reused.aborted).toBe(true);
+  });
+
+  it("ignores an aborted request signal whose registry entry was evicted", () => {
+    const requestController = new AbortController();
+    const evicted = register("reused");
+    bindRequestCancellation(requestController.signal, "reused", evicted);
+
+    for (let index = 0; index < 200; index += 1) register(`evict-${index}`);
+    const reused = register("reused");
+
+    requestController.abort();
+
+    expect(reused.aborted).toBe(false);
   });
 });
