@@ -215,25 +215,35 @@ def _fingerprint_git_index() -> dict:
 
 
 def _read_git_ref_state(git_dir: Path, ref: str) -> str:
-    """Resolve a ref to its object id, from the loose ref or packed-refs.
-
-    Both callers must use this: the branch path and the symbolic-HEAD path
-    previously had separate copies, and the symbolic one omitted the
-    packed-refs fallback. After `git pack-refs` / `git gc` / a fresh clone the
-    loose ref is gone, so the symbolic path hashed the constant
-    "<missing-ref>" and the git_head fingerprint stopped changing when the
-    branch tip moved -- leaving git_pull / git_push confirmations valid across
-    a repository change. The TypeScript backend resolves the ref once through a
-    single code path, so this restores parity.
-    """
-    ref_path = git_dir / ref
+    """Resolve a ref from loose refs or packed-refs, including linked worktrees."""
     try:
-        if ref_path.is_file():
-            return ref_path.read_text(encoding="utf-8", errors="replace").strip()
-        packed = git_dir / "packed-refs"
+        common_dir = git_dir
+        commondir = git_dir / "commondir"
+        if commondir.is_file():
+            common_ref = commondir.read_text(
+                encoding="utf-8", errors="replace"
+            ).strip()
+            if not common_ref:
+                return "<missing-ref>"
+            common_dir = (git_dir / common_ref).resolve()
+
+        search_dirs = [git_dir]
+        if common_dir != git_dir:
+            search_dirs.append(common_dir)
+
+        for base in search_dirs:
+            ref_path = base / ref
+            if ref_path.is_file():
+                return ref_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).strip()
+
+        packed = common_dir / "packed-refs"
         if packed.is_file():
-            for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("#") or not line.strip():
+            for line in packed.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                if line.startswith("#") or not line.strip() or line.startswith("^"):
                     continue
                 parts = line.split()
                 if len(parts) >= 2 and parts[-1] == ref:
