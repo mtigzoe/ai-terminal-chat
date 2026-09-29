@@ -123,6 +123,19 @@ def test_terminal_env_strips_execution_injection_variables(monkeypatch):
         assert env["NORMAL_TERMINAL_VALUE"] == "kept"
 
 
+def test_terminal_env_strips_aws_credentials(monkeypatch):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_TEST")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "super-secret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "session-token")
+    monkeypatch.setenv("NORMAL_TERMINAL_VALUE", "kept")
+
+    with tools._sanitized_terminal_env() as env:
+        assert "AWS_ACCESS_KEY_ID" not in env
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        assert "AWS_SESSION_TOKEN" not in env
+        assert env["NORMAL_TERMINAL_VALUE"] == "kept"
+
+
 def test_run_git_rejects_external_gitfile(git_repo):
     outside = git_repo.parent / "external-git-dir"
     subprocess.run(["git", "init", "-q", str(outside)], check=True)
