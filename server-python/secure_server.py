@@ -12,10 +12,11 @@ import os
 from flask import jsonify, request
 
 from app import app
+from server_config import get_server_port
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 host = os.getenv("HOST", "127.0.0.1").strip()
-port = int(os.getenv("PORT", "9000"))
+port = get_server_port()
 is_loopback = host.lower() in LOOPBACK_HOSTS
 api_auth_token = os.getenv("API_AUTH_TOKEN", "").strip()
 

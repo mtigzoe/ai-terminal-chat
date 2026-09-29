@@ -12,6 +12,7 @@ from types import ModuleType
 import app_original as _original
 import security as _security
 from flask import request
+from server_config import get_server_port
 
 app = _original.app
 _provider_lock = _original._provider_lock
@@ -204,5 +205,5 @@ sys.modules[__name__].__class__ = _AppModule
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "9000"))
+    port = get_server_port()
     app.run(host=host, port=port)
