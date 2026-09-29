@@ -72,24 +72,39 @@ describe('editor handler', () => {
 describe('editor handler: Windows .cmd shims', () => {
   const isWin = process.platform === 'win32';
 
-  it('routes a .cmd editor through cmd.exe on Windows', () => {
+  it('routes a safe .cmd editor invocation through cmd.exe on Windows', () => {
     if (!isWin) return;
-    const { command, args } = buildEditorSpawn('code.cmd', 'C:\\proj\\a.txt');
-    expect(command.toLowerCase()).toMatch(/cmd(\.exe)?$/);
-    expect(args).toEqual(['/d', '/s', '/c', 'code.cmd', 'C:\\proj\\a.txt']);
+    const { command, args } = buildEditorSpawn('code.cmd', 'C:\\proj\\a b.txt');
+    expect(command.toLowerCase()).toMatch(/cmd(\\.exe)?$/);
+    expect(args).toEqual(['/d', '/s', '/v:off', '/c', 'code.cmd "C:\\proj\\a b.txt"']);
   });
 
-  it('keeps argv-style argument passing (path is never shell-concatenated)', () => {
+  it.each([
+    'C:\\proj\\a&whoami.txt',
+    'C:\\proj\\a|whoami.txt',
+    'C:\\proj\\a^whoami.txt',
+    'C:\\proj\\a%PATH%.txt',
+    'C:\\proj\\a!PATH!.txt',
+    'C:\\proj\\a>out.txt',
+    'C:\\proj\\a<in.txt',
+  ])('refuses cmd metacharacters before they reach cmd.exe: %s', (filePath) => {
     if (!isWin) return;
-    const { args } = buildEditorSpawn('code.cmd', 'C:\\proj\\a b;c & d.txt');
-    // The path is a single argv element, so shell metacharacters cannot escape.
-    expect(args[args.length - 1]).toBe('C:\\proj\\a b;c & d.txt');
-    expect(args).toHaveLength(5);
+    expect(() => buildEditorSpawn('code.cmd', filePath)).toThrow(/unsafe for cmd\\.exe/i);
   });
 
-  it('does not use shell:true, which would concatenate unescaped args', () => {
+  it('falls back to the system opener for a metacharacter path instead of spawning cmd.exe', async () => {
     if (!isWin) return;
-    // handleEditorOpen must never pass shell: true (Node DEP0190).
+    const spawn = vi.fn();
+    const openPath = vi.fn().mockResolvedValue('');
+    await expect(
+      handleEditorOpen({ spawn, openPath }, 'C:\\proj\\a&whoami.txt', 'code'),
+    ).resolves.toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(openPath).toHaveBeenCalledWith('C:\\proj\\a&whoami.txt');
+  });
+
+  it('does not use shell:true', () => {
+    if (!isWin) return;
     const child = createChild();
     const spawn = vi.fn(() => child);
     const promise = handleEditorOpen({ spawn, openPath: vi.fn() }, 'C:\\proj\\a.txt', 'code');
@@ -105,13 +120,11 @@ describe('editor handler: Windows .cmd shims', () => {
     if (!isWin) return;
     for (const editor of KNOWN_EDITORS.filter((e) => e.bin.endsWith('.cmd'))) {
       const { command } = buildEditorSpawn(editor.bin, 'C:\\proj\\a.txt');
-      expect(command.toLowerCase()).toMatch(/cmd(\.exe)?$/);
+      expect(command.toLowerCase()).toMatch(/cmd(\\.exe)?$/);
     }
   });
 
   it('reports success when the fallback actually opened the file', async () => {
-    // The old code returned false even though openPath() succeeded, so the
-    // renderer treated a working open as a failure.
     const spawn = vi.fn(() => {
       throw new Error('spawn EINVAL');
     });
