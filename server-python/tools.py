@@ -1357,6 +1357,15 @@ _TERMINAL_ENV_BLOCKLIST = frozenset({
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
 })
 _TERMINAL_ENV_PREFIXES = ("NPM_CONFIG_", "PIP_", "PYTEST_", "RUFF_")
+_TERMINAL_SENSITIVE_ENV_VAR_NAMES = frozenset({
+    # Keep this aligned with the explicit cloud credentials blocked by the
+    # TypeScript backend. AWS_ACCESS_KEY_ID does not match the generic
+    # *_SECRET / *_TOKEN / *_API_KEY rules, so without an explicit entry a
+    # project-controlled test/build process inherits the server's AWS identity.
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+})
 
 def _build_sanitized_terminal_env() -> tuple[dict[str, str], Path]:
     env = dict(os.environ)
@@ -1364,6 +1373,7 @@ def _build_sanitized_terminal_env() -> tuple[dict[str, str], Path]:
         upper = key.upper()
         if (
             upper in _TERMINAL_ENV_BLOCKLIST
+            or upper in _TERMINAL_SENSITIVE_ENV_VAR_NAMES
             or any(upper.startswith(prefix) for prefix in _TERMINAL_ENV_PREFIXES)
             or upper.endswith("_API_KEY")
             or upper.endswith("_SECRET")
