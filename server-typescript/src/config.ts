@@ -177,7 +177,7 @@ export function getEnvInt(
 export interface ServerConfig {
   /** TCP port the HTTP server listens on. */
   port: number;
-  /** Always loopback-only, matching server-python. */
+  /** Address the HTTP server binds to. */
   host: string;
 }
 
@@ -185,9 +185,16 @@ const DEFAULT_PORT = 9000;
 export const SERVER_HOST = "127.0.0.1";
 
 export function loadServerConfig(): ServerConfig {
+  const configuredPort = getEnvInt("PORT", DEFAULT_PORT);
+
   return {
-    port: getEnvInt("PORT", DEFAULT_PORT),
-    host: SERVER_HOST,
+    // Node rejects ports outside this range (including NaN). Fall back here
+    // so malformed environment configuration cannot crash server startup.
+    port: configuredPort >= 0 && configuredPort <= 65535
+      ? configuredPort
+      : DEFAULT_PORT,
+    // Docker binds to 0.0.0.0; local development remains loopback-only.
+    host: getEnvString("HOST", SERVER_HOST).trim(),
   };
 }
 
