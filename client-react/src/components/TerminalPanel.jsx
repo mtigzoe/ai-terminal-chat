@@ -28,12 +28,11 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
     if (!pathToInsert) return undefined;
 
     const current = commandRef.current.trimEnd();
-    // Compare the last whitespace-delimited token, not the whole string.
-    // A bare endsWith() treated "test/src/App.jsx" as already containing
-    // "src/App.jsx" and silently dropped a genuinely different path while the
-    // status line still reported success.
-    const lastToken = current ? current.split(/\s+/).pop() : null;
-    const alreadyPresent = current !== '' && lastToken === pathToInsert;
+    // Require an argument boundary before the path. A bare endsWith()
+    // treated "test/src/App.jsx" as already containing "src/App.jsx", while
+    // splitting on whitespace broke legitimate paths containing spaces.
+    const alreadyPresent =
+      current === pathToInsert || current.endsWith(` ${pathToInsert}`);
 
     if (alreadyPresent) {
       setStatus(`${pathToInsert} is already the last argument in the command field.`);
@@ -161,10 +160,10 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
           id="terminal-command"
           type="text"
           value={command}
-              onChange={(event) => {
-                commandRef.current = event.target.value;
-                setCommand(event.target.value);
-              }}
+          onChange={(event) => {
+            commandRef.current = event.target.value;
+            setCommand(event.target.value);
+          }}
           disabled={running}
           autoComplete="off"
           spellCheck="false"
