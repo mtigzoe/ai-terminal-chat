@@ -1445,20 +1445,22 @@ def run_command(command: str, confirm: bool = False) -> dict:
                     )
                 }
 
+        # shlex.split(posix=False) preserves wrapping quote characters on
+        # every platform. The boundary check above validates the unquoted path,
+        # so execute that same validated value.
+        if args and args[0].lower() in {"ls", "dir"}:
+            args = [args[0], *[a.strip().strip("\"'") for a in args[1:]]]
+
         # `pwd` is not a standalone executable on Windows.
         # Translate to `cmd /c cd`, which prints the current directory.
         if os.name == "nt" and args and args[0].lower() == "pwd":
             args = ["cmd", "/c", "cd"]
-        
+
         # `ls` is a PowerShell alias on Windows, not an executable.
         # Use the native cmd.exe directory command while preserving
         # `ls` as the cross-platform command exposed to the agent.
         if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
-            # shlex.split(posix=False) keeps the quote characters, so a quoted
-            # path arrived at cmd.exe as a literal quote-delimited argument and
-            # failed to resolve. The boundary check above already validated the
-            # unquoted form, so pass that form to the process as well.
-            args = ["cmd", "/c", "dir", *[a.strip().strip("\"'") for a in args[1:]]]
+            args = ["cmd", "/c", "dir", *args[1:]]
 
         try:
             with _sanitized_terminal_env() as sanitized_env:
