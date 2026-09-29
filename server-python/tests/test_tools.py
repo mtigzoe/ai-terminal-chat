@@ -124,16 +124,38 @@ def test_terminal_env_strips_execution_injection_variables(monkeypatch):
 
 
 def test_terminal_env_strips_aws_credentials(monkeypatch):
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_TEST")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "super-secret")
-    monkeypatch.setenv("AWS_SESSION_TOKEN", "session-token")
+    credentials = {
+        "AWS_ACCESS_KEY_ID": "AKIA_TEST",
+        "AWS_SECRET_ACCESS_KEY": "super-secret",
+        "AWS_SESSION_TOKEN": "session-token",
+        # Environment names are case-insensitive on Windows, and the sanitizer
+        # normalizes names on every platform so casing cannot bypass the gate.
+        "aws_access_key_id": "lowercase-id",
+    }
+    for key, value in credentials.items():
+        monkeypatch.setenv(key, value)
     monkeypatch.setenv("NORMAL_TERMINAL_VALUE", "kept")
 
     with tools._sanitized_terminal_env() as env:
-        assert "AWS_ACCESS_KEY_ID" not in env
-        assert "AWS_SECRET_ACCESS_KEY" not in env
-        assert "AWS_SESSION_TOKEN" not in env
+        for key in credentials:
+            assert key not in env
         assert env["NORMAL_TERMINAL_VALUE"] == "kept"
+
+
+def test_run_command_subprocess_does_not_receive_aws_access_key(monkeypatch, project_root):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_SHOULD_NOT_ESCAPE")
+
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured.update(kwargs.get("env") or {})
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(tools, "run_cancellable", fake_run)
+    result = tools.run_command("python --version", confirm=True)
+
+    assert result["returncode"] == 0
+    assert "AWS_ACCESS_KEY_ID" not in captured
 
 
 def test_run_git_rejects_external_gitfile(git_repo):
