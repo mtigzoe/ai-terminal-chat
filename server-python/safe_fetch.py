@@ -83,7 +83,8 @@ _BLOCKED_METADATA_IPV4 = frozenset(
 # ipaddress.ip_address(...).is_private/.is_loopback/.is_link_local/
 # .is_multicast/.is_reserved/.is_unspecified (verified against every
 # case, including IPv4-mapped IPv6 forms, which ipaddress decodes via
-# its own ipv4_mapped property).
+# its own ipv4_mapped property). Deprecated IPv6 site-local addresses
+# require the separate is_site_local check below.
 _CGNAT_START = ipaddress.IPv4Address("100.64.0.0")
 _CGNAT_END = ipaddress.IPv4Address("100.127.255.255")
 
@@ -115,7 +116,15 @@ def blocked_address_reason(address: str, *, allow_loopback: bool = False) -> Opt
     if isinstance(ip, ipaddress.IPv4Address) and _CGNAT_START <= ip <= _CGNAT_END:
         return "Resolved IP is a private/reserved address (CGNAT)"
 
-    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+    if (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or (isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local)
+    ):
         kind = "IPv4" if isinstance(ip, ipaddress.IPv4Address) else "IPv6"
         return f"Resolved IP is a private/reserved {kind} address"
 

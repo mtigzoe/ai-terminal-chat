@@ -28,3 +28,9 @@ def test_persist_config_fails_closed_when_atomic_replace_fails(tmp_path, monkeyp
     assert not config_file.exists()
     assert sentinel.read_text(encoding="utf-8") == "unchanged"
     assert list(config_dir.glob("config-*.tmp")) == []
+
+
+@pytest.mark.parametrize("address", ["fec0::1", "feff::1"])
+def test_provider_url_rejects_deprecated_ipv6_site_local_addresses(address):
+    with pytest.raises(ValueError, match="not allowed"):
+        security.validate_provider_base_url(f"http://[{address}]:11434")
