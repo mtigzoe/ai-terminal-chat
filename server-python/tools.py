@@ -710,8 +710,9 @@ def add_allowed_command(prefix: str) -> list[str]:
             f"Command prefix '{normalized}' is not permitted for safety reasons."
         )
     if normalized not in ALLOWED_COMMAND_PREFIXES:
-        ALLOWED_COMMAND_PREFIXES.append(normalized)
-        _persist_allowed_commands(ALLOWED_COMMAND_PREFIXES)
+        updated = [*ALLOWED_COMMAND_PREFIXES, normalized]
+        _persist_allowed_commands(updated)
+        ALLOWED_COMMAND_PREFIXES[:] = updated
     return get_allowed_commands()
 
 
@@ -726,8 +727,10 @@ def remove_allowed_command(prefix: str) -> list[str]:
         raise ValueError("A non-empty command prefix is required.")
     if normalized not in ALLOWED_COMMAND_PREFIXES:
         raise ValueError(f"Command prefix '{normalized}' is not in the allowlist.")
-    ALLOWED_COMMAND_PREFIXES.remove(normalized)
-    _persist_allowed_commands(ALLOWED_COMMAND_PREFIXES)
+    updated = list(ALLOWED_COMMAND_PREFIXES)
+    updated.remove(normalized)
+    _persist_allowed_commands(updated)
+    ALLOWED_COMMAND_PREFIXES[:] = updated
     return get_allowed_commands()
 
 

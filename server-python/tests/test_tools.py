@@ -899,6 +899,28 @@ def test_add_and_remove_allowed_command_persists(tmp_path, monkeypatch):
     assert "echo" not in tools.ALLOWED_COMMAND_PREFIXES
 
 
+def test_failed_allowed_command_persistence_does_not_change_live_permissions(monkeypatch):
+    original = list(tools.ALLOWED_COMMAND_PREFIXES)
+
+    def fail_persist(_prefixes):
+        raise OSError("simulated persistence failure")
+
+    monkeypatch.setattr(tools, "_persist_allowed_commands", fail_persist)
+    tools.ALLOWED_COMMAND_PREFIXES[:] = list(tools.DEFAULT_ALLOWED_COMMAND_PREFIXES)
+
+    try:
+        with pytest.raises(OSError, match="simulated persistence failure"):
+            tools.add_allowed_command("echo")
+        assert not tools.is_command_allowed("echo hello")
+
+        tools.ALLOWED_COMMAND_PREFIXES[:] = ["git status", "echo"]
+        with pytest.raises(OSError, match="simulated persistence failure"):
+            tools.remove_allowed_command("echo")
+        assert tools.is_command_allowed("echo hello")
+    finally:
+        tools.ALLOWED_COMMAND_PREFIXES[:] = original
+
+
 def test_dangerous_commands_cannot_be_added_via_api(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
     config_file = config_dir / "config.json"
