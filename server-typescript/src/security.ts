@@ -136,30 +136,28 @@ export function isPathWithinRoot(
   options: { caseInsensitive?: boolean } = {},
 ): boolean {
   const caseInsensitive = options.caseInsensitive ?? process.platform === "win32";
-  const normalize = (value: string) => (caseInsensitive ? value.toLowerCase() : value);
+  const windowsStyle = /^[A-Za-z]:[\\\\/]/.test(root) || /^\\\\\\\\/.test(root);
+  const normalize = (value: string) => {
+    const separators = windowsStyle ? value.replace(/\//g, "\\\\") : value;
+    return caseInsensitive ? separators.toLowerCase() : separators;
+  };
   const normalizedRoot = normalize(root);
   const normalizedCandidate = normalize(candidate);
   if (normalizedCandidate === normalizedRoot) return true;
-  // A filesystem root is a legitimate project root (a container image that
-  // mounts the project at "/", or `git init C:\`). Appending a separator to
-  // "C:\" or "/" produced "C:\\" / "//" -- prefixes nothing can start with --
-  // so every path under such a root was rejected. The Python backend accepted
-  // it because pathlib.relative_to() has no such special case, so this was a
-  // cross-backend divergence.
-  //
-  // Both separators are stripped and both are accepted as the boundary, not
-  // just the host `sep`: the codebase treats "/" and "\" as interchangeable in
-  // project paths (see isAbsoluteOnAnyPlatform), and the caseInsensitive
-  // parameter exists precisely so POSIX behaviour is testable on Windows.
-  const trimmedRoot = normalizedRoot.replace(/[\\/]+$/, "");
-  if (trimmedRoot === "") {
-    // Root is "/" (or "\\\\"): every absolute path is inside it.
-    return normalizedCandidate.startsWith("/") || normalizedCandidate.startsWith("\\");
+
+  if (windowsStyle) {
+    const trimmedRoot = normalizedRoot.replace(/\\\\+$/, "");
+    return normalizedCandidate.startsWith(`${trimmedRoot}\\\\`);
   }
-  return (
-    normalizedCandidate.startsWith(`${trimmedRoot}/`) ||
-    normalizedCandidate.startsWith(`${trimmedRoot}\\`)
-  );
+
+  // POSIX backslashes are ordinary filename characters, not separators.
+  // Treating them as boundaries would make /srv/app\\secret appear to live
+  // under /srv/app even though it is a sibling entry on a POSIX filesystem.
+  const trimmedRoot = normalizedRoot.replace(/\/+$/, "");
+  if (trimmedRoot === "") {
+    return normalizedCandidate.startsWith("/");
+  }
+  return normalizedCandidate.startsWith(`${trimmedRoot}/`);
 }
 
 // ---------------------------------------------------------------------------
