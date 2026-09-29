@@ -498,16 +498,21 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
       );
     }
     // Block external diff drivers (a repo-controlled `diff.external` would
-    // otherwise be executed as a command). The flag must come *after* the
-    // caller's arguments: git honours the last of --ext-diff/--no-ext-diff,
-    // so appending is what makes this hold even when a caller passes
-    // --ext-diff. Only diff-producing subcommands accept the flag -- passing
-    // it to e.g. `git status` fails with "unknown option".
+    // otherwise be executed as a command). --no-ext-diff must follow any real
+    // --ext-diff option, but it must still appear before Git's "--" path
+    // separator; after "--" it would be parsed as a filename instead of an
+    // option. Only diff-producing subcommands accept this flag.
     const subcommand = args[0]?.toLowerCase() ?? "";
-    const withNoExternalDiff = NO_EXTERNAL_DIFF_SUBCOMMANDS.has(subcommand) &&
-      !args.includes("--no-ext-diff")
-      ? [...args, "--no-ext-diff"]
-      : args;
+    let withNoExternalDiff = args;
+    if (NO_EXTERNAL_DIFF_SUBCOMMANDS.has(subcommand) && !args.includes("--no-ext-diff")) {
+      const separatorIndex = args.indexOf("--");
+      const insertionIndex = separatorIndex === -1 ? args.length : separatorIndex;
+      withNoExternalDiff = [
+        ...args.slice(0, insertionIndex),
+        "--no-ext-diff",
+        ...args.slice(insertionIndex),
+      ];
+    }
     const safeArgs = [...GIT_CONFIG_OVERRIDES, ...withNoExternalDiff];
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
     const env: NodeJS.ProcessEnv = { ...process.env };
