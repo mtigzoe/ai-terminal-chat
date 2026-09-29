@@ -112,18 +112,15 @@ class TestMalformedToolCalls:
             "[1,2]",           # valid JSON, wrong type
             '"hello"',         # valid JSON, wrong type
             "5",               # valid JSON, wrong type
-            "null",            # valid JSON, wrong type -> ran with no args
+            "null",            # valid JSON, wrong type
             "{oops",           # undecodable
-            "",                # falsy -> treated as "{}"
+            "",                # invalid JSON arguments string
         ],
     )
-    def test_bad_arguments_degrade_to_empty_dict(self, arguments):
+    def test_bad_arguments_are_skipped_instead_of_executed(self, arguments):
         response = _parse([_call(arguments)])
-        assert len(response.tool_calls) == 1
-        args = response.tool_calls[0].args
-        assert args == {}
-        # Must survive the downstream conversion the agent loop performs.
-        assert dict(args or {}) == {}
+        assert response.tool_calls == []
+        assert response.raw["tool_calls"] == []
 
     def test_valid_arguments_are_preserved(self):
         response = _parse([_call('{"path": "a.txt"}')])
@@ -154,6 +151,37 @@ class TestMalformedToolCalls:
         response = _parse(["junk", _call('{"path": "ok.txt"}')])
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].args == {"path": "ok.txt"}
+        # The native turn must be sanitized too, otherwise append_tool_results()
+        # still sees the skipped malformed entry and mis-pairs/crashes.
+        assert response.raw["tool_calls"] == [_call('{"path": "ok.txt"}')]
+
+    def test_sanitized_calls_round_trip_through_tool_results(self):
+        provider = _provider()
+        response = provider._parse_completion(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": ["junk", _call('{"path": "ok.txt"}')],
+                        }
+                    }
+                ]
+            }
+        )
+        contents = provider.append_model_turn([], response)
+        updated = provider.append_tool_results(
+            contents,
+            [{"name": "create_file", "result": {"error": "preview only"}}],
+        )
+        assert updated[-1]["tool_call_id"] == "call_1"
+
+    def test_omitted_arguments_are_allowed_for_no_argument_tools(self):
+        response = _parse(
+            [{"id": "status_1", "function": {"name": "git_status"}}]
+        )
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].args == {}
 
     def test_empty_tool_calls_list(self):
         response = _parse([])
