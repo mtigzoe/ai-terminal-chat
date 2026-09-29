@@ -162,6 +162,11 @@ def test_ipv6_unique_local_is_blocked(address):
     assert safe_fetch.blocked_address_reason(address) is not None
 
 
+@pytest.mark.parametrize("address", ["fec0::1", "feff::1"])
+def test_deprecated_ipv6_site_local_is_blocked(address):
+    assert safe_fetch.blocked_address_reason(address) is not None
+
+
 @pytest.mark.parametrize("address", ["0.0.0.0", "0.1.2.3"])
 def test_ipv4_unspecified_range_is_blocked(address):
     assert safe_fetch.blocked_address_reason(address) is not None

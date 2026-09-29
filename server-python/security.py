@@ -560,6 +560,7 @@ def _is_blocked_ip(ip_str: str) -> str | None:
             or ip.is_multicast
             or ip.is_reserved
             or ip.is_unspecified
+            or ip.is_site_local
         ):
             return f"Private or reserved IPv6 address is not allowed: {ip_str}"
     return None
