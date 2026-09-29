@@ -320,8 +320,8 @@ def test_confirm_endpoint_rejects_actions_outside_both_categories(client):
     """
 
     action = create_pending(
-        "run_command",
-        {"command": "pytest"},
+        "list_files",
+        {"path": "."},
         {"requires_confirmation": True},
     )
 
@@ -332,6 +332,31 @@ def test_confirm_endpoint_rejects_actions_outside_both_categories(client):
 
     assert response.status_code == 400
     assert "only pending write actions" in response.get_json()["error"].lower()
+    assert get_pending(action.action_id) is action
+
+
+def test_confirm_endpoint_executes_pending_execution_risk_command(client, monkeypatch):
+    calls = []
+
+    def fake_run_command(command, confirm=False):
+        calls.append((command, confirm))
+        return {"command": command, "returncode": 0, "stdout": "passed"}
+
+    monkeypatch.setitem(app.TOOL_FUNCTIONS, "run_command", fake_run_command)
+    action = create_pending(
+        "run_command",
+        {"command": "pytest"},
+        {"requires_confirmation": True, "command": "pytest"},
+    )
+
+    response = client.post(
+        "/confirm",
+        json={"action_id": action.action_id, "confirmed": True},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["result"]["stdout"] == "passed"
+    assert calls == [("pytest", True)]
 
 
 # ---------------------------------------------------------

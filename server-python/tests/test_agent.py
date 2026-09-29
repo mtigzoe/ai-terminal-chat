@@ -104,7 +104,7 @@ def test_multi_step_tool_execution(monkeypatch):
         order.append(("inspect", path))
         return {"path": path, "entries": []}
 
-    def run_tool(command=""):
+    def run_tool(command="", confirm=False):
         order.append(("run", command))
         return {"command": command, "returncode": 0, "stdout": "ok", "stderr": ""}
 
@@ -641,6 +641,43 @@ def test_git_add_never_self_confirms_through_agent_loop(tmp_path, monkeypatch):
         if e["type"] == "progress" and e.get("phase") == "confirm"
     ]
     assert any("stage" in e["message"].lower() for e in confirm_progress)
+    clear_pending()
+
+
+def test_execution_risk_command_never_self_confirms_through_agent_loop(monkeypatch):
+    """A model-supplied confirm flag must not bypass user approval."""
+
+    calls = []
+
+    def run_tool(command="", confirm=False):
+        calls.append((command, confirm))
+        if not confirm:
+            return {
+                "requires_confirmation": True,
+                "command": command,
+                "message": "Confirmation required.",
+            }
+        return {"command": command, "returncode": 0, "stdout": "ran"}
+
+    clear_pending()
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "run_command", run_tool)
+    monkeypatch.setitem(agent.TOOL_TIMEOUTS, "run_command", 5)
+    provider = FakeProvider([
+        ProviderResponse(
+            text=None,
+            tool_calls=[
+                ToolCall("run_command", {"command": "pytest", "confirm": True})
+            ],
+        )
+    ])
+
+    events = list(run_agent_loop(provider, []))
+
+    pending = next(e for e in events if e["type"] == "pending_confirmation")
+    stored = get_pending(pending["action_id"])
+    assert calls == [("pytest", False)]
+    assert stored.tool_name == "run_command"
+    assert pending["preview"]["requires_confirmation"] is True
     clear_pending()
 
 
