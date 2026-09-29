@@ -433,7 +433,15 @@ function parseUnifiedDiff(patchText: string): FilePatch[] {
       i += 1;
       while (i < lines.length) {
         const hl = lines[i] ?? "";
-        if (hl.startsWith("@@ ") || hl.startsWith("diff --git") || hl.startsWith("--- ")) {
+        // A hunk body line that removes a line beginning with "-- " is
+        // rendered as "--- ". Inside a hunk that is unambiguously a removal,
+        // not a file header, so only treat it as one when the matching "+++ "
+        // header follows. The hunk line-count check ends the hunk regardless.
+        if (
+          hl.startsWith("@@ ") ||
+          hl.startsWith("diff --git") ||
+          (hl.startsWith("--- ") && /^\+\+\+ /.test(lines[i + 1] ?? ""))
+        ) {
           break;
         }
         if (hl.startsWith("\\")) {

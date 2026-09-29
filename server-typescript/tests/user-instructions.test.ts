@@ -54,4 +54,34 @@ describe("saved user instructions", () => {
       { role: "user", content: "Hello" },
     ]);
   });
+
+  // Regression: the prefix used an over-escaped "\\n" inside a template
+  // literal, so the two characters "\" and "n" were sent to the provider
+  // instead of a line break. The instructions were glued onto the end of the
+  // prefix sentence, losing the block framing the wording promises. The
+  // existing assertions above use stringContaining(instruction) and cannot
+  // see this, so assert the separator directly.
+  const PREFIX =
+    "Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):";
+
+  it("separates the instructions from the prefix with a real newline", () => {
+    const openai = new OpenAICompatibleProvider({
+      base_url: "http://localhost:11434/v1",
+      model: "test-model",
+    });
+    const gemini = new GeminiProvider({ model: "test-model" });
+    const anthropic = new AnthropicProvider({ model: "test-model" });
+
+    const texts = [
+      (openai.buildContents("Hello", [], instruction) as { content?: string }[])[1]?.content,
+      (gemini.buildContents("Hello", [], instruction) as { parts?: { text?: string }[] }[])[0]?.parts?.[0]?.text,
+      (anthropic.buildContents("Hello", [], instruction) as { content?: string }[])[0]?.content,
+    ];
+
+    for (const text of texts) {
+      expect(typeof text).toBe("string");
+      expect(text).toBe(`${PREFIX}\n${instruction}`);
+      expect(text).not.toContain("\\n");
+    }
+  });
 });

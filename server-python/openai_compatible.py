@@ -293,16 +293,31 @@ class OpenAICompatibleProvider(Provider):
         tool_calls = []
 
         for call in raw_tool_calls:
-            function = call.get("function", {})
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if not isinstance(function, dict):
+                continue
             raw_args = function.get("arguments") or "{}"
 
             if isinstance(raw_args, dict):
                 args = raw_args
             else:
-                try:
-                    args = json.loads(raw_args)
-                except json.JSONDecodeError:
+                # json.loads raises TypeError (not JSONDecodeError) for a
+                # non-str/bytes value such as a bare int.
+                if isinstance(raw_args, (str, bytes, bytearray)):
+                    try:
+                        args = json.loads(raw_args)
+                    except ValueError:
+                        args = {}
+                else:
                     args = {}
+            # Any other valid JSON (a list, number, string, null) is not a
+            # valid argument object. Downstream code does dict(call.args or {}),
+            # which would raise TypeError/ValueError, or silently run the tool
+            # with no arguments at all.
+            if not isinstance(args, dict):
+                args = {}
 
             tool_calls.append(
                 ToolCall(

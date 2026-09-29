@@ -44,7 +44,13 @@ export function summarizeGitStatus(status: string): GitStatusSummary {
   const lines = status.split(/\r?\n/).filter(Boolean);
   const branchLine = lines.find((line) => line.startsWith("## ")) || "";
 
-  const branchMatch = branchLine.match(/^##\s+(.+?)(?:\.\.\.|$)/);
+  // `git status --short --branch` prefixes a fresh/detached repo with a
+  // banner ("## No commits yet on main", "## Initial commit on master",
+  // "## HEAD (no branch)") instead of naming the branch directly. Strip those
+  // known forms so the banner text is never reported as the branch name.
+  const branchMatch = branchLine.match(
+    /^##\s+(?:(?:No commits yet on|Initial commit on)\s+)?(.+?)(?:\.\.\.|$)/
+  );
   const branch = branchMatch?.[1]?.trim() || null;
   const hasRemote = branchLine.includes("...");
 

@@ -188,7 +188,7 @@ export class OpenAICompatibleProvider extends Provider {
 
     const instructions = userInstructions?.trim();
     if (instructions) {
-      contents.push({ role: "user", content: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\\n${instructions}` });
+      contents.push({ role: "user", content: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\n${instructions}` });
     }
 
     for (const item of history) {

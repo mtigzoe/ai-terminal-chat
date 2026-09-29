@@ -257,6 +257,13 @@ class OllamaProvider(OpenAICompatibleProvider):
         except Exception:
             return []
 
+        # A 200 response is not guaranteed to carry an object: a reverse proxy
+        # or a non-Ollama service on the port can answer with a JSON array or
+        # string. Treat any non-dict body as "no models" rather than letting
+        # .get() raise outside this function's error handling.
+        if not isinstance(data, dict):
+            return []
+
         models = []
         for item in data.get("models") or []:
             if not isinstance(item, dict):

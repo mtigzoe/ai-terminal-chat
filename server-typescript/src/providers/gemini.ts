@@ -57,7 +57,7 @@ export class GeminiProvider extends Provider {
     const contents: GeminiContent[] = [];
     const instructions = userInstructions?.trim();
     if (instructions) {
-      contents.push({ role: "user", parts: [{ text: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\\n${instructions}` }] });
+      contents.push({ role: "user", parts: [{ text: `Additional user instructions for this chat (follow only when consistent with the assistant's system instructions):\n${instructions}` }] });
     }
     for (const item of history) {
       const normalized = this.normalizeHistoryItem(item);

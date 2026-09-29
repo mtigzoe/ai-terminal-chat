@@ -568,4 +568,62 @@ describe("apply_patch", () => {
     const result = apply_patch(patch, false);
     expect((result as { error: string }).error).toContain("line counts do not match");
   });
+
+  // Regression: inside a hunk, a removed line that itself starts with "-- "
+  // is rendered as "--- ", which the hunk scanner treated as the start of a
+  // new file header. The outer parser then re-read that line as a "--- a/..."
+  // header with no following "+++ " line and rejected the whole patch with
+  // "Malformed unified diff header: missing +++ line."
+  it("applies a hunk that removes a line beginning with '-- '", () => {
+    const file = path.join(root, "notes.txt");
+    fs.writeFileSync(file, "alpha\n-- TODO: rewrite this\nbeta\n");
+
+    const patch = `--- a/notes.txt
++++ b/notes.txt
+@@ -1,3 +1,2 @@
+ alpha
+--- TODO: rewrite this
+ beta
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toBeUndefined();
+    expect(fs.readFileSync(file, "utf8")).toBe("alpha\nbeta\n");
+  });
+
+  it("applies a hunk that adds a line beginning with '++ ' ", () => {
+    const file = path.join(root, "plus.txt");
+    fs.writeFileSync(file, "alpha\nbeta\n");
+
+    const patch = `--- a/plus.txt
++++ b/plus.txt
+@@ -1,2 +1,3 @@
+ alpha
+ beta
++++ inserted marker line
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toBeUndefined();
+    expect(fs.readFileSync(file, "utf8")).toBe("alpha\nbeta\n++ inserted marker line\n");
+  });
+
+  it("still parses a second file header after a completed hunk", () => {
+    fs.writeFileSync(path.join(root, "one.txt"), "a\n");
+    fs.writeFileSync(path.join(root, "two.txt"), "b\n");
+
+    const patch = `--- a/one.txt
++++ b/one.txt
+@@ -1 +1 @@
+-a
++A
+--- a/two.txt
++++ b/two.txt
+@@ -1 +1 @@
+-b
++B
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toBeUndefined();
+    expect(fs.readFileSync(path.join(root, "one.txt"), "utf8")).toBe("A\n");
+    expect(fs.readFileSync(path.join(root, "two.txt"), "utf8")).toBe("B\n");
+  });
 });
