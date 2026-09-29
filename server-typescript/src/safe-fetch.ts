@@ -108,6 +108,44 @@ function expandIpv6(ip: string): number[] | null {
   return parts.map((part) => Number.parseInt(part, 16));
 }
 
+type Ipv6Prefix = readonly [address: string, length: number];
+
+// Special-purpose ranges inside 2000::/3 that are not globally reachable.
+// These mirror Python's ipaddress private-address policy.
+const NON_PUBLIC_IPV6_PREFIXES: readonly Ipv6Prefix[] = [
+  ["2001::", 23],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["3fff::", 20],
+];
+
+// IANA-designated globally reachable exceptions within 2001::/23.
+const PUBLIC_IPV6_EXCEPTIONS: readonly Ipv6Prefix[] = [
+  ["2001:1::1", 128],
+  ["2001:1::2", 128],
+  ["2001:3::", 32],
+  ["2001:4:112::", 48],
+  ["2001:20::", 28],
+  ["2001:30::", 28],
+];
+
+function matchesIpv6Prefix(
+  address: number[],
+  [prefixAddress, prefixLength]: Ipv6Prefix,
+): boolean {
+  const prefix = expandIpv6(prefixAddress);
+  if (!prefix) return false;
+
+  let remaining = prefixLength;
+  for (let index = 0; remaining > 0; index += 1) {
+    const bits = Math.min(remaining, 16);
+    const mask = (0xffff << (16 - bits)) & 0xffff;
+    if ((address[index]! & mask) !== (prefix[index]! & mask)) return false;
+    remaining -= bits;
+  }
+  return true;
+}
+
 function mappedIpv4FromIpv6(ip: string): string | null {
   const hextets = expandIpv6(ip);
   if (
@@ -172,6 +210,10 @@ export function blockedAddressReason(
   }
 
   if (isIpv6(ip)) {
+    const hextets = expandIpv6(ip);
+    if (!hextets) {
+      return "Resolved address is not a valid IP";
+    }
     if (allowLoopback && isLoopbackIpv6(ip)) {
       return null;
     }
@@ -185,16 +227,15 @@ export function blockedAddressReason(
       return blockedAddressReason(mappedIpv4, allowLoopback);
     }
 
-    const firstHextet = Number.parseInt(normalized.split(":")[0] || "0", 16);
-    const isIpv6LinkLocal = firstHextet >= 0xfe80 && firstHextet <= 0xfebf;
+    const isGlobalUnicast = (hextets[0]! & 0xe000) === 0x2000;
+    const isPublicException = PUBLIC_IPV6_EXCEPTIONS.some((prefix) =>
+      matchesIpv6Prefix(hextets, prefix),
+    );
+    const isNonPublicSpecialUse = NON_PUBLIC_IPV6_PREFIXES.some((prefix) =>
+      matchesIpv6Prefix(hextets, prefix),
+    );
 
-    if (
-      normalized === "::" ||
-      isIpv6LinkLocal ||
-      normalized.startsWith("fc") ||
-      normalized.startsWith("fd") ||
-      normalized.startsWith("ff")
-    ) {
+    if (!isGlobalUnicast || (isNonPublicSpecialUse && !isPublicException)) {
       return "Resolved IP is a private/reserved IPv6 address";
     }
     return null;
