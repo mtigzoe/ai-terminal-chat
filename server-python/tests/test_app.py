@@ -27,6 +27,63 @@ def test_untrusted_browser_origin_is_rejected_before_route(client):
     assert response.get_json()["error"] == "Origin is not allowed."
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "attacker.example:9000",
+        "127.0.0.1.attacker.example:9000",
+        "localhost.attacker.example",
+        "192.168.1.10:9000",
+    ],
+)
+def test_loopback_server_rejects_dns_rebinding_host_before_route(client, host):
+    response = client.get("/providers?probe=0", headers={"Host": host})
+
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "Host is not allowed."
+
+
+def test_loopback_server_rejects_dns_rebinding_host_on_preflight(client):
+    response = client.options(
+        "/providers",
+        headers={"Host": "attacker.example:9000"},
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "Host is not allowed."
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "localhost:9000",
+        "LOCALHOST:9000",
+        "localhost.:9000",
+        "127.0.0.1:9000",
+        "[::1]:9000",
+    ],
+)
+def test_loopback_server_allows_loopback_hostnames(client, host):
+    response = client.get("/providers?probe=0", headers={"Host": host})
+
+    assert response.status_code == 200
+
+
+def test_bearer_token_allows_reverse_proxy_host_on_loopback(client, monkeypatch):
+    monkeypatch.setattr(app, "_IS_LOOPBACK_SERVER", True)
+    monkeypatch.setattr(app, "_API_AUTH_TOKEN", "test-token")
+
+    response = client.get(
+        "/providers?probe=0",
+        headers={
+            "Host": "api.example.test",
+            "Authorization": "Bearer test-token",
+        },
+    )
+
+    assert response.status_code == 200
+
+
 def test_allowed_browser_origin_receives_cors_header(client):
     response = client.get("/providers", headers={"Origin": "http://localhost:5173"})
     assert response.status_code == 200
