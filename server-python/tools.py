@@ -3497,6 +3497,15 @@ def _extract_patch_target_paths(patch_text: str) -> set:
     )
 
     for line in patch_text.splitlines():
+        # A diff section marker cannot be hunk body (body lines always begin
+        # with space, + or -), so it is a safe resynchronization point even
+        # after a malformed/incomplete hunk.
+        if line.startswith("diff --git "):
+            in_hunk = False
+            old_remaining = 0
+            new_remaining = 0
+            continue
+
         if in_hunk:
             if line.startswith("\\ No newline at end of file"):
                 continue
@@ -3523,9 +3532,6 @@ def _extract_patch_target_paths(patch_text: str) -> set:
                 old_remaining = int(match.group(1) or "1")
                 new_remaining = int(match.group(2) or "1")
                 in_hunk = True
-            continue
-
-        if line.startswith("diff --git "):
             continue
 
         for prefix in ("+++ b/", "--- a/", "+++ ", "--- "):
