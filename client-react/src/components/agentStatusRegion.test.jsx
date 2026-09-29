@@ -78,9 +78,9 @@ describe('AgentStatusRegion', () => {
     const region = renderStatus({ phase, message });
     await settle();
 
-    // The two spans are the label and the message; textContent is their
-    // concatenation, with no synthesized "<label>. " prefix in between.
-    expect(region.textContent).toBe(`${label}${message}`);
+    // Keep the separator in the DOM so screen readers do not depend on
+    // CSS-generated punctuation for understandable live-region text.
+    expect(region.textContent).toBe(`${label}: ${message}`);
     expect(region.textContent).not.toContain(`${label}. `);
   });
 
@@ -95,7 +95,7 @@ describe('AgentStatusRegion', () => {
   it('keeps the phase span and message span as separate elements', async () => {
     const region = renderStatus({ phase: 'error', message: 'Provider offline' });
     await settle();
-    expect(region.querySelector('.agent-status-phase').textContent).toBe('Error');
+    expect(region.querySelector('.agent-status-phase').textContent).toBe('Error: ');
     expect(region.querySelector('.agent-status-message').textContent).toBe('Provider offline');
   });
 
