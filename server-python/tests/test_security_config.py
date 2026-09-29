@@ -1,4 +1,6 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -60,6 +62,50 @@ def test_project_root_update_fails_closed_when_existing_config_cannot_be_read(
         security._persist_project_root(project_root)
 
     assert json.loads(config_file.read_text(encoding="utf-8")) == original
+
+
+def test_concurrent_config_updates_preserve_unrelated_settings(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_file = config_dir / "config.json"
+    config_file.write_text(
+        json.dumps({"allowed_commands": ["git status"]}), encoding="utf-8"
+    )
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    monkeypatch.setattr(security, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(security, "_CONFIG_FILE", config_file)
+    real_read = security._read_config_for_update
+    read_count = 0
+    count_lock = threading.Lock()
+    both_read = threading.Event()
+
+    def synchronize_initial_reads():
+        nonlocal read_count
+        data = real_read()
+        with count_lock:
+            read_count += 1
+            if read_count == 2:
+                both_read.set()
+        both_read.wait(timeout=0.5)
+        return data
+
+    monkeypatch.setattr(security, "_read_config_for_update", synchronize_initial_reads)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        root_update = executor.submit(security._persist_project_root, project_root)
+        provider_update = executor.submit(
+            security.persist_provider_selection, "anthropic", "claude-test"
+        )
+        root_update.result()
+        provider_update.result()
+
+    saved = json.loads(config_file.read_text(encoding="utf-8"))
+    assert saved["allowed_commands"] == ["git status"]
+    assert saved["project_root"] == str(project_root)
+    assert saved["provider"] == "anthropic"
+    assert saved["model"] == "claude-test"
 
 
 @pytest.mark.parametrize("address", ["fec0::1", "feff::1"])

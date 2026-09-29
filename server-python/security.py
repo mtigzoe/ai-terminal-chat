@@ -8,16 +8,18 @@ so it doesn't move when providers change.
 import json
 import os
 import tempfile
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import urlparse
 import ipaddress
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 
 _CONFIG_DIR = Path.home() / ".ai-terminal-chat"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
+_CONFIG_UPDATE_LOCK = threading.RLock()
 CHOOSE_PROJECT_ROOT = "__CHOOSE_PROJECT_ROOT__"
 
 
@@ -167,6 +169,15 @@ def _persist_config(payload: dict) -> None:
         raise
 
 
+def _update_config(mutator: Callable[[dict], None]) -> None:
+    """Apply one read-modify-write transaction without losing peer updates."""
+
+    with _CONFIG_UPDATE_LOCK:
+        payload = _read_config_for_update()
+        mutator(payload)
+        _persist_config(payload)
+
+
 def _persist_project_root(root: Path) -> None:
     """Persist the selected project root atomically outside the project.
 
@@ -174,9 +185,10 @@ def _persist_project_root(root: Path) -> None:
     allowed_commands) are preserved.
     """
 
-    payload = _read_config_for_update()
-    payload["project_root"] = str(root)
-    _persist_config(payload)
+    def update(payload: dict) -> None:
+        payload["project_root"] = str(root)
+
+    _update_config(update)
 
 
 def load_provider_selection() -> dict:
@@ -214,24 +226,25 @@ def persist_provider_selection(
     across provider switches.
     """
 
-    payload = _read_config_for_update()
-    payload["provider"] = str(provider).strip().lower()
-    if model is not None:
-        model_s = str(model).strip()
-        if model_s:
-            payload["model"] = model_s
-        else:
-            payload.pop("model", None)
-    if ollama_base_url is not None:
-        url = str(ollama_base_url).strip()
-        if url:
-            url = normalize_ollama_url_for_storage(url)
-            payload["ollama_base_url"] = url
-        else:
+    def update(payload: dict) -> None:
+        payload["provider"] = str(provider).strip().lower()
+        if model is not None:
+            model_s = str(model).strip()
+            if model_s:
+                payload["model"] = model_s
+            else:
+                payload.pop("model", None)
+        if ollama_base_url is not None:
+            url = str(ollama_base_url).strip()
+            if url:
+                url = normalize_ollama_url_for_storage(url)
+                payload["ollama_base_url"] = url
+            else:
+                payload.pop("ollama_base_url", None)
+        elif payload.get("provider") != "ollama":
             payload.pop("ollama_base_url", None)
-    elif payload.get("provider") != "ollama":
-        payload.pop("ollama_base_url", None)
-    _persist_config(payload)
+
+    _update_config(update)
 
 
 def _choose_project_root() -> Path:

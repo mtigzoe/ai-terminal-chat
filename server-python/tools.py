@@ -679,11 +679,12 @@ def _load_allowed_commands_from_config() -> list[str] | None:
 def _persist_allowed_commands(prefixes: list[str]) -> None:
     """Write the current allowlist into the existing configuration file."""
 
-    from security import _persist_config, _read_config_for_update
+    from security import _update_config
 
-    payload = _read_config_for_update()
-    payload["allowed_commands"] = list(prefixes)
-    _persist_config(payload)
+    def update(payload: dict) -> None:
+        payload["allowed_commands"] = list(prefixes)
+
+    _update_config(update)
 
 
 def reload_allowed_commands() -> list[str]:
