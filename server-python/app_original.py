@@ -21,6 +21,7 @@ import cancellation
 from agent import provider_fingerprint, resume_agent_loop, run_agent_loop
 from pending import get_pending, pop_pending
 from providers import SUPPORTED_PROVIDERS, get_provider
+from server_config import get_server_port
 from security import (
     PROJECT_ROOT,
     clear_allowed_read_paths,
@@ -701,5 +702,5 @@ def terminal_run():
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "9000"))
+    port = get_server_port()
     app.run(host=host, port=port)
