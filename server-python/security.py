@@ -628,8 +628,12 @@ def validate_provider_base_url(
     if port < 1 or port > 65535:
         raise ValueError("Invalid port number")
 
-    # Rebuild without trailing slash noise
-    netloc = parsed.hostname or ""
+    # Rebuild without trailing slash noise.
+    # urlparse().hostname lowercases and strips the brackets around an IPv6
+    # literal, so they must be restored or the rebuilt URL is unparseable
+    # ("http://2606:4700::1111:8080" re-parses with hostname "2606").
+    host = parsed.hostname or ""
+    netloc = f"[{host}]" if ":" in host else host
     if parsed.port:
         netloc = f"{netloc}:{parsed.port}"
     path = parsed.path or ""

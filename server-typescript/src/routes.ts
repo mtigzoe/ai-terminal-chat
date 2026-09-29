@@ -796,6 +796,11 @@ const CONFIRMABLE_TOOL_NAMES = new Set([
   "git_restore",
   "git_commit",
   "git_push",
+  // agent.ts creates a pending action under this name whenever
+  // isExecutionRiskCommand() classifies the command (npm test, pip install,
+  // git fetch, ...). It must be confirmable or the approval flow is a
+  // one-way door for every execution-risk command.
+  "run_command",
 ]);
 
 /**
@@ -921,13 +926,17 @@ app.post("/confirm", async (c) => {
       409 as any,
     );
   }
+  // Reject an unconfirmable tool name *before* consuming the pending action.
+  // popPending() deletes the entry, so validating afterwards would both reject
+  // the request and destroy it, leaving the client with an unrecoverable 404
+  // on retry.
+  if (!CONFIRMABLE_TOOL_NAMES.has(peeked.tool_name)) {
+    return c.json({ error: "Only pending write actions can be confirmed." }, 400 as any);
+  }
+
   const action = popPending(actionId);
   if (!action) {
     return c.json({ error: "Pending action not found or already resolved." }, 404 as any);
-  }
-
-  if (!CONFIRMABLE_TOOL_NAMES.has(action.tool_name)) {
-    return c.json({ error: "Only pending write actions can be confirmed." }, 400 as any);
   }
 
   const provider = getActiveProvider();

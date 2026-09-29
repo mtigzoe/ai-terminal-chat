@@ -288,34 +288,71 @@ class OpenAICompatibleProvider(Provider):
             raise RuntimeError(f"Unexpected response shape: {data}") from exc
 
         message = choice.get("message", {})
+        if not isinstance(message, dict):
+            raise RuntimeError(f"Unexpected response message shape: {message}")
+
         raw_tool_calls = message.get("tool_calls") or []
+        if not isinstance(raw_tool_calls, list):
+            raw_tool_calls = []
 
         tool_calls = []
+        normalized_raw_calls = []
 
         for call in raw_tool_calls:
-            function = call.get("function", {})
-            raw_args = function.get("arguments") or "{}"
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if not isinstance(function, dict):
+                continue
 
-            if isinstance(raw_args, dict):
-                args = raw_args
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+
+            if "arguments" not in function:
+                # Some compatible servers omit arguments entirely for tools
+                # that take no parameters. Treat omission as an empty object.
+                args = {}
             else:
-                try:
-                    args = json.loads(raw_args)
-                except json.JSONDecodeError:
-                    args = {}
+                raw_args = function.get("arguments")
+                if isinstance(raw_args, dict):
+                    args = raw_args
+                elif isinstance(raw_args, (str, bytes, bytearray)):
+                    try:
+                        args = json.loads(raw_args)
+                    except (TypeError, ValueError):
+                        continue
+                else:
+                    continue
 
+                # Tool arguments must be a JSON object. Do not coerce malformed
+                # arrays/scalars/null into {}, because that can execute a tool
+                # whose parameters have defaults.
+                if not isinstance(args, dict):
+                    continue
+
+            call_id = call.get("id")
             tool_calls.append(
                 ToolCall(
-                    name=function.get("name", ""),
+                    name=name,
                     args=args,
-                    id=call.get("id"),
+                    id=call_id if isinstance(call_id, str) and call_id else None,
                 )
             )
+            # Keep the native assistant turn aligned with the normalized calls.
+            # append_tool_results() pairs results to these entries by order/id;
+            # retaining skipped malformed entries would crash on call.get() or
+            # make strict zip pairing fail on the next round.
+            normalized_raw_calls.append(call)
+
+        normalized_message = dict(message)
+        if "tool_calls" in normalized_message or normalized_raw_calls:
+            normalized_message["tool_calls"] = normalized_raw_calls
 
         return ProviderResponse(
             text=message.get("content"),
             tool_calls=tool_calls,
-            raw=message,
+            raw=normalized_message,
         )
 
     def generate(self, contents) -> ProviderResponse:

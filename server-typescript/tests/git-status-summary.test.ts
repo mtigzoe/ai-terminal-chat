@@ -74,4 +74,36 @@ describe("summarizeGitStatus", () => {
       synchronized: false,
     });
   });
+
+  // Regression: on a repository with no commits yet, `git status
+  // --short --branch` prints "## No commits yet on <branch>". The branch
+  // regex captured the whole banner, so the branch name reported to the model
+  // and the user was "No commits yet on main" instead of "main". The same
+  // applied to "## Initial commit on <branch>" from `git init`.
+  it.each([
+    ["## No commits yet on main", "main"],
+    ["## Initial commit on master", "master"],
+    ["## No commits yet on feature/login", "feature/login"],
+  ])("extracts the branch from the fresh-repository banner %s", (line, branch) => {
+    const result = summarizeGitStatus(`${line}\n`);
+
+    expect(result.branch).toBe(branch);
+    expect(result.hasRemote).toBe(false);
+    expect(result.summary).not.toContain("No commits yet");
+    expect(result.summary).not.toContain("Initial commit");
+  });
+
+  it("does not report detached HEAD as a branch name", () => {
+    const result = summarizeGitStatus("## HEAD (no branch)\n");
+
+    expect(result.branch).toBeNull();
+    expect(result.hasRemote).toBe(false);
+    expect(result.summary).toContain("detached HEAD");
+    expect(result.summary).not.toContain("not tracking a remote branch");
+  });
+
+  it("still extracts the branch from a normal banner", () => {
+    expect(summarizeGitStatus("## main\n").branch).toBe("main");
+    expect(summarizeGitStatus("## main...origin/main [ahead 1]\n").branch).toBe("main");
+  });
 });

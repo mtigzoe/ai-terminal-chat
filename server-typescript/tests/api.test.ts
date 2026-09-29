@@ -835,6 +835,84 @@ describe("POST /confirm", () => {
     expect(data.error).toBeDefined();
   });
 
+  // Regression: agent.ts creates a pending action named "run_command" for any
+  // execution-risk command (npm test, pip install, git fetch, ...), but
+  // "run_command" was missing from CONFIRMABLE_TOOL_NAMES. /confirm therefore
+  // answered 400 "Only pending write actions can be confirmed." — and because
+  // the membership check ran *after* popPending(), it also destroyed the
+  // stored action, so the client could not retry. Every execution-risk command
+  // the model proposed was a dead end with no way to approve it.
+  it("allows a run_command pending action to be declined", async () => {
+    const originalRoot = getProjectRoot();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "confirm-run-command-"));
+    try {
+      setProjectRoot(root);
+      const provider = getProvider();
+      const action = createPending(
+        "run_command",
+        { command: "npm test" },
+        { requires_confirmation: true, command: "npm test" },
+        {
+          provider_fingerprint: providerFingerprint(provider),
+          project_root: root,
+          contents: [],
+          round_index: 0,
+          tool_results: [],
+          remaining_calls: [{ name: "run_command", args: { command: "npm test" } }],
+          last_call_signature: null,
+          consecutive_repeat_count: 0,
+          consecutive_error_count: 0,
+        },
+      );
+
+      const res = await createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: false }),
+      });
+
+      // Must not be rejected as an unconfirmable tool.
+      expect(res.status).not.toBe(400);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data).toMatchObject({
+        confirmed: false,
+        action_id: action.action_id,
+        tool: "run_command",
+      });
+    } finally {
+      setProjectRoot(originalRoot);
+      clearPending();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Companion to the test above: an unconfirmable tool name must be rejected
+  // *without* consuming the pending action, so the client can retry after the
+  // cause is resolved.
+  it("preserves the pending action when the tool name is not confirmable", async () => {
+    const originalRoot = getProjectRoot();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "confirm-unknown-tool-"));
+    try {
+      setProjectRoot(root);
+      const action = createPending("not_a_real_tool", { a: 1 }, { requires_confirmation: true });
+
+      const res = await createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: true }),
+      });
+      expect(res.status).toBe(400);
+
+      const { getPending } = await import("../src/pending.js");
+      expect(getPending(action.action_id)?.action_id).toBe(action.action_id);
+    } finally {
+      setProjectRoot(originalRoot);
+      clearPending();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("resumes the agent loop end-to-end after a real /chat confirmation", async () => {
     // Regression test for the /confirm handler running the confirmed tool
     // in isolation and stopping, instead of letting the model take another

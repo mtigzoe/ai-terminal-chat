@@ -62,8 +62,12 @@ const MessageInput = ({ inputRef, waiting, pendingConfirmation, handleClick }) =
           {pendingConfirmation ? ' A confirmation is waiting for your Allow or Decline choice; sending is disabled until you respond to it.' : ''}
         </p>
         <div id="message-input-status" className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {waiting && "Waiting for response"}
-          {pendingConfirmation && "Confirmation required — respond above"}
+          {[
+            waiting && 'Waiting for response',
+            pendingConfirmation && 'Confirmation required — respond above',
+          ]
+            .filter(Boolean)
+            .join('. ')}
         </div>
         <button
           type="button"

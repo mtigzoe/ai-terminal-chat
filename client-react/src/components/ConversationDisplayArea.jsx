@@ -21,9 +21,16 @@ function AgentStatusRegion({ status }) {
       setAnnouncement('');
       return;
     }
-    const message = `${phaseLabel(status.phase)}. ${status.message || ''}`.trim();
-    if (message === lastMessageRef.current) return;
-    lastMessageRef.current = message;
+    // The phase label is rendered separately in its own span below, so the
+    // announcement carries only the message. Building it as
+    // "<Phase>. <message>" here duplicated the phase in the visible chip
+    // ("PlanningPlanning. Planning next step") and in the live region.
+    const message = (status.message || '').trim();
+    // Still key the re-announce check on the phase, so a phase transition
+    // that happens to repeat the same message text is still announced.
+    const key = `${status.phase || ''}|${message}`;
+    if (key === lastMessageRef.current) return;
+    lastMessageRef.current = key;
     // Clear through React state, rather than mutating a React-managed DOM node.
     // This briefly empties the live region so screen readers re-announce repeated
     // status text without creating a React/jsdom DOM ownership race.
@@ -58,7 +65,7 @@ function AgentStatusRegion({ status }) {
       aria-live={live}
       aria-atomic="true"
     >
-      <span className="agent-status-phase">{showAnnouncement ? phaseLabel(status.phase) : ''}</span>
+      <span className="agent-status-phase">{showAnnouncement ? `${phaseLabel(status.phase)}: ` : ''}</span>
       <span className="agent-status-message">{announcement}</span>
     </div>
   );
