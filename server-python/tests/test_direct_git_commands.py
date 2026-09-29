@@ -234,6 +234,17 @@ def test_direct_read_natural_language_returns_none():
     assert result is None
 
 
+def test_direct_read_with_extra_words_defers_to_model():
+    for text in (
+        "read the config and explain it",
+        "read src/app.ts and summarize",
+        "read_file a.txt b.txt",
+    ):
+        contents = [{"role": "user", "content": text}]
+
+        assert _direct_read_command(contents) is None
+
+
 def test_direct_read_strips_quotes_from_path():
     contents = [{"role": "user", "content": 'read "hellov7.txt"'}]
 

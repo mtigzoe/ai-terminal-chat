@@ -21,6 +21,28 @@ if (!isLoopbackServer && !apiAuthToken) {
   );
 }
 
+// DNS rebinding: a page on an attacker-controlled domain can re-point its DNS
+// name at 127.0.0.1 and then read this API "same-origin". Browsers omit the
+// Origin header on same-origin GETs, so the Origin check below cannot see it,
+// and an unauthenticated loopback server has no token to fall back on. The
+// Host header still carries the attacker's domain, so require a loopback Host
+// whenever the server relies on its loopback binding as the only protection.
+// With API_AUTH_TOKEN set the bearer check protects the API instead, which
+// keeps reverse-proxy setups (arbitrary Host) working.
+const LOOPBACK_URL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const enforceLoopbackHost = isLoopbackServer && !apiAuthToken;
+
+function hostIsAllowed(request: Request): boolean {
+  if (!enforceLoopbackHost) return true;
+  let hostname: string;
+  try {
+    hostname = new URL(request.url).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return false;
+  }
+  return LOOPBACK_URL_HOSTNAMES.has(hostname);
+}
+
 const configuredOrigins = (process.env.CORS_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -50,6 +72,13 @@ function hasValidBearerToken(request: Request): boolean {
 
 async function securedFetch(request: Request): Promise<Response> {
   const origin = request.headers.get("origin");
+
+  if (!hostIsAllowed(request)) {
+    return new Response(JSON.stringify({ error: "Host is not allowed." }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
 
   // Reject browser requests from untrusted origins before dispatching the
   // request to any route. CORS headers alone are not sufficient because the

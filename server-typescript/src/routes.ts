@@ -257,10 +257,19 @@ app.post("/providers/select", async (c) => {
   // mismatched state between persisted config, process.env, and activeProvider.
   // The async provider probe (buildProviderStatus) is done outside the lock.
   let candidate: Provider;
+  // The lock makes the config file update atomic, but process.env is edited
+  // before getProvider() can reject the selection (invalid base URL, ...).
+  // Remember what we touch so a failed switch leaves the still-active
+  // provider's environment exactly as it was.
+  const envBackup = new Map<string, string | undefined>();
+  const backupEnv = (envVar: string): void => {
+    if (!envBackup.has(envVar)) envBackup.set(envVar, process.env[envVar]);
+  };
   try {
     candidate = withConfigLock((config) => {
       // Apply Ollama URL to env if provided
       if (name === "ollama" && hasOllamaBaseUrl && normalizedOllamaUrl) {
+        backupEnv("OLLAMA_BASE_URL");
         applyOllamaBaseUrlToEnv(normalizedOllamaUrl);
       }
 
@@ -274,6 +283,7 @@ app.post("/providers/select", async (c) => {
           config.ollama_base_url &&
           String(config.ollama_base_url).trim();
         if (hadPersistedOllamaUrl) {
+          backupEnv("OLLAMA_BASE_URL");
           delete process.env.OLLAMA_BASE_URL;
         }
       }
@@ -290,6 +300,7 @@ app.post("/providers/select", async (c) => {
       };
       const envName = envApiKeyMap[name];
       if (hasApiKey && envName) {
+        backupEnv(envName);
         if (apiKey) {
           process.env[envName] = apiKey;
         } else {
@@ -297,9 +308,10 @@ app.post("/providers/select", async (c) => {
         }
       }
 
-      // Create provider instance and update activeProvider
+      // Create the provider instance. activeProvider is only switched once the
+      // config write has succeeded (below), so a failed selection leaves the
+      // previous provider active.
       const newProvider = getProvider(name, model ? { model } : undefined);
-      activeProvider = newProvider;
 
       // Update config in memory (will be persisted by withConfigLock)
       config.provider = name;
@@ -323,8 +335,13 @@ app.post("/providers/select", async (c) => {
       return newProvider;
     });
   } catch (exc) {
+    for (const [envVar, previous] of envBackup) {
+      if (previous === undefined) delete process.env[envVar];
+      else process.env[envVar] = previous;
+    }
     return c.json({ error: `Could not switch to '${name}': ${exc}` }, 400 as any);
   }
+  activeProvider = candidate;
 
   // Probe the provider and build status (async, outside the lock)
   const status = await buildProviderStatus(candidate, true);
@@ -683,9 +700,21 @@ app.post("/stream", async (c) => {
   const cancelSignal = register(requestId);
   const cancelCleanup = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
   const wantsNdjson = c.req.header("Accept")?.includes("application/x-ndjson") ?? false;
+  // Once the consumer cancels (client disconnect), the controller is closed
+  // and any enqueue()/close() throws. Track that so the async producer below
+  // never turns a routine disconnect into an unhandled rejection.
+  let streamClosed = false;
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
+      const safeEnqueue = (text: string): void => {
+        if (streamClosed) return;
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          streamClosed = true;
+        }
+      };
       (async () => {
         try {
           await runWithProjectRoot(getProjectRoot(), () =>
@@ -704,21 +733,37 @@ app.post("/stream", async (c) => {
               const line = wantsNdjson
                 ? JSON.stringify(event) + "\n"
                 : formatPlainStreamEvent(event);
-              controller.enqueue(encoder.encode(line));
+              safeEnqueue(line);
             }
             })
           );
         } catch (exc) {
           const event: AgentEvent = { type: "error", message: String(exc) };
-          controller.enqueue(encoder.encode(
+          safeEnqueue(
             wantsNdjson ? JSON.stringify(event) + "\n" : formatPlainStreamEvent(event)
-          ));
+          );
         } finally {
           cancelCleanup();
           release(requestId, cancelSignal);
-          controller.close();
+          if (!streamClosed) {
+            streamClosed = true;
+            try {
+              controller.close();
+            } catch {
+              // Already closed by a concurrent cancel.
+            }
+          }
         }
-      })();
+      })().catch(() => {
+        // Errors are reported through the stream; never leave a rejection
+        // unhandled, which terminates the process on modern Node.
+      });
+    },
+    cancel() {
+      // The client went away: stop the agent loop instead of letting it keep
+      // calling the provider and tools for a response nobody will read.
+      streamClosed = true;
+      cancel(requestId);
     },
   });
 

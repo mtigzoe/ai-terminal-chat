@@ -601,3 +601,47 @@ describe("explicit Git command routing", () => {
     expect(finalEvent?.text).toContain("git add");
   });
 });
+
+describe("explicit read command routing", () => {
+  test("routes 'read <path>' directly to read_file without calling the model", async () => {
+    const provider = new FakeProvider();
+    const readFile = vi.fn(() => ({ path: "notes.txt", contents: "hi" }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: "read notes.txt" }],
+      toolFunctions: { read_file: readFile },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+      if (event.type === "tool_result") break;
+    }
+
+    expect(readFile).toHaveBeenCalledWith({ path: "notes.txt" }, expect.any(AbortSignal));
+  });
+
+  test.each([
+    "read the config and explain it",
+    "read src/app.ts and summarize",
+    "read_file a.txt b.txt",
+  ])("defers %j to the model instead of guessing a path", async (text) => {
+    const provider = new NaturalLanguageProvider();
+    const readFile = vi.fn(() => ({ path: "x", contents: "" }));
+
+    const events = [];
+    for await (const event of runAgentLoop({
+      provider,
+      contents: [{ role: "user", content: text }],
+      toolFunctions: { read_file: readFile },
+      createPending: () => ({ action_id: "unused" }),
+    })) {
+      events.push(event);
+    }
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "final", text: "git add stages a file for the next commit." })
+    );
+  });
+});

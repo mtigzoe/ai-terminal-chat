@@ -290,6 +290,10 @@ function directReadCommand(contents: unknown[]): ProviderResponse | null {
         raw: null,
       };
     }
+    // Only an exact "read <path>" is an explicit command. Anything longer
+    // ("read the config and explain it") is natural language for the model;
+    // guessing that the first word is a path would read the wrong file.
+    if (parts.length !== 2) return null;
     let path = parts[1];
     if (!path || path.startsWith("-")) return null;
     if (path.length >= 2 && path[0] === path[path.length - 1] && (path[0] === '"' || path[0] === "'")) {

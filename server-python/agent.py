@@ -131,6 +131,11 @@ def _direct_read_command(contents: list):
                 tool_calls=[],
                 raw=None,
             )
+        # Only an exact "read <path>" is an explicit command. Anything longer
+        # ("read the config and explain it") is natural language for the model;
+        # guessing that the first word is a path would read the wrong file.
+        if len(parts) != 2:
+            return None
         path = parts[1]
         if not path or path.startswith("-"):
             return None
