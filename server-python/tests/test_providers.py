@@ -1561,6 +1561,27 @@ def test_provider_factory_uses_anthropic_provider(monkeypatch):
     assert "api_key" not in provider.provider_config.to_public_dict()
 
 
+@pytest.mark.parametrize("raw_value", ["", "not-a-number", "0", "-1"])
+def test_provider_factory_anthropic_invalid_max_tokens_uses_default(
+    raw_value, monkeypatch
+):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "factory-ant-key")
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", raw_value)
+
+    provider = get_provider("anthropic")
+
+    assert provider.max_tokens == 8192
+
+
+def test_provider_factory_anthropic_valid_max_tokens_is_preserved(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "factory-ant-key")
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", " 2048 ")
+
+    provider = get_provider("anthropic")
+
+    assert provider.max_tokens == 2048
+
+
 def test_provider_factory_anthropic_missing_key_raises(monkeypatch):
     monkeypatch.setenv("PROVIDER", "anthropic")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

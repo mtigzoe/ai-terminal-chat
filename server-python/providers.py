@@ -35,19 +35,25 @@ SUPPORTED_PROVIDERS = [
 ]
 
 _DEFAULT_TIMEOUT = 120
+_DEFAULT_ANTHROPIC_MAX_TOKENS = 8192
+
+
+def _positive_int_from_env(env_name: str, default: int) -> int:
+    """Read a positive integer, falling back safely on bad input."""
+    raw_value = os.getenv(env_name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value.strip())
+    except (AttributeError, TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def _timeout_from_env(env_name: str) -> int:
     """Read a positive provider timeout, falling back safely on bad input."""
 
-    raw_value = os.getenv(env_name)
-    if raw_value is None:
-        return _DEFAULT_TIMEOUT
-    try:
-        timeout = int(raw_value.strip())
-    except (AttributeError, TypeError, ValueError):
-        return _DEFAULT_TIMEOUT
-    return timeout if timeout > 0 else _DEFAULT_TIMEOUT
+    return _positive_int_from_env(env_name, _DEFAULT_TIMEOUT)
 
 
 @dataclass
@@ -226,7 +232,9 @@ def get_provider(name: str | None = None, model: str | None = None) -> Provider:
             model=config.model,
             api_key=config.api_key,
             timeout=config.timeout,
-            max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS", "8192")),
+            max_tokens=_positive_int_from_env(
+                "ANTHROPIC_MAX_TOKENS", _DEFAULT_ANTHROPIC_MAX_TOKENS
+            ),
         )
     else:
         raise RuntimeError(
