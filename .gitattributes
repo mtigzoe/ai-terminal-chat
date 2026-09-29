@@ -9,3 +9,6 @@ yarn.lock linguist-generated=true
 **/package-lock.json linguist-generated=true
 **/pnpm-lock.yaml linguist-generated=true
 **/yarn.lock linguist-generated=true
+
+# Shell scripts must remain executable by Bash on Windows checkouts.
+*.sh text eol=lf
