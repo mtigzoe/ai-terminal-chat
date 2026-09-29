@@ -1768,7 +1768,6 @@ _GIT_CONFIG_OVERRIDES = [
     "-c", "pager.branch=cat",
     "-c", "pager.tag=cat",
     "-c", "interactive.diffFilter=",
-    "-c", "diff.external=",
     "-c", "diff.tool=",
     "-c", "diff.guitool=",
     "-c", "diff.mnemonicPrefix=false",
@@ -2054,11 +2053,20 @@ def _run_git(
         )
 
         try:
+            git_args = list(args)
+            if git_args and git_args[0].lower() in {"diff", "log", "show"}:
+                if "--no-ext-diff" not in git_args:
+                    try:
+                        separator_index = git_args.index("--")
+                    except ValueError:
+                        separator_index = len(git_args)
+                    git_args.insert(separator_index, "--no-ext-diff")
+
             safe_args = (
                 list(_GIT_CONFIG_OVERRIDES)
                 + _dynamic_git_config_overrides()
                 + _git_line_ending_overrides()
-                + list(args)
+                + git_args
             )
             return run_cancellable(
                 ["git", *safe_args],
