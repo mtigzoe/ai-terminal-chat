@@ -13,6 +13,7 @@ import uuid
 
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from threading import Lock
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from flask import Flask, Response, request, stream_with_context
@@ -90,6 +91,7 @@ API_KEY_ENV_VARS = {
 app = Flask(__name__)
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+_LOOPBACK_URL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 _SERVER_HOST = os.getenv("HOST", "127.0.0.1").strip()
 _IS_LOOPBACK_SERVER = _SERVER_HOST.lower() in LOOPBACK_HOSTS
 _API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "").strip()
@@ -117,6 +119,21 @@ def _origin_is_allowed(origin):
     return not origin or origin in _ALLOWED_ORIGINS
 
 
+def _host_is_allowed():
+    # A browser using an attacker-controlled hostname may omit Origin after
+    # DNS rebinding that name to loopback. Require the Host header itself to
+    # identify loopback whenever loopback binding is the only authentication.
+    if not _IS_LOOPBACK_SERVER or _API_AUTH_TOKEN:
+        return True
+    try:
+        hostname = urlsplit(request.host_url).hostname
+    except (TypeError, ValueError):
+        return False
+    if not hostname:
+        return False
+    return hostname.lower().rstrip(".") in _LOOPBACK_URL_HOSTNAMES
+
+
 def _has_valid_bearer_token():
     if not _API_AUTH_TOKEN:
         return _IS_LOOPBACK_SERVER
@@ -125,6 +142,8 @@ def _has_valid_bearer_token():
 
 @app.before_request
 def _secure_api_request():
+    if not _host_is_allowed():
+        return {"error": "Host is not allowed."}, 403
     origin = request.headers.get("Origin")
     if not _origin_is_allowed(origin):
         return {"error": "Origin is not allowed."}, 403
