@@ -248,6 +248,25 @@ test("write_file's preview diff for a trailing-line deletion applies cleanly", (
   rmSync(project, { recursive: true, force: true });
 });
 
+test("write_file's preview diff for a pure insertion applies cleanly", () => {
+  // A pure insertion has a zero-length old-side range. Unified-diff
+  // coordinates place that range on the line before the insertion point.
+  const { project } = makeGitProject();
+  const target = join(project, "notes.txt");
+  writeFileSync(target, "a\nb\n", "utf8");
+
+  const preview = write_file("notes.txt", "a\ninserted\nb\n", false);
+  assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+  const diff = String(preview.diff);
+  assert.match(diff, /@@ -1,0 \+2,1 @@/);
+
+  const patch = `--- a/notes.txt\n+++ b/notes.txt\n${diff.split("\n").slice(2).join("\n")}\n`;
+  const applied = apply_patch(patch, true);
+  assert.ok(!("error" in applied), JSON.stringify(applied));
+  assert.equal(readFileSync(target, "utf8"), "a\ninserted\nb\n");
+  rmSync(project, { recursive: true, force: true });
+});
+
 test("apply_patch does not use git apply path open for TOCTOU", () => {
   // If a symlink appears only after preview, confirm-time re-check must refuse.
   const { project, outside } = makeGitProject();
