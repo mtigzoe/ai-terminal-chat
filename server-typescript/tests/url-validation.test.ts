@@ -138,6 +138,46 @@ it("blocks 169.254.x.x (link-local) - caught by metadata check", () => {
       const result = validateProviderBaseUrl("http://172.32.0.1:11434/v1");
       expect(result.valid).toBe(true);
     });
+
+    // The config-time list used to be narrower than safe-fetch.ts's
+    // request-time list, so the settings page accepted and persisted these
+    // URLs and the very next request failed with a "could not reach" message
+    // for a destination the server's own validator had approved.
+    it("blocks 100.64.0.0/10 (CGNAT, RFC 6598)", () => {
+      for (const host of ["100.64.0.1", "100.127.255.255"]) {
+        const result = validateProviderBaseUrl(`http://${host}:11434/v1`);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain("Private IP");
+      }
+    });
+
+    it("allows 100.128.0.1 (just outside CGNAT)", () => {
+      const result = validateProviderBaseUrl("http://100.128.0.1:11434/v1");
+      expect(result.valid).toBe(true);
+    });
+
+    it("blocks 0.0.0.0/8 (this-host / unspecified)", () => {
+      for (const host of ["0.0.0.0", "0.1.2.3"]) {
+        const result = validateProviderBaseUrl(`http://${host}:11434/v1`);
+        expect(result.valid).toBe(false);
+      }
+    });
+
+    it("blocks 224.0.0.0-255.255.255.255 (multicast and reserved)", () => {
+      for (const host of ["224.0.0.1", "240.0.0.1", "255.255.255.255"]) {
+        const result = validateProviderBaseUrl(`http://${host}:11434/v1`);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain("Private IP");
+      }
+    });
+
+    it("blocks 192.0.0.0/24 and 198.18.0.0/15 special-purpose ranges", () => {
+      for (const host of ["192.0.0.1", "198.18.0.1", "198.19.255.255"]) {
+        const result = validateProviderBaseUrl(`http://${host}:11434/v1`);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain("Private IP");
+      }
+    });
   });
 
   describe("cloud metadata endpoint blocking", () => {
@@ -177,6 +217,28 @@ it("blocks IPv4-mapped private IPv6", () => {
     const result = validateProviderBaseUrl("http://[::ffff:127.0.0.1]:11434/v1");
     expect(result.valid).toBe(false);
     expect(result.error.toLowerCase()).toContain("private ip");
+  });
+
+  it("blocks fc00::/7 (unique-local)", () => {
+    const result = validateProviderBaseUrl("http://[fc00::1]:11434/v1");
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Unique-local");
+  });
+
+  it("blocks fec0::/10 (deprecated site-local)", () => {
+    // Parity with server-python's security._is_blocked_ip is_site_local check,
+    // added after the Python side was fixed for site-local provider targets.
+    for (const host of ["fec0::1", "feff::1"]) {
+      const result = validateProviderBaseUrl(`http://[${host}]:11434/v1`);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain("Site-local");
+    }
+  });
+
+  it("blocks ff00::/8 (multicast)", () => {
+    const result = validateProviderBaseUrl("http://[ff02::1]:11434/v1");
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Multicast");
   });
   });
 

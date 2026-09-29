@@ -30,6 +30,18 @@ test("blockedAddressReason rejects private and metadata", () => {
   assert.ok(blockedAddressReason("10.0.0.1", true)); // still blocked
 });
 
+test("blockedAddressReason rejects the IETF protocol-assignment and benchmarking ranges", () => {
+  // 192.0.0.0/24 and 198.18.0.0/15 are not RFC 1918 space, so they were
+  // reachable here while url-validation.ts's config-time list (before this
+  // round) rejected them. Both sides now apply the same policy.
+  for (const address of ["192.0.0.1", "192.0.0.255", "198.18.0.1", "198.19.255.255"]) {
+    assert.ok(blockedAddressReason(address, false), address);
+    assert.ok(blockedAddressReason(`::ffff:${address}`, false), address);
+  }
+  assert.equal(blockedAddressReason("192.0.1.1", false), null);
+  assert.equal(blockedAddressReason("198.20.0.1", false), null);
+});
+
 test("blockedAddressReason rejects multicast and reserved IPv4 ranges", () => {
   assert.ok(blockedAddressReason("224.0.0.1", false));
   assert.ok(blockedAddressReason("239.255.255.255", false));

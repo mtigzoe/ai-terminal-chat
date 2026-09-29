@@ -19,7 +19,23 @@ from openrouter import OpenRouterProvider  # noqa: E402
 from nvidia import NVIDIAProvider  # noqa: E402
 from providers import SUPPORTED_PROVIDERS, get_provider, load_provider_config  # noqa: E402
 from xai import XAIProvider  # noqa: E402
+from safe_fetch import SSRFError  # noqa: E402
 from base import ToolCall  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("provider_cls", "key_name"),
+    [
+        (KiloProvider, "KILO_API_KEY"),
+        (OpenAIProvider, "OPENAI_API_KEY"),
+        (XAIProvider, "XAI_API_KEY"),
+        (OpenRouterProvider, "OPENROUTER_API_KEY"),
+        (AnthropicProvider, "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_remote_providers_reject_whitespace_only_api_keys(provider_cls, key_name):
+    with pytest.raises(RuntimeError, match=key_name):
+        provider_cls(api_key="   ")
 
 
 def test_gemini_schema_conversion_is_recursive():
@@ -127,6 +143,22 @@ def test_ollama_probe_uses_native_api():
     assert result == {"available": True, "error": None}
     request.assert_called_once()
     assert request.call_args.args[:2] == ("GET", "http://linux-host:11434/api/tags")
+
+
+def test_ollama_probe_preserves_ssrf_policy_error():
+    provider = OllamaProvider(
+        base_url="http://linux-host:11434/v1",
+        model="qwen3.5:9b",
+    )
+
+    with patch(
+        "ollama.safe_fetch.safe_request",
+        side_effect=SSRFError("Blocked address: private target"),
+    ):
+        result = provider.probe()
+
+    assert result == {"available": False, "error": "Blocked address: private target"}
+    assert "Could not reach Ollama" not in result["error"]
 
 
 def test_ollama_lists_native_models():
@@ -754,6 +786,19 @@ def test_openai_provider_unreachable_probe_returns_actionable_error():
     assert result["available"] is False
     assert "Could not reach OpenAI" in result["error"]
     assert "api.openai.com" in result["error"]
+
+
+def test_openai_probe_preserves_ssrf_policy_error():
+    provider = OpenAIProvider(api_key="test-key")
+
+    with patch(
+        "openai_compatible.safe_fetch.safe_request",
+        side_effect=SSRFError("Blocked address: private target"),
+    ):
+        result = provider.probe()
+
+    assert result == {"available": False, "error": "Blocked address: private target"}
+    assert "Could not reach OpenAI" not in result["error"]
 
 
 def test_openai_provider_http_error_surfaces_status():

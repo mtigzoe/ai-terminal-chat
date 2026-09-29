@@ -236,6 +236,13 @@ class OllamaProvider(OpenAICompatibleProvider):
                     f"from {self.native_base_url}/api/tags."
                 ),
             }
+        except safe_fetch.SSRFError as exc:
+            # A blocked private/metadata destination is a policy rejection, not
+            # a connectivity problem. _native_request() re-raises SSRFError
+            # ahead of the generic handler; without this branch the blanket
+            # except below rewrote it as "Could not reach Ollama ... Is Ollama
+            # running?", which sends the user down the wrong debugging path.
+            return {"available": False, "error": str(exc)}
         except Exception as exc:
             message = str(exc)
             if not message.startswith("Could not reach Ollama"):

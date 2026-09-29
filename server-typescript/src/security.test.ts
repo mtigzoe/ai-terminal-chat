@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
@@ -394,6 +394,43 @@ describe("project root persistence", () => {
       assert.match(err.message, /native folder picker/);
       return true;
     });
+  });
+
+  // config.ts's persistAppConfig() already aborts on a non-ENOENT read error
+  // so a transient failure cannot clobber saved keys. withConfigLock() is the
+  // writer behind /project-root and /providers/select, and it used to swallow
+  // the same error and then rewrite the file with only the mutated field.
+  test("a transient read failure does not clobber unrelated saved config keys", () => {
+    const target = mkdtempSync(join(tmpdir(), "ai-terminal-chat-target-"));
+    const configFile = join(configDir, "config.json");
+    try {
+      // A directory at the config path makes readFileSync throw EISDIR, the
+      // same shape as EPERM/EBUSY from a Windows indexer or antivirus.
+      mkdirSync(configFile);
+      assert.throws(() => setProjectRoot(target));
+      // The failed read must not have replaced anything on disk.
+      assert.ok(existsSync(configFile));
+      assert.ok(!statSync(configFile).isFile(), "config path must still be untouched");
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  test("invalid JSON is backed up before withConfigLock replaces it", () => {
+    const target = mkdtempSync(join(tmpdir(), "ai-terminal-chat-target-"));
+    const configFile = join(configDir, "config.json");
+    try {
+      writeFileSync(configFile, "{not json");
+      setProjectRoot(target);
+      const backups = readdirSync(configDir).filter((name) =>
+        name.startsWith("config.json.corrupt-"),
+      );
+      assert.equal(backups.length, 1, JSON.stringify(readdirSync(configDir)));
+      const config = JSON.parse(readFileSync(configFile, "utf8")) as { project_root: string };
+      assert.equal(config.project_root, target);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
   });
 });
 

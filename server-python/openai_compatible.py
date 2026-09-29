@@ -109,6 +109,11 @@ class OpenAICompatibleProvider(Provider):
         display_name: str = "OpenAI-compatible",
         capabilities: Optional[ProviderCapabilities] = None,
     ):
+        # Environment/configuration values can contain accidental whitespace.
+        # Treat a whitespace-only key as missing rather than sending an
+        # unusable Bearer credential. Matches nvidia.py.
+        if api_key is not None:
+            api_key = str(api_key).strip() or None
         if not (base_url or "").strip():
             raise RuntimeError(
                 f"{display_name} base URL is not set. Configure it in "
@@ -172,6 +177,13 @@ class OpenAICompatibleProvider(Provider):
                     f"{response.status_code} from {self.base_url}/models."
                 ),
             }
+        except safe_fetch.SSRFError as exc:
+            # A blocked private/metadata destination is a policy rejection, not
+            # a connectivity problem. _request() re-raises SSRFError ahead of
+            # the generic handler; without this branch the blanket except
+            # below rewrote it as "Could not reach ... Is it running?",
+            # pointing the user at the wrong problem entirely.
+            return {"available": False, "error": str(exc)}
         except Exception as exc:
             # _request() already wraps requests.RequestException in an
             # actionable RuntimeError via _unreachable_message(). Route

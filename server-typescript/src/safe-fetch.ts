@@ -35,6 +35,8 @@ const PRIVATE_IPV4_RANGES: Array<{ start: number; end: number }> = [
   { start: ipToNum("169.254.0.0"), end: ipToNum("169.254.255.255") },
   { start: ipToNum("0.0.0.0"), end: ipToNum("0.255.255.255") },
   { start: ipToNum("100.64.0.0"), end: ipToNum("100.127.255.255") }, // CGNAT
+  { start: ipToNum("192.0.0.0"), end: ipToNum("192.0.0.255") }, // IETF protocol assignments
+  { start: ipToNum("198.18.0.0"), end: ipToNum("198.19.255.255") }, // benchmarking (RFC 2544)
   { start: ipToNum("224.0.0.0"), end: ipToNum("255.255.255.255") }, // multicast/reserved
 ];
 

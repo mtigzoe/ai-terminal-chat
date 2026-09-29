@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { getProjectRoot, isSensitivePath, isPathWithinRoot, safePath, writeFileWithinProject, unlinkWithinProject, readFileWithinProject, SecurityValidationError } from "./security.ts";
+import { getProjectRoot, isReadAllowed, isSensitivePath, isPathWithinRoot, safePath, writeFileWithinProject, unlinkWithinProject, readFileWithinProject, SecurityValidationError } from "./security.ts";
 import { getGitSshCommand } from "./git.ts";
 import { resolveTrustedExecutable } from "./trusted-exec.ts";
 
@@ -500,7 +500,10 @@ function applyHunksToText(original: string, hunks: DiffHunk[]): string {
   let trailingNewline = hadTrailingNewline;
 
   for (const hunk of hunks) {
-    const targetStart = hunk.oldStart === 0 ? 0 : hunk.oldStart - 1;
+    // Unified diff coordinates point at the line before an insertion when
+    // oldCount is zero (for example @@ -1,0 +2,1 @@ inserts after line 1).
+    // For non-empty old ranges, oldStart is the normal 1-based first line.
+    const targetStart = hunk.oldCount === 0 ? hunk.oldStart : hunk.oldStart - 1;
     if (
       (hunk.oldStart < 0 || (hunk.oldCount === 0 ? hunk.oldStart < 0 : hunk.oldStart < 1)) ||
       targetStart < srcIndex
@@ -633,6 +636,11 @@ export function delete_file(relPath: string, confirm = false): Record<string, un
 }
 
 function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath: string, lexicalPath = absolutePath): void {
+  // `git update-index --cacheinfo` takes a Git pathspec, which always uses
+  // forward slashes. path.relative() emits the host separator, so on Windows
+  // a nested path reached Git as "sub\file.txt" and Git rejected the whole
+  // entry with "Invalid path".
+  const indexPath = relativePath.split(path.sep).join("/");
   const lexicalStat = fs.lstatSync(lexicalPath);
   if (lexicalStat.isSymbolicLink()) {
     const target = fs.readlinkSync(lexicalPath, "utf8");
@@ -640,7 +648,7 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
     if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
     const oid = hashed.stdout.trim();
     if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
-    const updated = runGit(["update-index", "--add", "--cacheinfo", `120000,${oid},${relativePath}`]);
+    const updated = runGit(["update-index", "--add", "--cacheinfo", `120000,${oid},${indexPath}`]);
     if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
     return;
   }
@@ -674,7 +682,7 @@ function stageFileWithoutFiltersForWriteTool(relativePath: string, absolutePath:
     if (hashed.code !== 0) throw new Error(hashed.stderr.trim() || hashed.stdout.trim() || "hash-object failed");
     const oid = hashed.stdout.trim();
     if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error("Unexpected hash-object output.");
-    const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${relativePath}`]);
+    const updated = runGit(["update-index", "--add", "--cacheinfo", `${mode},${oid},${indexPath}`]);
     if (updated.code !== 0) throw new Error(updated.stderr.trim() || updated.stdout.trim() || "update-index failed");
   } finally {
     try { fs.rmSync(hashInputDir, { recursive: true, force: true }); } catch { /* best effort */ }
@@ -704,6 +712,10 @@ export function git_add(relPath: string, confirm = false): Record<string, unknow
     }
   }
 
+  // git.ts's gitAdd() applies the same check. This is the copy the agent
+  // actually calls (routes.ts wires git_add from this module), so without it
+  // the Project-page file selection did not scope what the model could stage.
+  if (!isReadAllowed(relPath)) return { error: `Access denied: '${relPath}' is not selected for the agent.` };
   if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${relPath}` };
   const gitError = gitRepoError();
   if (gitError) return gitError;
@@ -922,8 +934,15 @@ function generateUnifiedDiff(
     return diff.join("\n");
   }
 
-  const oldStart = prefix + 1;
-  const newStart = prefix + 1;
+  // A zero-length side uses the line before the insertion/deletion point.
+  // This is symmetric: pure insertions need oldStart=prefix, while pure
+  // deletions need newStart=prefix.
+  const oldStart = oldChanged.length === 0 ? prefix : prefix + 1;
+  // A pure-deletion hunk inserts nothing on the new side, so its new-side
+  // start is the line *before* the insertion point (git's convention), not
+  // prefix + 1. applyHunksToText() already enforces that rule, so emitting
+  // prefix + 1 here produced a preview diff its own apply_patch rejected.
+  const newStart = newChanged.length === 0 ? prefix : prefix + 1;
   diff.push(`@@ -${oldStart},${oldChanged.length} +${newStart},${newChanged.length} @@`);
 
   for (const line of oldChanged) diff.push(`-${line}`);

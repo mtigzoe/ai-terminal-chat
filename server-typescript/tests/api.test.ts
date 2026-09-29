@@ -851,10 +851,13 @@ describe("POST /confirm", () => {
     setProjectRoot(root);
 
     try {
+      // The Project-page selection is a permission boundary that git_add
+      // enforces, so the file under test has to be selected on both requests
+      // (mirrors server-python's tools.git_add -> require_read_allowed).
       const chatRes = await createTestApp().request("http://localhost/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat: "git add hello.txt", history: [] }),
+        body: JSON.stringify({ chat: "git add hello.txt", history: [], allowed_paths: ["hello.txt"] }),
       });
       expect(chatRes.status).toBe(200);
       const chatData = await chatRes.json();
@@ -867,7 +870,11 @@ describe("POST /confirm", () => {
       const confirmRes = await createTestApp().request("http://localhost/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action_id: pending.action_id, confirmed: true }),
+        body: JSON.stringify({
+          action_id: pending.action_id,
+          confirmed: true,
+          allowed_paths: ["hello.txt"],
+        }),
       });
       expect(confirmRes.status).toBe(200);
       const confirmData = await confirmRes.json();

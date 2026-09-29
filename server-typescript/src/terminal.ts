@@ -920,6 +920,17 @@ function directoryListingPermissionError(command: string): string | null {
   }
 
   for (const p of pathArgs) {
+    // On Windows the listing is executed as `cmd /c dir <arg>`, so cmd.exe
+    // expands %VAR% references after this check has run. `ls %TEMP%` therefore
+    // resolved to a relative path under the project root here and then listed
+    // the real %TEMP% directory. Refuse environment-variable and other shell
+    // expansion characters; a project-relative path never needs them.
+    if (/[%!^&|<>`$]/.test(p) || /[\n\r"]/.test(p)) {
+      return (
+        "Access denied: directory listing arguments must be plain " +
+        `project-relative paths (${p}).`
+      );
+    }
     let resolved: string;
     try {
       const candidate = isAbsoluteOnAnyPlatform(p) ? p : join(root, p);

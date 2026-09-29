@@ -20,6 +20,7 @@ import { execFileSync } from "node:child_process";
 import {
   __setProjectRootForTests,
   __resetProjectRootForTests,
+  runWithAllowedReadPaths,
 } from "./security.ts";
 import { apply_patch, write_file, git_add } from "./write-tools.ts";
 
@@ -187,6 +188,83 @@ test("git_add creates its hash input with exclusive creation inside a private te
     fs.writeFileSync = originalWriteFileSync;
     rmSync(project, { recursive: true, force: true });
   }
+});
+
+test("git_add stages a file in a subdirectory", () => {
+  // `git update-index --cacheinfo` takes a Git pathspec, which always uses
+  // forward slashes. path.relative() emitted the host separator, so on Windows
+  // every nested path reached Git as "sub\file.txt" and Git rejected the whole
+  // entry: `error: Invalid path 'config\prod.json'`.
+  const { project } = makeGitProject();
+  mkdirSync(join(project, "config"), { recursive: true });
+  writeFileSync(join(project, "config", "prod.json"), '{"a":1}\n', "utf8");
+
+  const result = git_add("config/prod.json", true);
+  assert.equal(result.staged, true, JSON.stringify(result));
+
+  const staged = execFileSync("git", ["diff", "--cached", "--name-only"], {
+    cwd: project,
+    encoding: "utf8",
+  });
+  assert.equal(staged.trim(), "config/prod.json");
+  rmSync(project, { recursive: true, force: true });
+});
+
+test("git_add refuses a path outside the agent file selection", async () => {
+  // git.ts's gitAdd() gates staging on the Project-page file selection. This
+  // is the copy the agent actually calls, so the gate has to exist here too.
+  const { project } = makeGitProject();
+  mkdirSync(join(project, "config"), { recursive: true });
+  writeFileSync(join(project, "config", "prod.json"), '{"a":1}\n', "utf8");
+  writeFileSync(join(project, "selected.txt"), "selected\n", "utf8");
+
+  const result = await runWithAllowedReadPaths(["selected.txt"], () =>
+    git_add("config/prod.json", true),
+  );
+  assert.ok("error" in result, JSON.stringify(result));
+  assert.match(String(result.error), /not selected/i);
+  assert.equal(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: project, encoding: "utf8" }).trim(), "");
+  rmSync(project, { recursive: true, force: true });
+});
+
+test("write_file's preview diff for a trailing-line deletion applies cleanly", () => {
+  // A pure-deletion hunk inserts nothing, so its new-side start is the line
+  // *before* the insertion point. generateUnifiedDiff() emitted prefix + 1,
+  // which applyHunksToText() then rejected — the diff the model was shown for
+  // approval could not be applied.
+  const { project } = makeGitProject();
+  const target = join(project, "notes.txt");
+  writeFileSync(target, "a\nb\nc\n", "utf8");
+
+  const preview = write_file("notes.txt", "a\nb\n", false);
+  assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+  const diff = String(preview.diff);
+  assert.match(diff, /@@ -\d+,\d+ \+\d+,0 @@/);
+
+  const patch = `--- a/notes.txt\n+++ b/notes.txt\n${diff.split("\n").slice(2).join("\n")}\n`;
+  const applied = apply_patch(patch, true);
+  assert.ok(!("error" in applied), JSON.stringify(applied));
+  assert.equal(readFileSync(target, "utf8"), "a\nb\n");
+  rmSync(project, { recursive: true, force: true });
+});
+
+test("write_file's preview diff for a pure insertion applies cleanly", () => {
+  // A pure insertion has a zero-length old-side range. Unified-diff
+  // coordinates place that range on the line before the insertion point.
+  const { project } = makeGitProject();
+  const target = join(project, "notes.txt");
+  writeFileSync(target, "a\nb\n", "utf8");
+
+  const preview = write_file("notes.txt", "a\ninserted\nb\n", false);
+  assert.ok("requires_confirmation" in preview, JSON.stringify(preview));
+  const diff = String(preview.diff);
+  assert.match(diff, /@@ -1,0 \+2,1 @@/);
+
+  const patch = `--- a/notes.txt\n+++ b/notes.txt\n${diff.split("\n").slice(2).join("\n")}\n`;
+  const applied = apply_patch(patch, true);
+  assert.ok(!("error" in applied), JSON.stringify(applied));
+  assert.equal(readFileSync(target, "utf8"), "a\ninserted\nb\n");
+  rmSync(project, { recursive: true, force: true });
 });
 
 test("apply_patch does not use git apply path open for TOCTOU", () => {

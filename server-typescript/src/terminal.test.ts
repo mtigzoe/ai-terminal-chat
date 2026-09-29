@@ -911,6 +911,26 @@ test("Windows dir /s:<outside-path> denied", async () => {
   assert.match(String(result.error), /access denied/i);
 });
 
+test("ls '..' denied (quoted traversal)", async () => {
+  // tokenizeCommand() strips the quotes, so the containment check sees a
+  // relative "..". The escape has to be denied on the unquoted form.
+  const result = await runCommand('ls ".."');
+  assert.ok(isToolError(result), 'ls ".." must be denied');
+  assert.match(String(result.error), /access denied/i);
+});
+
+test("directory listing cannot expand a Windows environment variable", async () => {
+  // On Windows the listing runs as `cmd /c dir <arg>`, so cmd.exe expands
+  // %VAR% *after* the containment check. `ls %TEMP%` passed the check as a
+  // relative path under the project root and then listed the real %TEMP%
+  // directory.
+  for (const command of ["ls %TEMP%", "dir %CD%", "ls %USERPROFILE%", "dir /s:%TEMP%"]) {
+    const result = await runCommand(command);
+    assert.ok(isToolError(result), `${command} must be denied`);
+    assert.match(String(result.error), /access denied/i);
+  }
+});
+
 test("outside-project symlink/junction denied where supported", async () => {
   const { symlinkSync, mkdirSync } = await import("node:fs");
   const root = getProjectRoot();
