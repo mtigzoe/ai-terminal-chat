@@ -141,7 +141,7 @@ export function isPathWithinRoot(
   const startsWithDrive =
     root.length >= 2 && root[1] === ":" &&
     ((first >= 65 && first <= 90) || (first >= 97 && first <= 122));
-  const windowsStyle = startsWithDrive || root.startsWith(backslash + backslash);
+  const windowsStyle = startsWithDrive || root.startsWith(backslash);
   const normalize = (value: string) => {
     const separators = windowsStyle ? value.split("/").join(backslash) : value;
     return caseInsensitive ? separators.toLowerCase() : separators;
