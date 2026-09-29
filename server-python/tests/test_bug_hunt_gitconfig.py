@@ -59,6 +59,9 @@ class TestSanitizedGitConfigRestore:
 
         after = repo["config"].read_text(encoding="utf-8")
         assert CONCURRENT in after, "the user's concurrent edit was destroyed"
+        recoveries = list(repo["config"].parent.glob("config.ai-terminal-chat-recovery-*"))
+        assert len(recoveries) == 1
+        assert MARKER in recoveries[0].read_text(encoding="utf-8")
 
     def test_concurrent_change_without_dangerous_keys_still_survives(self, repo):
         with tools._sanitized_git_config():
@@ -68,6 +71,9 @@ class TestSanitizedGitConfigRestore:
             )
 
         assert "[user]" in repo["config"].read_text(encoding="utf-8")
+        recoveries = list(repo["config"].parent.glob("config.ai-terminal-chat-recovery-*"))
+        assert len(recoveries) == 1
+        assert MARKER in recoveries[0].read_text(encoding="utf-8")
 
     # Regression: a failed restore raised OSError inside the finally block,
     # which was caught by `except OSError: pass`. The repository was left with
@@ -90,6 +96,9 @@ class TestSanitizedGitConfigRestore:
         captured = capsys.readouterr()
         assert "could not restore" in captured.err
         assert str(repo["config"]) in captured.err
+        recoveries = list(repo["config"].parent.glob("config.ai-terminal-chat-recovery-*"))
+        assert len(recoveries) == 1
+        assert MARKER in recoveries[0].read_text(encoding="utf-8")
 
     def test_failed_read_during_restore_warns(self, repo, monkeypatch, capsys):
         real_replace = tools._atomic_replace_text
@@ -111,6 +120,9 @@ class TestSanitizedGitConfigRestore:
             pass
 
         assert "could not read" in capsys.readouterr().err
+        recoveries = list(repo["config"].parent.glob("config.ai-terminal-chat-recovery-*"))
+        assert len(recoveries) == 1
+        assert MARKER in recoveries[0].read_text(encoding="utf-8")
 
     def test_exception_inside_the_block_still_restores(self, repo):
         class Boom(RuntimeError):
