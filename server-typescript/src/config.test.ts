@@ -19,7 +19,7 @@ import { acquireConfigLock, releaseConfigLock } from "./config-lock.ts";
 
 // Snapshot and restore any env vars a test touches, so tests never leak
 // state into each other or into the surrounding shell environment.
-const TRACKED_VARS = ["PORT", "PROVIDER", "AI_TERMINAL_CHAT_TEST_VAR"];
+const TRACKED_VARS = ["HOST", "PORT", "PROVIDER", "AI_TERMINAL_CHAT_TEST_VAR"];
 let snapshot: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -95,9 +95,21 @@ describe("loadServerConfig", () => {
     assert.deepEqual(loadServerConfig(), { port: 4000, host: SERVER_HOST });
   });
 
-  test("host is always loopback-only, matching server-python's hardcoded bind address", () => {
+  test("falls back when PORT is invalid or outside Node's supported range", () => {
+    for (const value of ["not-a-number", "-1", "65536"]) {
+      process.env.PORT = value;
+      assert.equal(loadServerConfig().port, 9000);
+    }
+  });
+
+  test("defaults HOST to loopback", () => {
     assert.equal(SERVER_HOST, "127.0.0.1");
     assert.equal(loadServerConfig().host, "127.0.0.1");
+  });
+
+  test("honors and trims HOST for authenticated Docker deployments", () => {
+    process.env.HOST = " 0.0.0.0 ";
+    assert.equal(loadServerConfig().host, "0.0.0.0");
   });
 });
 

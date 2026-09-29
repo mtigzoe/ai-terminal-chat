@@ -3,12 +3,10 @@ import { serve } from "@hono/node-server";
 import { app, type AppType } from "./routes.ts";
 import { runWithAllowedReadPaths } from "./security.ts";
 import { limitRequestBody } from "./request-body-limit.ts";
+import { loadServerConfig } from "./config.ts";
 import crypto from "node:crypto";
 
-// Default 127.0.0.1 keeps the non-Docker local workflow unchanged.
-// Docker sets HOST=0.0.0.0 so the API is reachable from the host.
-const host = process.env.HOST || "127.0.0.1";
-const port = parseInt(process.env.PORT || "9000", 10);
+const { host, port } = loadServerConfig();
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const isLoopbackServer = LOOPBACK_HOSTS.has(host.toLowerCase());
