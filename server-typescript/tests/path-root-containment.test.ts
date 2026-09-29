@@ -32,9 +32,9 @@ describe("isPathWithinRoot: filesystem-root project roots", () => {
     expect(isPathWithinRoot("C:\\", "D:\\other\\file.txt", ci)).toBe(false);
   });
 
-  it("accepts mixed separators under a root", () => {
+  it("normalizes mixed separators only for Windows-style roots", () => {
     expect(isPathWithinRoot("C:\\", "C:/Users/me/file.txt", ci)).toBe(true);
-    expect(isPathWithinRoot("/", "\\srv\\app\\x.txt", { caseInsensitive: false })).toBe(true);
+    expect(isPathWithinRoot("/", "\\srv\\app\\x.txt", { caseInsensitive: false })).toBe(false);
   });
 });
 
@@ -66,5 +66,11 @@ describe("isPathWithinRoot: ordinary roots are unchanged", () => {
     expect(
       isPathWithinRoot("/srv/App", "/srv/App/x.txt", { caseInsensitive: false }),
     ).toBe(true);
+  });
+
+  it("does not treat a POSIX sibling containing a backslash as a child", () => {
+    expect(
+      isPathWithinRoot("/srv/app", "/srv/app\\\\secret.txt", { caseInsensitive: false }),
+    ).toBe(false);
   });
 });
