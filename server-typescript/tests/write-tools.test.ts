@@ -606,6 +606,21 @@ describe("apply_patch", () => {
     expect(fs.readFileSync(file, "utf8")).toBe("alpha\nbeta\n++ inserted marker line\n");
   });
 
+  it("does not mistake header-looking replacement content for a file header", () => {
+    const file = path.join(root, "markers.txt");
+    fs.writeFileSync(file, "-- a/not-a-header\n");
+
+    const patch = `--- a/markers.txt
++++ b/markers.txt
+@@ -1 +1 @@
+--- a/not-a-header
++++ b/not-a-header
+`;
+    const result = apply_patch(patch, true);
+    expect((result as { error?: string }).error).toBeUndefined();
+    expect(fs.readFileSync(file, "utf8")).toBe("++ b/not-a-header\n");
+  });
+
   it("still parses a second file header after a completed hunk", () => {
     fs.writeFileSync(path.join(root, "one.txt"), "a\n");
     fs.writeFileSync(path.join(root, "two.txt"), "b\n");
