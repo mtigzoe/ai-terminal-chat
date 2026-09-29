@@ -99,7 +99,7 @@ describe("write_file", () => {
     fs.writeFileSync(path.join(root, "doc.txt"), "first\n");
     const result = write_file("doc.txt", "first\nsecond\n", false);
     const diff = (result as { diff: string }).diff;
-    expect(diff).toBe("--- a/doc.txt\n+++ b/doc.txt\n@@ -2,0 +2,1 @@\n+second");
+    expect(diff).toBe("--- a/doc.txt\n+++ b/doc.txt\n@@ -1,0 +2,1 @@\n+second");
   });
 
 
@@ -536,7 +536,7 @@ describe("apply_patch", () => {
     fs.writeFileSync(path.join(root, "append.txt"), "one\ntwo\n");
     const patch = `--- a/append.txt
 +++ b/append.txt
-@@ -3,0 +3,1 @@
+@@ -2,0 +3,1 @@
 +three
 `;
     const result = apply_patch(patch, true);
