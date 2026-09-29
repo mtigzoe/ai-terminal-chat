@@ -2040,7 +2040,7 @@ def git_status() -> dict:
 
     Returns:
         A dictionary with summary, details, and structured fields
-        (clean, ahead, behind, staged, etc.), or an error.
+        (clean, ahead, behind, staged, conflicts, etc.), or an error.
     """
 
     raw = _git_status_raw()
@@ -3728,11 +3728,13 @@ TOOL_SCHEMAS = {
     "git_status": {
         "description": (
             "Shows the current git status of the project as plain-language "
-            "summary and structured fields (clean, staged, ahead/behind, "
-            "file details). Always call this instead of guessing or "
-            "assuming the repository state. Use the structured fields to "
-            "answer questions such as whether changes are committed or "
-            "whether the branch is synchronized with the remote."
+            "summary and structured fields (clean, staged, conflicts, "
+            "ahead/behind, file details). Always call this instead of "
+            "guessing or assuming the repository state. Use the structured "
+            "fields to answer questions such as whether changes are "
+            "committed, whether conflicts must be resolved before "
+            "committing, or whether the branch is synchronized with the "
+            "remote."
         ),
         "parameters": {
             "type": "object",
