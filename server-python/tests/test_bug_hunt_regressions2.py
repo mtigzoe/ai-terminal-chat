@@ -53,6 +53,14 @@ class TestExtractPatchTargetPaths:
 +++ not-a-header"""
         assert tools._extract_patch_target_paths(patch) == {"a.txt"}
 
+    def test_adjacent_removed_and_added_lines_that_look_like_headers_are_body(self):
+        patch = """--- a/schema.sql
++++ b/schema.sql
+@@ -1 +1 @@
+--- a/../../etc/passwd
++++ b/not-a-header"""
+        assert tools._extract_patch_target_paths(patch) == {"schema.sql"}
+
     def test_real_multi_file_headers_are_still_found(self):
         # A minimal multi-file patch carries no "diff --git" separators, so the
         # "--- "/"+++ " header pair is what ends the first hunk.
