@@ -93,6 +93,15 @@ describe("summarizeGitStatus", () => {
     expect(result.summary).not.toContain("Initial commit");
   });
 
+  it("does not report detached HEAD as a branch name", () => {
+    const result = summarizeGitStatus("## HEAD (no branch)\n");
+
+    expect(result.branch).toBeNull();
+    expect(result.hasRemote).toBe(false);
+    expect(result.summary).toContain("detached HEAD");
+    expect(result.summary).not.toContain("not tracking a remote branch");
+  });
+
   it("still extracts the branch from a normal banner", () => {
     expect(summarizeGitStatus("## main\n").branch).toBe("main");
     expect(summarizeGitStatus("## main...origin/main [ahead 1]\n").branch).toBe("main");
