@@ -43,6 +43,7 @@ from tools import (
     add_allowed_command,
     get_allowed_commands,
     is_command_allowed,
+    is_execution_risk_command,
     list_files,
     read_file,
     remove_allowed_command,
@@ -368,6 +369,16 @@ def _extract_user_instructions(data: dict):
     return trimmed or None
 
 
+def _is_confirmable_action(action) -> bool:
+    if action.tool_name == "read_file_permission":
+        return True
+    if action.tool_name in WRITE_TOOL_NAMES or action.tool_name in GIT_CONFIRM_TOOL_NAMES:
+        return True
+    if action.tool_name == "run_command":
+        return is_execution_risk_command(str(action.args.get("command") or ""))
+    return False
+
+
 def _confirm_legacy(action, action_id: str, confirmed: bool):
     """Execute a single confirmed/declined action in isolation, with no
     saved loop state to resume. This is the original /confirm behavior,
@@ -388,7 +399,7 @@ def _confirm_legacy(action, action_id: str, confirmed: bool):
     if not confirmed:
         return {"confirmed": False, "action_id": action_id, "tool": action.tool_name, "cancelled": True}
 
-    if action.tool_name not in WRITE_TOOL_NAMES and action.tool_name not in GIT_CONFIRM_TOOL_NAMES:
+    if not _is_confirmable_action(action):
         return {"error": "Only pending write actions can be confirmed."}, 400
     function = TOOL_FUNCTIONS.get(action.tool_name)
     if function is None:
@@ -465,12 +476,15 @@ def confirm_action():
     if root_conflict is not None:
         return root_conflict
 
+    # Validate before pop_pending() consumes the one-time action. Besides
+    # writes and git mutations, execution-risk commands are confirmable; the
+    # agent forces their preview call to confirm=False before creating them.
+    if not _is_confirmable_action(peeked):
+        return {"error": "Only pending write actions can be confirmed."}, 400
+
     action = pop_pending(action_id)
     if action is None:
         return {"error": "Pending action not found or already resolved."}, 404
-
-    if action.tool_name != "read_file_permission" and action.tool_name not in WRITE_TOOL_NAMES and action.tool_name not in GIT_CONFIRM_TOOL_NAMES:
-        return {"error": "Only pending write actions can be confirmed."}, 400
 
     # The saved project root was validated above (and pop_pending() refuses a
     # stale root as well), so the resume below can never run against a

@@ -17,6 +17,7 @@ from tools import (
     TOOL_FUNCTIONS,
     TOOL_TIMEOUTS,
     WRITE_TOOL_NAMES,
+    is_execution_risk_command,
 )
 
 MAX_TOOL_ROUNDS = 10
@@ -584,7 +585,16 @@ def _agent_loop(
                 return
             elif consecutive_repeat_count > MAX_CONSECUTIVE_IDENTICAL_CALLS:
                 result = {"error": f"{function_name} has already been called with these exact arguments {consecutive_repeat_count - 1} time(s) in a row. Do not retry the identical call. Inspect the previous result, choose a different tool or different arguments, or explain the blockage to the user."}
-            elif function_name in WRITE_TOOL_NAMES or function_name in GIT_CONFIRM_TOOL_NAMES:
+            elif (
+                function_name in WRITE_TOOL_NAMES
+                or function_name in GIT_CONFIRM_TOOL_NAMES
+                or (
+                    function_name == "run_command"
+                    and is_execution_risk_command(
+                        str(function_args.get("command") or "")
+                    )
+                )
+            ):
                 preview_args = dict(function_args)
                 preview_args["confirm"] = False
                 timeout_seconds = TOOL_TIMEOUTS.get(function_name, DEFAULT_TOOL_TIMEOUT)
@@ -621,6 +631,11 @@ def _agent_loop(
                         confirm_message = "Waiting for confirmation to push"
                     elif function_name == "git_pull":
                         confirm_message = "Waiting for confirmation to pull"
+                    elif function_name == "run_command":
+                        command = str(function_args.get("command") or "")
+                        confirm_message = (
+                            f"Waiting for confirmation to run: {command[:80]}"
+                        )
                     elif isinstance(path, str) and path.strip():
                         confirm_message = f"Waiting for confirmation to modify {path}"
                     else:
