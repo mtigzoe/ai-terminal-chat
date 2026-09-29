@@ -160,7 +160,8 @@ class TestBytesWrittenMatchesDisk:
         result = tools.create_file("nl.txt", "a\nb\n", confirm=True)
         on_disk = (root / "nl.txt").read_bytes()
         assert result["bytes_written"] == len(on_disk)
-        assert result["bytes_written"] == len(b"a\nb\n".replace(b"\n", b"\r\n"))
+        # The exact newline bytes are platform-dependent; the contract is the
+        # number actually written to disk, not a Windows-only CRLF count.
 
     def test_single_line_payload(self, root):
         result = tools.create_file("plain.txt", "abc", confirm=True)
