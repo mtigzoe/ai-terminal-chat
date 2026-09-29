@@ -24,7 +24,7 @@ describe('Electron navigation boundary', () => {
     // same allow/deny comparison.
     const isWin = process.platform === 'win32';
     const dist = isWin ? 'C:\\app\\client-react\\dist' : '/app/client-react/dist';
-    const target = `${dist}\\index.html`;
+    const target = isWin ? `${dist}\\\\index.html` : `${dist}/index.html`;
     const fileUrl = (name) => (isWin
       ? `file:///C:/app/client-react/dist/${name}`
       : `file:///app/client-react/dist/${name}`);
