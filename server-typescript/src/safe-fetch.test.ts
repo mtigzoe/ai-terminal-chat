@@ -63,7 +63,24 @@ test("IPv6 link-local /10 range is fully blocked", () => {
   assert.ok(blockedAddressReason("fe81::1", false));
   assert.ok(blockedAddressReason("fe9a::1", false));
   assert.ok(blockedAddressReason("febf::1", false));
-  assert.equal(blockedAddressReason("fec0::1", false), null);
+});
+
+test("non-public and malformed IPv6 addresses are blocked", () => {
+  for (const address of [
+    "100::1", // discard-only
+    "2001:db8::1", // documentation
+    "2002:808:808::1", // deprecated 6to4
+    "3fff::1", // documentation
+    "fec0::1", // deprecated site-local
+    "not:an:ip",
+  ]) {
+    assert.ok(blockedAddressReason(address, false), address);
+  }
+});
+
+test("globally reachable IPv6 addresses remain allowed", () => {
+  assert.equal(blockedAddressReason("2606:4700:4700::1111", false), null);
+  assert.equal(blockedAddressReason("2001:3::1", false), null);
 });
 
 test("resolveAndPinHostname rejects mixed public+private DNS answers", async () => {
