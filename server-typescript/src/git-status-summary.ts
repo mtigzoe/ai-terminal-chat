@@ -10,9 +10,22 @@ export interface GitStatusSummary {
   changed: number;
   untracked: number;
   staged: number;
+  conflicts: number;
   hasRemote: boolean;
   synchronized: boolean;
 }
+
+// The full set of `git status --short` XY codes that represent unresolved
+// merge conflicts. Check these before ordinary staged add/delete handling.
+const GIT_CONFLICT_STATUS_CODES = new Set([
+  "DD",
+  "AU",
+  "UD",
+  "UA",
+  "DU",
+  "AA",
+  "UU",
+]);
 
 /**
  * Turn `git status --short --branch` into concise, plain-language information.
@@ -23,7 +36,11 @@ export async function gitStatusSummary(): Promise<GitStatusSummary | { error: st
   const result = await gitStatus();
   if ("error" in result) return result as { error: string };
 
-  const status = String(result.status || "");
+  return summarizeGitStatus(String(result.status || ""));
+}
+
+/** Parse `git status --short --branch` output into user-facing status. */
+export function summarizeGitStatus(status: string): GitStatusSummary {
   const lines = status.split(/\r?\n/).filter(Boolean);
   const branchLine = lines.find((line) => line.startsWith("## ")) || "";
 
@@ -45,6 +62,7 @@ export async function gitStatusSummary(): Promise<GitStatusSummary | { error: st
   let changed = 0;
   let untracked = 0;
   let staged = 0;
+  let conflicts = 0;
   const details: string[] = [];
 
   for (const line of lines) {
@@ -57,6 +75,15 @@ export async function gitStatusSummary(): Promise<GitStatusSummary | { error: st
     if (x === "?" && y === "?") {
       untracked++;
       details.push(`${file} — new file, not tracked by Git`);
+      continue;
+    }
+
+    if (GIT_CONFLICT_STATUS_CODES.has(`${x}${y}`)) {
+      changed++;
+      conflicts++;
+      details.push(
+        `${file} — unresolved merge conflict, must be resolved before this can be committed`,
+      );
       continue;
     }
 
@@ -83,6 +110,12 @@ export async function gitStatusSummary(): Promise<GitStatusSummary | { error: st
   } else {
     parts.push(
       `You have ${totalChanges} uncommitted file${totalChanges === 1 ? "" : "s"}.`
+    );
+  }
+
+  if (conflicts > 0) {
+    parts.push(
+      `${conflicts} file${conflicts === 1 ? " has" : "s have"} an unresolved merge conflict and must be resolved before you can commit.`,
     );
   }
 
@@ -120,6 +153,7 @@ export async function gitStatusSummary(): Promise<GitStatusSummary | { error: st
     changed,
     untracked,
     staged,
+    conflicts,
     hasRemote,
     synchronized,
   };

@@ -80,7 +80,7 @@ export const TOOL_SCHEMAS: ToolSchemas = {
   },
   git_status: {
     description:
-      "Shows the current git status of the project as plain-language summary and structured fields (clean, staged, ahead/behind, file details). Always call this instead of guessing or assuming the repository state. Use the structured fields to answer questions such as whether changes are committed or whether the branch is synchronized with the remote.",
+      "Shows the current git status of the project as plain-language summary and structured fields (clean, staged, conflicts, ahead/behind, file details). Always call this instead of guessing or assuming the repository state. Use the structured fields to answer questions such as whether changes are committed, whether conflicts must be resolved, or whether the branch is synchronized with the remote.",
     parameters: {
       type: "object",
       properties: {},

@@ -61,11 +61,12 @@ export const SYSTEM_INSTRUCTION =
   "hallucinate repository state, commit history, or the current " +
   "branch.\n" +
   "- git_status returns a plain-language summary plus structured " +
-  "fields (clean, staged, ahead, behind, synchronized, details). " +
+  "fields (clean, staged, conflicts, ahead, behind, synchronized, details). " +
   "When the user asks whether they committed, pushed, or are safe " +
   "to push, answer with an explicit yes or no grounded in those " +
   "fields, then briefly explain (for example: clean means changes " +
   "are committed; ahead > 0 means local commits are not pushed; " +
+  "conflicts > 0 means a merge conflict must be resolved first; " +
   "synchronized means local and remote match).\n" +
   "\n" +
   "Making changes:\n" +
