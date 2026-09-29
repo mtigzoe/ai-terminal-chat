@@ -57,7 +57,10 @@ class AnthropicProvider(Provider):
         max_tokens: int = DEFAULT_MAX_TOKENS,
         anthropic_version: str = DEFAULT_ANTHROPIC_VERSION,
     ):
-        if not api_key:
+        # Environment/configuration values can contain accidental whitespace.
+        # Treat a whitespace-only key as missing rather than sending an
+        # unusable credential. Matches nvidia.py.
+        if not api_key or not str(api_key).strip():
             raise RuntimeError(
                 "ANTHROPIC_API_KEY is not set. Add it to your .env file."
             )

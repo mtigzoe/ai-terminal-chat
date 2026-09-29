@@ -34,7 +34,10 @@ class OpenRouterProvider(OpenAICompatibleProvider):
         http_referer: Optional[str] = None,
         app_title: Optional[str] = None,
     ):
-        if not api_key:
+        # Environment/configuration values can contain accidental whitespace.
+        # Treat a whitespace-only key as missing rather than sending an
+        # unusable Bearer credential. Matches nvidia.py.
+        if not api_key or not str(api_key).strip():
             raise RuntimeError(
                 "OPENROUTER_API_KEY is not set. Add it to your .env file."
             )

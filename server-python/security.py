@@ -531,6 +531,13 @@ _BLOCKED_IPV4 = {
 
 _ALLOWED_PORTS = frozenset({80, 443, 11434, 8080, 8000, 3000, 9000, 4433})
 
+# CGNAT (RFC 6598) is neither private nor reserved by ipaddress's own
+# definitions, so is_private/is_reserved alone let 100.64.0.0/10 through this
+# config-time check while safe_fetch.blocked_address_reason rejected it at
+# request time. Keep both classifiers in agreement.
+_CGNAT_START = ipaddress.IPv4Address("100.64.0.0")
+_CGNAT_END = ipaddress.IPv4Address("100.127.255.255")
+
 
 def _is_blocked_ip(ip_str: str) -> str | None:
     """Return an error message if the IP is private/reserved/metadata, else None."""
@@ -543,6 +550,8 @@ def _is_blocked_ip(ip_str: str) -> str | None:
         return f"Blocked address (cloud metadata): {ip_str}"
 
     if isinstance(ip, ipaddress.IPv4Address):
+        if _CGNAT_START <= ip <= _CGNAT_END:
+            return f"Private or reserved IPv4 address is not allowed: {ip_str}"
         if (
             ip.is_private
             or ip.is_loopback

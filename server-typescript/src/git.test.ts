@@ -247,7 +247,10 @@ test("gitAdd previews staging and does not mutate without confirmation", async (
   assert.equal("requires_confirmation" in result, true);
   if ("requires_confirmation" in result) {
     assert.equal(result.requires_confirmation, true);
-    assert.equal(result.path, join("src", "git.test.ts"));
+    // Git pathspecs always use forward slashes. Returning the host separator
+    // made the reported path unusable by `git update-index --cacheinfo` on
+    // Windows, where staging any file in a subdirectory failed outright.
+    assert.equal(result.path, "src/git.test.ts");
   }
 });
 

@@ -25,7 +25,10 @@ class OpenAIProvider(OpenAICompatibleProvider):
         api_key: Optional[str] = None,
         timeout: int = 120,
     ):
-        if not api_key:
+        # Environment/configuration values can contain accidental whitespace.
+        # Treat a whitespace-only key as missing rather than sending an
+        # unusable Bearer credential. Matches nvidia.py.
+        if not api_key or not str(api_key).strip():
             raise RuntimeError(
                 "OPENAI_API_KEY is not set. Add it to your .env file."
             )

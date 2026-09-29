@@ -32,6 +32,7 @@ import {
   mkdtempSync,
   openSync,
   closeSync,
+  copyFileSync,
   readFileSync,
   readSync,
   realpathSync,
@@ -205,6 +206,36 @@ function loadConfig(): Record<string, unknown> {
     // Missing file, unreadable, or invalid JSON - start from an empty
     // config, matching Python's `except (OSError, ValueError, TypeError): pass`.
   }
+  return {};
+}
+
+/**
+ * Read the config for a read-modify-write.
+ *
+ * Unlike loadConfig(), only a missing file is treated as empty. A transient
+ * read failure (EPERM/EBUSY from antivirus or a Windows indexer, EACCES,
+ * EIO) is rethrown so it cannot silently turn the caller's merge into a
+ * full overwrite of every saved key. Unparseable content is preserved as a
+ * `.corrupt-*` backup before being replaced, matching config.ts's
+ * readConfigForUpdate().
+ */
+function loadConfigForUpdate(targetFile: string): Record<string, unknown> {
+  let raw: string;
+  try {
+    raw = readFileSync(targetFile, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw err;
+  }
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (data !== null && typeof data === "object" && !Array.isArray(data)) {
+      return data as Record<string, unknown>;
+    }
+  } catch {
+    // Fall through to the backup path below.
+  }
+  copyFileSync(targetFile, `${targetFile}.corrupt-${Date.now()}`);
   return {};
 }
 
@@ -611,8 +642,11 @@ export function withConfigLock<T>(
   const targetFile = configFilePath();
   const { lockFd, lockPath } = acquireConfigLock(targetFile);
   try {
-    // Load current config, apply mutation, persist result
-    const currentConfig = loadConfig();
+    // Load current config, apply mutation, persist result. The read happens
+    // under the lock so a stale-read window cannot drop a concurrent
+    // writer's key, and a transient read failure aborts instead of
+    // clobbering the saved config with just the mutated fields.
+    const currentConfig = loadConfigForUpdate(targetFile);
     const result = mutation(currentConfig);
     writeConfigFile(targetFile, currentConfig);
     return result;

@@ -1035,10 +1035,24 @@ def _validate_directory_command_paths(command: str, args: list[str]) -> dict | N
     # the agent's supported workflow. Reject switches rather than allowing a
     # future shell-specific option to reinterpret a path outside the project.
     path_args = args[1:]
-    for value in path_args:
-        if value == "--":
+    for raw_value in path_args:
+        if raw_value == "--":
             return {
                 "error": "Directory listing options are not supported; use a project-relative path.",
+            }
+        # shlex.split(posix=False) keeps the surrounding quote characters, so a
+        # quoted argument arrived here as '".."' or '"C:\\Users"'. safe_path()
+        # could not see the escape through the quotes: PureWindowsPath('".."')
+        # is not absolute and has no parent component, so the check passed and
+        # the command then listed the parent directory. Validate the value the
+        # shell will actually see instead.
+        value = raw_value.strip().strip("\"'")
+        if not value or any(ch in value for ch in "\"'%!^&|<>`$\n\r"):
+            return {
+                "error": (
+                    "Directory listing arguments must be plain project-relative "
+                    f"paths: {raw_value}"
+                ),
             }
         if value.startswith("-") or value.startswith("/"):
             return {
@@ -1440,7 +1454,11 @@ def run_command(command: str, confirm: bool = False) -> dict:
         # Use the native cmd.exe directory command while preserving
         # `ls` as the cross-platform command exposed to the agent.
         if os.name == "nt" and args and args[0].lower() in {"ls", "dir"}:
-            args = ["cmd", "/c", "dir", *args[1:]]
+            # shlex.split(posix=False) keeps the quote characters, so a quoted
+            # path arrived at cmd.exe as a literal quote-delimited argument and
+            # failed to resolve. The boundary check above already validated the
+            # unquoted form, so pass that form to the process as well.
+            args = ["cmd", "/c", "dir", *[a.strip().strip("\"'") for a in args[1:]]]
 
         try:
             with _sanitized_terminal_env() as sanitized_env:

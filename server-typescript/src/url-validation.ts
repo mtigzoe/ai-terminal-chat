@@ -24,8 +24,15 @@ export interface ValidationResult {
 }
 
 /**
- * Private IPv4 ranges (RFC 1918 + loopback + link-local + metadata)
- * These are blocked when used as IP literals in URLs AND at request time.
+ * Private/reserved IPv4 ranges (RFC 1918 + loopback + link-local + CGNAT +
+ * this-host + multicast + reserved). These are blocked when used as IP
+ * literals in URLs AND at request time.
+ *
+ * This must stay in sync with safe-fetch.ts's PRIVATE_IPV4_RANGES, which
+ * applies the same policy to resolved addresses. When the config-time list
+ * was narrower, ranges such as 100.64.0.0/10 (CGNAT), 0.0.0.0/8, 198.18.0.0/15
+ * and 240.0.0.0/4 were accepted and persisted by the settings page, and then
+ * rejected at request time with a confusing "could not reach" message.
  */
 const PRIVATE_IPV4_RANGES = [
   { start: ipToNumber("10.0.0.0"), end: ipToNumber("10.255.255.255") },      // 10.0.0.0/8
@@ -33,6 +40,11 @@ const PRIVATE_IPV4_RANGES = [
   { start: ipToNumber("192.168.0.0"), end: ipToNumber("192.168.255.255") },  // 192.168.0.0/16
   { start: ipToNumber("127.0.0.0"), end: ipToNumber("127.255.255.255") },    // 127.0.0.0/8 (loopback)
   { start: ipToNumber("169.254.0.0"), end: ipToNumber("169.254.255.255") },  // 169.254.0.0/16 (link-local)
+  { start: ipToNumber("0.0.0.0"), end: ipToNumber("0.255.255.255") },        // 0.0.0.0/8 (this host)
+  { start: ipToNumber("100.64.0.0"), end: ipToNumber("100.127.255.255") },  // 100.64.0.0/10 (CGNAT, RFC 6598)
+  { start: ipToNumber("192.0.0.0"), end: ipToNumber("192.0.0.255") },        // 192.0.0.0/24 (IETF protocol assignments)
+  { start: ipToNumber("198.18.0.0"), end: ipToNumber("198.19.255.255") },    // 198.18.0.0/15 (benchmarking, RFC 2544)
+  { start: ipToNumber("224.0.0.0"), end: ipToNumber("255.255.255.255") },    // multicast + reserved/broadcast
 ];
 
 /**
@@ -194,6 +206,12 @@ function isPrivateIpv6(ip: string): { blocked: boolean; error?: string } {
       // Multicast: ff00::/8 (first 8 bits = 11111111 = 0xFF00-0xFFFF)
       if ((firstHextetNum & 0xFF00) === 0xFF00) {
         return { blocked: true, error: "Multicast IPv6 address (ff00::/8) is not allowed" };
+      }
+      // Site-local: fec0::/10 (deprecated, RFC 3879) - first 10 bits =
+      // 1111111011 = 0xFEC0-0xFEFF. Parity with server-python's
+      // security._is_blocked_ip is_site_local check.
+      if ((firstHextetNum & 0xFFC0) === 0xFEC0) {
+        return { blocked: true, error: "Site-local IPv6 address (fec0::/10) is not allowed" };
       }
     }
   }

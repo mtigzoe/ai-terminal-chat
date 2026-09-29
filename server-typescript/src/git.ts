@@ -613,7 +613,7 @@ export async function gitAdd(path: string, confirm = false): Promise<Record<stri
   if (!isReadAllowed(path)) return { error: `Access denied: '${path}' is not selected for the agent.` }; if (isSensitivePath(filePath)) return { error: `Refusing to stage sensitive file: ${path}` };
   try { const repository = await runGit(["rev-parse", "--show-toplevel"], GIT_ADD_TIMEOUT_MS); if (repository.code !== 0) return { error: "git_add requires the project to be inside a git repository." }; } catch (error) { return { error: errorText(error) }; }
   const { lstatSync } = await import("node:fs"); try { const lexicalStat = lstatSync(resolve(getProjectRoot(), path.trim())); if (!lexicalStat.isFile() && !lexicalStat.isSymbolicLink()) return { error: "git_add can only stage a single file, not a directory." }; } catch { return { error: `File does not exist: ${path}` }; }
-  const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); const relativePath = lexicalPath.slice(root.length).replace(/^[/\\]+/, "");
+  const root = getProjectRoot(); const lexicalPath = resolve(root, path.trim()); const relativePath = lexicalPath.slice(root.length).replace(/^[/\\]+/, "").split(/[\\/]/).join("/");
   if (!confirm) return { requires_confirmation: true, path: relativePath, message: `'${relativePath}' was NOT staged. Ask the user to explicitly confirm it, then call git_add again with confirm=true.` };
   try { await stageFileWithoutFilters(relativePath, filePath, lexicalPath); return { path: relativePath, staged: true }; } catch (error) { return { error: `Could not stage file: ${errorText(error)}` }; }
 }
@@ -640,7 +640,7 @@ export async function gitRestore(path: string, staged = false, confirm = false):
   // Keep the Git path lexical: safePath() resolves existing symlinks for security,
   // but git restore must operate on the requested symlink itself.
   const lexicalPath = resolve(root, path.trim());
-  const relativePath = lexicalPath.slice(root.length).replace(/^[/\\]+/, "");
+  const relativePath = lexicalPath.slice(root.length).replace(/^[/\\]+/, "").split(/[\\/]/).join("/");
   if (!confirm) {
     const action = staged ? "unstage" : "restore";
     return { requires_confirmation: true, path: relativePath, action, message: `'${relativePath}' will be ${action}d. This discards uncommitted changes. Confirm to proceed.` };
