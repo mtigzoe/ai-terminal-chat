@@ -21,7 +21,15 @@ export const GIT_CONFIG_OVERRIDES: string[] = [
   "-c", "core.askPass=", "-c", "core.gitProxy=none", "-c", "core.sshCommand=",
   "-c", "core.pager=cat", "-c", "pager.status=cat", "-c", "pager.diff=cat", "-c", "pager.log=cat",
   "-c", "pager.show=cat", "-c", "pager.branch=cat", "-c", "pager.tag=cat", "-c", "interactive.diffFilter=",
-  "-c", "diff.external=", "-c", "diff.tool=", "-c", "diff.guitool=", "-c", "diff.mnemonicPrefix=false",
+  // NOTE: do NOT add "-c", "diff.external=" here. Git treats the empty value
+  // as the *name of an external diff program to execute*, so every `git diff`
+  // that actually rendered patch content died with
+  // "error: cannot spawn : No such file or directory / fatal: external diff
+  // died" (exit 128). External diff drivers are neutralized with
+  // --no-ext-diff instead; see NO_EXTERNAL_DIFF_SUBCOMMANDS and
+  // runIsolatedGit(), which appends the flag after the caller's arguments so
+  // it wins even when the caller supplies --ext-diff.
+  "-c", "diff.tool=", "-c", "diff.guitool=", "-c", "diff.mnemonicPrefix=false",
   "-c", "merge.tool=", "-c", "merge.guitool=", "-c", "mergetool.prompt=false",
   "-c", "gpg.program=", "-c", "gpg.ssh.program=", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
   "-c", "credential.helper=", "-c", "credential.useHttpPath=false", "-c", "sendemail.smtpserver=",
@@ -466,6 +474,10 @@ function validateGitRepositoryPaths(): void {
 
 
 
+// Git subcommands whose output can render patch content, and therefore the
+// only ones that accept --no-ext-diff.
+const NO_EXTERNAL_DIFF_SUBCOMMANDS = new Set(["diff", "log", "show"]);
+
 export async function runIsolatedGit(args: string[], options: IsolatedGitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   if (!options.holdLock) return gitOperationMutex.runExclusive(() => runIsolatedGit(args, { ...options, holdLock: true }));
   validateGitRepositoryPaths();
@@ -485,7 +497,23 @@ export async function runIsolatedGit(args: string[], options: IsolatedGitOptions
         runIsolatedGit(args, { ...options, skipDynamicOverrides: true, dynamicOverrides: dynamic, holdLock: true }),
       );
     }
-    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...args];
+    // Block external diff drivers (a repo-controlled `diff.external` would
+    // otherwise be executed as a command). --no-ext-diff must follow any real
+    // --ext-diff option, but it must still appear before Git's "--" path
+    // separator; after "--" it would be parsed as a filename instead of an
+    // option. Only diff-producing subcommands accept this flag.
+    const subcommand = args[0]?.toLowerCase() ?? "";
+    let withNoExternalDiff = args;
+    if (NO_EXTERNAL_DIFF_SUBCOMMANDS.has(subcommand) && !args.includes("--no-ext-diff")) {
+      const separatorIndex = args.indexOf("--");
+      const insertionIndex = separatorIndex === -1 ? args.length : separatorIndex;
+      withNoExternalDiff = [
+        ...args.slice(0, insertionIndex),
+        "--no-ext-diff",
+        ...args.slice(insertionIndex),
+      ];
+    }
+    const safeArgs = [...GIT_CONFIG_OVERRIDES, ...withNoExternalDiff];
     const gitExecutable = resolveTrustedExecutable("git", { projectRoot: getProjectRoot() });
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of [

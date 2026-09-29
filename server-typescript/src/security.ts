@@ -136,13 +136,33 @@ export function isPathWithinRoot(
   options: { caseInsensitive?: boolean } = {},
 ): boolean {
   const caseInsensitive = options.caseInsensitive ?? process.platform === "win32";
-  const normalize = (value: string) => (caseInsensitive ? value.toLowerCase() : value);
+  const backslash = "\\";
+  const first = root.charCodeAt(0);
+  const startsWithDrive =
+    root.length >= 2 && root[1] === ":" &&
+    ((first >= 65 && first <= 90) || (first >= 97 && first <= 122));
+  const windowsStyle = startsWithDrive || root.startsWith(backslash);
+  const normalize = (value: string) => {
+    const separators = windowsStyle ? value.split("/").join(backslash) : value;
+    return caseInsensitive ? separators.toLowerCase() : separators;
+  };
   const normalizedRoot = normalize(root);
   const normalizedCandidate = normalize(candidate);
-  return (
-    normalizedCandidate === normalizedRoot ||
-    normalizedCandidate.startsWith(normalizedRoot + sep)
-  );
+  if (normalizedCandidate === normalizedRoot) return true;
+
+  if (windowsStyle) {
+    let trimmedRoot = normalizedRoot;
+    while (trimmedRoot.endsWith(backslash)) trimmedRoot = trimmedRoot.slice(0, -1);
+    return normalizedCandidate.startsWith(trimmedRoot + backslash);
+  }
+
+  // POSIX backslashes are ordinary filename characters, not separators.
+  let trimmedRoot = normalizedRoot;
+  while (trimmedRoot.length > 1 && trimmedRoot.endsWith("/")) {
+    trimmedRoot = trimmedRoot.slice(0, -1);
+  }
+  if (trimmedRoot === "/") return normalizedCandidate.startsWith("/");
+  return normalizedCandidate.startsWith(`${trimmedRoot}/`);
 }
 
 // ---------------------------------------------------------------------------

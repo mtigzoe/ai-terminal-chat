@@ -986,6 +986,24 @@ function gitOutputFileOptionError(command: string): string | null {
         "Use stdout instead."
       );
     }
+    // `git diff --no-index <A> <B>` compares two arbitrary paths while
+    // ignoring the repository entirely, and prints the full contents of both
+    // files. That bypassed every path check in the module: the directory
+    // guard only covers ls/dir/pwd, and the read-permission check only runs
+    // when the user has selected files on the Project page. So
+    // `run_command("git diff --no-index ../salary.csv src/notes.txt")`
+    // returned an out-of-project file verbatim to the model.
+    // --ita-invisible-in-index implies --no-index in Git, so block it too.
+    if (token === "--no-index" || token.startsWith("--no-index=") ||
+        token === "--ita-invisible-in-index" || token.startsWith("--ita-invisible-in-index=")) {
+      if (tokens[1].toLowerCase() === "diff") {
+        return (
+          "Command blocked: 'git diff --no-index' compares paths outside the " +
+          "repository, which would expose files outside the project. " +
+          "Use 'git diff' on the project repository instead."
+        );
+      }
+    }
   }
 
   return null;

@@ -7,7 +7,6 @@ const Header = ({ toggled, setToggled, waiting }) => {
   const cancelRef = useRef(null);
   const clearRef = useRef(null);
   const triggerRef = useRef(null);
-  const wasPendingRef = useRef(false);
 
   useEffect(() => {
     if (!waiting) {
@@ -29,14 +28,6 @@ const Header = ({ toggled, setToggled, waiting }) => {
     setConfirmOpen(false);
     window.setTimeout(() => triggerRef.current?.focus(), 0);
   };
-
-  useEffect(() => {
-    if (waiting && !wasPendingRef.current) {
-      setWaitingAnnounced(true);
-      setTimeout(() => setWaitingAnnounced(false), 2000);
-    }
-    wasPendingRef.current = waiting;
-  }, [waiting]);
 
   useEffect(() => {
     if (!confirmOpen) return undefined;
