@@ -7,6 +7,14 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { fileURLToPath } = require('node:url');
 
+const PACKAGED_RENDERER_FILES = new Set([
+  'index.html',
+  'history.html',
+  'project.html',
+  'settings.html',
+  'instructions.html',
+]);
+
 /**
  * Returns true when `relative` escapes its base directory.
  *
@@ -126,7 +134,7 @@ function isAllowedNavigationUrl(urlString, rendererEntry) {
       if (path.dirname(actualPath) !== path.dirname(expectedPath)) {
         return false;
       }
-      return path.extname(actualPath).toLowerCase() === '.html';
+      return PACKAGED_RENDERER_FILES.has(path.basename(actualPath).toLowerCase());
     }
   } catch {
     return false;
