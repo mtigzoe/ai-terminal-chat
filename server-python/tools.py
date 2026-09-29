@@ -1663,12 +1663,29 @@ def _atomic_replace_text(path: Path, content: str) -> None:
         os.close(parent_fd)
 
 
+def _save_git_config_recovery(path: Path, original: str) -> Path | None:
+    """Save an untouched pre-sanitization config beside the active config."""
+    recovery = path.with_name(
+        f"{path.name}.ai-terminal-chat-recovery-{uuid.uuid4().hex}"
+    )
+    try:
+        _atomic_replace_text(recovery, original)
+        return recovery
+    except OSError as exc:
+        print(
+            f"Warning: could not save Git configuration recovery copy for "
+            f"{path} ({exc}).",
+            file=sys.stderr,
+        )
+        return None
+
+
 @contextmanager
 def _sanitized_git_config():
-    """Temporarily remove URL/filter/include config under the Git operation lock."""
+    """Temporarily remove executable Git config without losing concurrent edits."""
     with _GIT_OPERATION_LOCK:
-        # (path, original, sanitized) -- the sanitized text is kept so the
-        # restore can tell "still ours" from "someone else edited it".
+        # (path, original, sanitized) -- keep both versions so restoration can
+        # distinguish our temporary file from a concurrent user/process edit.
         backups: list[tuple[Path, str, str]] = []
         try:
             for path in _git_config_files():
@@ -1680,37 +1697,55 @@ def _sanitized_git_config():
             yield
         finally:
             for path, original, sanitized in reversed(backups):
-                # Do not overwrite a config change made by another process while
-                # the temporary sanitization was active: blindly restoring the
-                # backup silently destroyed the user's concurrent edits (for
-                # example a signingkey they added during a long fetch).
-                # Mirrors withSanitizedGitConfigUnlocked() in the TypeScript
-                # backend, which performs the same content check.
                 try:
                     current = path.read_text(encoding="utf-8")
                 except OSError as exc:
+                    recovery = _save_git_config_recovery(path, original)
+                    recovery_note = (
+                        f" Original configuration saved at {recovery}."
+                        if recovery is not None
+                        else " Original configuration could not be saved to disk."
+                    )
                     print(
                         f"Warning: could not read {path} to restore the Git "
-                        f"configuration ({exc}); the configuration is left in "
-                        f"its sanitized form. Review {path} and re-add any "
-                        f"settings that were removed.",
+                        f"configuration ({exc}); the active configuration was "
+                        f"left untouched.{recovery_note}",
                         file=sys.stderr,
                     )
                     continue
+
                 if current != sanitized:
+                    # Another process edited the sanitized file while Git was
+                    # running. Never overwrite that edit. Preserve the complete
+                    # pre-sanitization configuration in a recovery file so the
+                    # temporarily removed settings are not silently lost either.
+                    recovery = _save_git_config_recovery(path, original)
+                    recovery_note = (
+                        f" Original configuration saved at {recovery}."
+                        if recovery is not None
+                        else " Original configuration could not be saved to disk."
+                    )
+                    print(
+                        f"Warning: {path} changed while Git configuration was "
+                        f"sanitized; concurrent edits were preserved and the "
+                        f"active file was not overwritten.{recovery_note}",
+                        file=sys.stderr,
+                    )
                     continue
+
                 try:
                     _atomic_replace_text(path, original)
                 except OSError as exc:
-                    # Previously swallowed, which left the stripped config in
-                    # place permanently and silently discarded the user's
-                    # url.*.insteadOf / include.path / filter.* settings with
-                    # no indication anything had gone wrong.
+                    recovery = _save_git_config_recovery(path, original)
+                    recovery_note = (
+                        f" Original configuration saved at {recovery}."
+                        if recovery is not None
+                        else " Original configuration could not be saved to disk."
+                    )
                     print(
                         f"Warning: could not restore the Git configuration at "
-                        f"{path} ({exc}); it is left in its sanitized form. "
-                        f"Review {path} and re-add any settings that were "
-                        f"removed.",
+                        f"{path} ({exc}); the active file remains sanitized."
+                        f"{recovery_note}",
                         file=sys.stderr,
                     )
 
@@ -3443,45 +3478,51 @@ def delete_file(path: str, confirm: bool = False) -> dict:
     }
 
 def _extract_patch_target_paths(patch_text: str) -> set:
-    """Pull the file path(s) a unified diff would touch out of its headers.
-
-    Reads '--- a/<path>' and '+++ b/<path>' style header lines (also
-    tolerating headers without the 'a/'/'b/' prefix). '/dev/null'
-    (used for pure adds/deletes) is ignored.
-
-    Hunk bodies are skipped. Every hunk body line carries a ' ', '-' or '+'
-    prefix, so removing a line whose content begins with '-- ' renders as
-    '--- ' and removing '-- a/x' renders as '--- a/x'. Treating those as
-    headers invented phantom target files: a patch deleting a SQL comment of
-    '-- a/../../etc/passwd' was validated against the path
-    '../../etc/passwd' and rejected as outside the project.
-    """
+    """Pull target paths from unified-diff file headers, never hunk bodies."""
 
     paths = set()
+    old_remaining = 0
+    new_remaining = 0
     in_hunk = False
-    lines = patch_text.splitlines()
+    hunk_header = re.compile(
+        r"^@@ -\\d+(?:,(\\d+))? \\+\\d+(?:,(\\d+))? @@"
+    )
 
-    for index, line in enumerate(lines):
-        if line.startswith("diff --git "):
-            in_hunk = False
-            continue
+    for line in patch_text.splitlines():
+        if in_hunk:
+            if line.startswith("\\ No newline at end of file"):
+                continue
+            if old_remaining == 0 and new_remaining == 0:
+                in_hunk = False
+            else:
+                prefix = line[:1]
+                if prefix == " ":
+                    old_remaining -= 1
+                    new_remaining -= 1
+                elif prefix == "-":
+                    old_remaining -= 1
+                elif prefix == "+":
+                    new_remaining -= 1
+                else:
+                    # Malformed/incomplete hunk: fail closed for path extraction
+                    # by continuing to treat following lines as hunk content.
+                    continue
+                continue
+
         if line.startswith("@@ "):
-            # Everything after a hunk header is body until the next real
-            # file header. Body lines can never introduce a new target file.
-            in_hunk = True
+            match = hunk_header.match(line)
+            if match:
+                old_remaining = int(match.group(1) or "1")
+                new_remaining = int(match.group(2) or "1")
+                in_hunk = True
             continue
-        if in_hunk and not (
-            # A "--- " line only ends a hunk when the matching "+++ " header
-            # follows; a minimal multi-file patch carries no "diff --git"
-            # separators, so that pair is what marks the next file.
-            line.startswith("--- ")
-            and (lines[index + 1] if index + 1 < len(lines) else "").startswith("+++ ")
-        ):
+
+        if line.startswith("diff --git "):
             continue
 
         for prefix in ("+++ b/", "--- a/", "+++ ", "--- "):
             if line.startswith(prefix):
-                candidate = line[len(prefix):].split("\t")[0].strip()
+                candidate = line[len(prefix):].split("\\t")[0].strip()
                 if candidate and candidate != "/dev/null":
                     paths.add(candidate)
                 break
