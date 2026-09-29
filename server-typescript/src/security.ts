@@ -136,9 +136,14 @@ export function isPathWithinRoot(
   options: { caseInsensitive?: boolean } = {},
 ): boolean {
   const caseInsensitive = options.caseInsensitive ?? process.platform === "win32";
-  const windowsStyle = /^[A-Za-z]:[\\\\/]/.test(root) || /^\\\\\\\\/.test(root);
+  const backslash = "\\\\";
+  const first = root.charCodeAt(0);
+  const startsWithDrive =
+    root.length >= 2 && root[1] === ":" &&
+    ((first >= 65 && first <= 90) || (first >= 97 && first <= 122));
+  const windowsStyle = startsWithDrive || root.startsWith(backslash + backslash);
   const normalize = (value: string) => {
-    const separators = windowsStyle ? value.replace(/\//g, "\\\\") : value;
+    const separators = windowsStyle ? value.split("/").join(backslash) : value;
     return caseInsensitive ? separators.toLowerCase() : separators;
   };
   const normalizedRoot = normalize(root);
@@ -146,17 +151,17 @@ export function isPathWithinRoot(
   if (normalizedCandidate === normalizedRoot) return true;
 
   if (windowsStyle) {
-    const trimmedRoot = normalizedRoot.replace(/\\\\+$/, "");
-    return normalizedCandidate.startsWith(`${trimmedRoot}\\\\`);
+    let trimmedRoot = normalizedRoot;
+    while (trimmedRoot.endsWith(backslash)) trimmedRoot = trimmedRoot.slice(0, -1);
+    return normalizedCandidate.startsWith(trimmedRoot + backslash);
   }
 
   // POSIX backslashes are ordinary filename characters, not separators.
-  // Treating them as boundaries would make /srv/app\\secret appear to live
-  // under /srv/app even though it is a sibling entry on a POSIX filesystem.
-  const trimmedRoot = normalizedRoot.replace(/\/+$/, "");
-  if (trimmedRoot === "") {
-    return normalizedCandidate.startsWith("/");
+  let trimmedRoot = normalizedRoot;
+  while (trimmedRoot.length > 1 && trimmedRoot.endsWith("/")) {
+    trimmedRoot = trimmedRoot.slice(0, -1);
   }
+  if (trimmedRoot === "/") return normalizedCandidate.startsWith("/");
   return normalizedCandidate.startsWith(`${trimmedRoot}/`);
 }
 
