@@ -65,7 +65,7 @@ function AgentStatusRegion({ status }) {
       aria-live={live}
       aria-atomic="true"
     >
-      <span className="agent-status-phase">{showAnnouncement ? phaseLabel(status.phase) : ''}</span>
+      <span className="agent-status-phase">{showAnnouncement ? `${phaseLabel(status.phase)}: ` : ''}</span>
       <span className="agent-status-message">{announcement}</span>
     </div>
   );
