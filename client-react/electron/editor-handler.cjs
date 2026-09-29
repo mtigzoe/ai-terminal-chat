@@ -28,18 +28,20 @@ function timingSafeEqual(a, b) {
 /**
  * Build the argv for launching an editor.
  *
- * On Windows the editor entry points are `.cmd` shims. Since Node
- * 18.20.2 / 20.12.2 / 22.0.0 (CVE-2024-27980) `spawn()` of a `.bat`/`.cmd`
- * without a shell throws `Error: spawn EINVAL`, so every "Open in VS Code"
- * silently fell through to the system opener. Route through `cmd.exe` the
- * same way `scripts/prepare-server.cjs` already does for `npm.cmd`; argv
- * stays an array, so the path is never concatenated into a shell string.
+ * Modern Node releases refuse to execute .cmd/.bat files directly on Windows.
+ * A cmd.exe bridge is therefore required for editor CLI shims. cmd.exe reparses
+ * the text after /c, so a project filename containing command metacharacters
+ * must never be interpolated into that command. Unusual paths fail closed here
+ * and handleEditorOpen() falls back to the OS opener instead.
  */
 function buildEditorSpawn(editorBin, filePath) {
-  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(editorBin)) {
+  if (process.platform === 'win32' && /\\.(cmd|bat)$/i.test(editorBin)) {
+    if (/[&|<>^%!\\r\\n"]/u.test(filePath)) {
+      throw new Error('File path contains characters that are unsafe for cmd.exe editor launch');
+    }
     return {
       command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/c', editorBin, filePath],
+      args: ['/d', '/s', '/v:off', '/c', `${editorBin} "${filePath}"`],
     };
   }
   return { command: editorBin, args: [filePath] };
