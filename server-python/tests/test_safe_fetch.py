@@ -328,6 +328,32 @@ def test_no_second_dns_lookup_during_the_actual_connection(server, monkeypatch):
     assert calls.count("pin-once.localhost") == 1
 
 
+def test_idna_hostname_cannot_rebind_between_validation_and_connection(
+    server, monkeypatch
+):
+    """The pin key must match requests' IDNA-normalized connection host."""
+
+    host, port = _server_addr(server)
+    unicode_hostname = "tést.invalid"
+    ascii_hostname = unicode_hostname.encode("idna").decode("ascii")
+    calls = []
+
+    def rebinding_getaddrinfo(hostname, port_, family=0, type=0, proto=0, flags=0):
+        calls.append(hostname)
+        address = "93.184.216.34" if hostname == unicode_hostname else host
+        sockaddr = (address, port_ or 0)
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)]
+
+    monkeypatch.setattr(safe_fetch, "_real_getaddrinfo", rebinding_getaddrinfo)
+
+    with pytest.raises(safe_fetch.SSRFError):
+        safe_fetch.safe_request(
+            "GET", f"http://{unicode_hostname}:{port}/final", timeout=1
+        )
+
+    assert calls == [ascii_hostname]
+
+
 # ---------------------------------------------------------------------------
 # Redirects: always validated, only followed when explicitly requested
 # ---------------------------------------------------------------------------
