@@ -8,6 +8,19 @@ const fs = require('node:fs');
 const { fileURLToPath } = require('node:url');
 
 /**
+ * Returns true when `relative` escapes its base directory.
+ *
+ * `relative.startsWith('..')` is the wrong test: a legitimate in-project
+ * entry named `..data` or `..config` produces the relative path
+ * `..data/notes.txt`, which starts with ".." but is fully inside the root.
+ * Only an exact ".." or a ".." followed by a separator actually escapes.
+ */
+function isOutsideRoot(relative) {
+  if (path.isAbsolute(relative)) return true;
+  return relative === '..' || relative.startsWith(`..${path.sep}`);
+}
+
+/**
  * Validates that a path is within the project root.
  * Resolves symlinks/junctions to prevent bypass via filesystem links.
  * Returns the resolved absolute path if valid, throws if not.
@@ -30,7 +43,7 @@ function validateProjectPath(requestedPath, projectRootDir) {
       const resolvedParent = fs.realpathSync.native(parentDir);
       // Check if parent is within project root
       const relativeParent = path.relative(resolvedRoot, resolvedParent);
-      if (relativeParent.startsWith('..') || path.isAbsolute(relativeParent)) {
+      if (isOutsideRoot(relativeParent)) {
         throw new Error(`Path is outside project root: ${requestedPath}`);
       }
       // Parent is valid, but path itself doesn't exist
@@ -46,8 +59,7 @@ function validateProjectPath(requestedPath, projectRootDir) {
 
   // Check if requested path is within project root
   // Use path.relative + checks; NEVER use simple startsWith(projectRoot)
-  const relative = path.relative(resolvedRoot, resolvedRequested);
-  const isWithinRoot = !relative.startsWith('..') && !path.isAbsolute(relative);
+  const isWithinRoot = !isOutsideRoot(path.relative(resolvedRoot, resolvedRequested));
 
   if (!isWithinRoot) {
     throw new Error(`Path is outside project root: ${requestedPath}`);
@@ -100,7 +112,21 @@ function isAllowedNavigationUrl(urlString, rendererEntry) {
       }
       const expectedPath = path.resolve(rendererEntry.target);
       const actualPath = path.resolve(fileURLToPath(parsed));
-      return actualPath === expectedPath;
+      if (actualPath === expectedPath) {
+        return true;
+      }
+      // The packaged app is a multi-page app: index.html, history.html,
+      // project.html, settings.html and instructions.html are all built into
+      // the same dist/ directory and linked from the main nav. Requiring an
+      // exact match on the entry document blocked every one of them, so
+      // navigation worked in dev (same-origin) but silently did nothing in the
+      // packaged desktop app. Allow any document that sits directly in the
+      // same directory as the configured entry; this still blocks traversal
+      // out of the renderer directory and any external origin.
+      if (path.dirname(actualPath) !== path.dirname(expectedPath)) {
+        return false;
+      }
+      return path.extname(actualPath).toLowerCase() === '.html';
     }
   } catch {
     return false;

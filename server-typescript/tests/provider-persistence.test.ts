@@ -54,11 +54,18 @@ vi.mock("../src/providers/factory.ts", () => {
   };
 });
 
+// terminal.ts imports ISOLATED_GIT_SUBCOMMANDS and runIsolatedGit from this
+// module, so the mock must supply them even though the route never calls them.
+// Omitting them made the whole suite fail to import and go dark.
 vi.mock("../src/git.ts", () => ({
   gitStatus: gitStatusMock,
   gitDiff: vi.fn(),
   gitLog: vi.fn(),
   gitBranch: vi.fn(),
+  ISOLATED_GIT_SUBCOMMANDS: ["status", "diff", "log", "branch", "show", "remote", "fetch", "pull", "push", "add", "commit", "restore"],
+  runIsolatedGit: vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })),
+  getGitSshCommand: vi.fn(() => "ssh -o BatchMode=yes"),
+  GIT_CONFIG_OVERRIDES: [],
 }));
 
 import {

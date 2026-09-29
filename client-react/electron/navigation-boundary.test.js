@@ -16,26 +16,50 @@ describe('Electron navigation boundary', () => {
     expect(isAllowedNavigationUrl('data:text/html,test', entry)).toBe(false);
   });
 
-  it('allows only the packaged renderer file', () => {
+  it('allows the packaged multi-page renderer set, and nothing outside it', () => {
     // The packaged renderer lives at a POSIX path in the Linux packaging
     // and at a drive-letter path on Windows; a drive-letter-less file://
     // URL is not a valid absolute Windows path (fileURLToPath rejects
     // it), so use the platform's real packaged path to exercise the
     // same allow/deny comparison.
     const isWin = process.platform === 'win32';
-    const target = isWin
-      ? 'C:\\app\\client-react\\dist\\index.html'
-      : '/app/client-react/dist/index.html';
-    const indexUrl = isWin
-      ? 'file:///C:/app/client-react/dist/index.html'
-      : 'file:///app/client-react/dist/index.html';
-    const otherUrl = isWin
-      ? 'file:///C:/app/client-react/dist/other.html'
-      : 'file:///app/client-react/dist/other.html';
+    const dist = isWin ? 'C:\\app\\client-react\\dist' : '/app/client-react/dist';
+    const target = `${dist}\\index.html`;
+    const fileUrl = (name) => (isWin
+      ? `file:///C:/app/client-react/dist/${name}`
+      : `file:///app/client-react/dist/${name}`);
     const entry = { type: 'file', target };
-    expect(isAllowedNavigationUrl(indexUrl, entry)).toBe(true);
-    expect(isAllowedNavigationUrl(otherUrl, entry)).toBe(false);
+
+    // Regression: navigation required an exact match on the entry document,
+    // so every sibling page the main nav links to (History, Project, Settings,
+    // Instructions) was blocked. The app worked over the dev server
+    // (same-origin) and silently did nothing in the packaged desktop app.
+    for (const page of ['index.html', 'history.html', 'project.html', 'settings.html', 'instructions.html']) {
+      expect(isAllowedNavigationUrl(fileUrl(page), entry)).toBe(true);
+    }
+
+    // The entry document itself is still allowed, and other origins and
+    // unsafe schemes are still rejected.
     expect(isAllowedNavigationUrl('https://example.com/', entry)).toBe(false);
+    expect(isAllowedNavigationUrl('javascript:alert(1)', entry)).toBe(false);
+  });
+
+  it('blocks navigation that leaves the renderer directory', () => {
+    const isWin = process.platform === 'win32';
+    const target = isWin ? 'C:\\app\\client-react\\dist\\index.html' : '/app/client-react/dist/index.html';
+    const entry = { type: 'file', target };
+
+    // Same extension, different directory: must not inherit the preload bridge.
+    const escapeUrl = isWin
+      ? 'file:///C:/app/client-react/secrets.html'
+      : 'file:///app/client-react/secrets.html';
+    expect(isAllowedNavigationUrl(escapeUrl, entry)).toBe(false);
+
+    // Traversal out of the renderer directory must not resolve back in.
+    const traversalUrl = isWin
+      ? 'file:///C:/app/client-react/dist/../secrets.html'
+      : 'file:///app/client-react/dist/../secrets.html';
+    expect(isAllowedNavigationUrl(traversalUrl, entry)).toBe(false);
   });
 });
 

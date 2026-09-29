@@ -19,16 +19,31 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState('Terminal ready.');
   const inputRef = useRef(null);
+  // Mirrors `command` so the path-insert effect can decide what to do without
+  // depending on `command` (adding it to the deps would re-run the insert on
+  // every keystroke).
+  const commandRef = useRef('');
 
   useEffect(() => {
     if (!pathToInsert) return undefined;
-    setCommand((current) => {
-      const trimmed = current.trimEnd();
-      if (!trimmed) return pathToInsert;
-      if (trimmed.endsWith(pathToInsert)) return trimmed;
-      return `${trimmed} ${pathToInsert}`;
-    });
-    setStatus(`Inserted path ${pathToInsert} into the command field.`);
+
+    const current = commandRef.current.trimEnd();
+    // Compare the last whitespace-delimited token, not the whole string.
+    // A bare endsWith() treated "test/src/App.jsx" as already containing
+    // "src/App.jsx" and silently dropped a genuinely different path while the
+    // status line still reported success.
+    const lastToken = current ? current.split(/\s+/).pop() : null;
+    const alreadyPresent = current !== '' && lastToken === pathToInsert;
+
+    if (alreadyPresent) {
+      setStatus(`${pathToInsert} is already the last argument in the command field.`);
+    } else {
+      const next = current ? `${current} ${pathToInsert}` : pathToInsert;
+      commandRef.current = next;
+      setCommand(next);
+      setStatus(`Inserted path ${pathToInsert} into the command field.`);
+    }
+
     window.setTimeout(() => inputRef.current?.focus(), 0);
     onPathInserted?.();
     return undefined;
@@ -54,6 +69,7 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
       const item = { command: value, stdout, stderr, exitCode };
       setOutput((current) => [...current, item]);
       setStatus(summarizeTerminalResult(item));
+      commandRef.current = '';
       setCommand('');
     } catch (err) {
       const message = err?.response?.data?.error || err?.message || 'Unable to run command.';
@@ -145,7 +161,10 @@ export default function TerminalPanel({ host, onSendToChat, pathToInsert, onPath
           id="terminal-command"
           type="text"
           value={command}
-          onChange={(event) => setCommand(event.target.value)}
+              onChange={(event) => {
+                commandRef.current = event.target.value;
+                setCommand(event.target.value);
+              }}
           disabled={running}
           autoComplete="off"
           spellCheck="false"

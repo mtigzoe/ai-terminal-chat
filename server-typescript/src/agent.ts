@@ -138,6 +138,42 @@ const GIT_CONFIRM_TOOL_NAMES = new Set([
   "git_push",
 ]);
 
+type ToolFunction = (args: Record<string, unknown>, signal?: AbortSignal) => unknown;
+
+/**
+ * Resolve a model-supplied tool name against the tool table.
+ *
+ * The name comes straight off the wire, so `toolFunctions[name]` was resolving
+ * inherited Object.prototype members: a request for "toString", "constructor",
+ * "valueOf" or "hasOwnProperty" passed the `if (!toolFn)` check and then ran
+ * Object.prototype.toString as if it were a tool, so the model received
+ * "[object Undefined]" instead of "Unknown tool requested: toString.". Only
+ * own, callable properties count. Python is safe here by construction because
+ * dict lookups do not walk a prototype chain; this restores that parity.
+ */
+function resolveTool(
+  toolFunctions: Record<string, ToolFunction>,
+  name: string,
+): ToolFunction | undefined {
+  if (!Object.prototype.hasOwnProperty.call(toolFunctions, name)) return undefined;
+  const candidate = toolFunctions[name];
+  return typeof candidate === "function" ? candidate : undefined;
+}
+
+/**
+ * Per-tool timeout, ignoring inherited keys. `TOOL_TIMEOUTS[name]` used to
+ * return Object.prototype.toString (a function) for a prototype name, so
+ * `timeoutSeconds * 1000` was NaN and the setTimeout() fired immediately --
+ * abandoning the tool instantly. Own-number properties only.
+ */
+function toolTimeoutSeconds(name: string): number {
+  if (!Object.prototype.hasOwnProperty.call(TOOL_TIMEOUTS, name)) return DEFAULT_TOOL_TIMEOUT;
+  const value = TOOL_TIMEOUTS[name];
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_TOOL_TIMEOUT;
+}
+
 const TOOL_TIMEOUTS: Record<string, number> = {
   list_files: 5,
   read_file: 5,
@@ -735,7 +771,7 @@ async function* agentLoopCore(
         consecutiveRepeatCount = 1;
       }
 
-      const toolFn = toolFunctions[functionName];
+      const toolFn = resolveTool(toolFunctions, functionName);
 
       if (!toolFn) {
         const unknownResult = { error: `Unknown tool requested: ${functionName}.` };
@@ -800,7 +836,7 @@ async function* agentLoopCore(
           toolFn,
           previewArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          toolTimeoutSeconds(functionName),
           cancelSignal
         );
 
@@ -878,7 +914,7 @@ async function* agentLoopCore(
           toolFn,
           functionArgs,
           functionName,
-          TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT,
+          toolTimeoutSeconds(functionName),
           cancelSignal
         );
       }
@@ -1120,7 +1156,7 @@ export async function* resumeAgentLoop(
     // this path via runWithAllowedReadPaths() before this generator is
     // consumed, so the retried read below actually succeeds.
     if (confirmed) {
-      const toolFn = toolFunctions["read_file"];
+      const toolFn = resolveTool(toolFunctions, "read_file");
       if (!toolFn) {
         result = { error: "Unknown tool requested: read_file." };
       } else {
@@ -1128,14 +1164,14 @@ export async function* resumeAgentLoop(
           toolFn,
           functionArgs,
           "read_file",
-          TOOL_TIMEOUTS["read_file"] || DEFAULT_TOOL_TIMEOUT
+          toolTimeoutSeconds("read_file")
         );
       }
     } else {
       result = { cancelled: true, message: "Action declined by user." };
     }
   } else if (confirmed) {
-    const toolFn = toolFunctions[functionName];
+    const toolFn = resolveTool(toolFunctions, functionName);
     if (!toolFn) {
       result = { error: `Unknown tool requested: ${functionName}.` };
     } else {
@@ -1144,7 +1180,7 @@ export async function* resumeAgentLoop(
         toolFn,
         confirmArgs,
         functionName,
-        TOOL_TIMEOUTS[functionName] || DEFAULT_TOOL_TIMEOUT
+        toolTimeoutSeconds(functionName)
       );
     }
   } else {

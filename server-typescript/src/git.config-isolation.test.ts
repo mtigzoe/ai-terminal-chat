@@ -292,8 +292,16 @@ test("GIT_CONFIG_OVERRIDES includes fsmonitor, hooksPath, alias.status", () => {
   assert.ok(joined.includes("core.fsmonitor="));
   assert.ok(joined.includes("core.hooksPath="));
   assert.ok(joined.includes("alias.status="));
-  assert.ok(joined.includes("diff.external="));
   assert.ok(joined.includes("credential.helper="));
+  // External diff drivers must be neutralized, but NOT with
+  // "-c diff.external=": Git reads the empty value as the *name of a program
+  // to execute*, so every `git diff` that rendered patch content died with
+  // "fatal: external diff died" (exit 128). runIsolatedGit() now appends
+  // --no-ext-diff to the diff-producing subcommands instead; see the
+  // NO_EXTERNAL_DIFF_SUBCOMMANDS behaviour asserted in
+  // tests/git.diff-escape.test.ts. This assertion exists to stop the broken
+  // spelling from being reintroduced.
+  assert.ok(!joined.includes("diff.external="), "diff.external= must not be set to empty");
 });
 
 test("runIsolatedGit still produces usable status/diff/log output", async () => {

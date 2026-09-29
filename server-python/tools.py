@@ -15,6 +15,7 @@ import re
 import shlex
 import stat
 import subprocess
+import sys
 from child_process import SubprocessCancelled, run_cancellable
 import tempfile
 import uuid
@@ -231,8 +232,12 @@ def search_files(query: str, path: str = ".") -> dict:
     # directory and use fwalk's directory descriptors for file opens. This
     # prevents a concurrent replacement of the validated root or a traversed
     # child directory from redirecting the search outside PROJECT_ROOT.
-    root_fd = _open_pinned_directory(directory)
+    # The open is inside the try: an unreadable (or since-removed) directory
+    # raises OSError here, and list_files() already handles the same failure
+    # the same way.
+    root_fd = None
     try:
+        root_fd = _open_pinned_directory(directory)
         if root_fd is not None:
             # Walk from the already-open directory descriptor instead of
             # reopening a /proc path. This keeps the enumeration anchored to
@@ -322,6 +327,8 @@ def search_files(query: str, path: str = ".") -> dict:
 
             if truncated:
                 break
+    except OSError as exc:
+        return {"error": f"Could not search directory: {exc}"}
     finally:
         if root_fd is not None:
             os.close(root_fd)
@@ -963,6 +970,26 @@ def _git_output_file_option_error(command: str) -> dict | None:
                     "to a file. Use stdout instead."
                 )
             }
+        # `git diff --no-index <A> <B>` compares two arbitrary paths while
+        # ignoring the repository entirely, and prints the full contents of
+        # both files. That bypassed every path check in this module: the
+        # directory guard only covers ls/dir/pwd, and the read-permission check
+        # only runs when the user has selected files on the Project page. So
+        # run_command("git diff --no-index ../salary.csv src/notes.txt")
+        # returned an out-of-project file verbatim to the model.
+        # --ita-invisible-in-index implies --no-index in Git, so block it too.
+        if tokens[1].lower() == "diff" and (
+            token in {"--no-index", "--ita-invisible-in-index"}
+            or token.startswith(("--no-index=", "--ita-invisible-in-index="))
+        ):
+            return {
+                "error": (
+                    "Command blocked: 'git diff --no-index' compares paths "
+                    "outside the repository, which would expose files outside "
+                    "the project. Use 'git diff' on the project repository "
+                    "instead."
+                )
+            }
 
     return None
 
@@ -1071,14 +1098,16 @@ def is_command_allowed(command: str) -> bool:
 
     The command is normalized by tokenizing it before matching so that
     leading/trailing whitespace, repeated spaces, and tabs do not affect
-    the result.
+    the result. The same canonical form the enforcer uses is applied to the
+    command and to the prefixes: _canonicalize_command() maps the Windows
+    git.exe/git.cmd/git.bat aliases onto "git" and lowercases for the
+    comparison. Without that, run_command() (which pre-canonicalizes) and
+    this exported predicate disagreed -- "git status" was allowed while
+    "git.exe status" was not, and a persisted "git.exe diff --stat" allowlist
+    entry authorized nothing.
     """
 
-    try:
-        tokens = shlex.split(command, posix=False)
-    except ValueError:
-        tokens = command.split()
-    normalized = " ".join(tokens)
+    normalized = _canonicalize_command(command).lower()
     normalized_prefixes = (
         _canonicalize_command(prefix).lower()
         for prefix in ALLOWED_COMMAND_PREFIXES
@@ -1638,21 +1667,52 @@ def _atomic_replace_text(path: Path, content: str) -> None:
 def _sanitized_git_config():
     """Temporarily remove URL/filter/include config under the Git operation lock."""
     with _GIT_OPERATION_LOCK:
-        backups: list[tuple[Path, str]] = []
+        # (path, original, sanitized) -- the sanitized text is kept so the
+        # restore can tell "still ours" from "someone else edited it".
+        backups: list[tuple[Path, str, str]] = []
         try:
             for path in _git_config_files():
                 original = path.read_text(encoding="utf-8")
                 sanitized = _strip_dangerous_git_config(original)
                 if sanitized != original:
                     _atomic_replace_text(path, sanitized)
-                    backups.append((path, original))
+                    backups.append((path, original, sanitized))
             yield
         finally:
-            for path, original in reversed(backups):
+            for path, original, sanitized in reversed(backups):
+                # Do not overwrite a config change made by another process while
+                # the temporary sanitization was active: blindly restoring the
+                # backup silently destroyed the user's concurrent edits (for
+                # example a signingkey they added during a long fetch).
+                # Mirrors withSanitizedGitConfigUnlocked() in the TypeScript
+                # backend, which performs the same content check.
+                try:
+                    current = path.read_text(encoding="utf-8")
+                except OSError as exc:
+                    print(
+                        f"Warning: could not read {path} to restore the Git "
+                        f"configuration ({exc}); the configuration is left in "
+                        f"its sanitized form. Review {path} and re-add any "
+                        f"settings that were removed.",
+                        file=sys.stderr,
+                    )
+                    continue
+                if current != sanitized:
+                    continue
                 try:
                     _atomic_replace_text(path, original)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    # Previously swallowed, which left the stripped config in
+                    # place permanently and silently discarded the user's
+                    # url.*.insteadOf / include.path / filter.* settings with
+                    # no indication anything had gone wrong.
+                    print(
+                        f"Warning: could not restore the Git configuration at "
+                        f"{path} ({exc}); it is left in its sanitized form. "
+                        f"Review {path} and re-add any settings that were "
+                        f"removed.",
+                        file=sys.stderr,
+                    )
 
 
 _GIT_CONFIG_OVERRIDES = [
@@ -2847,6 +2907,12 @@ def git_commit(message: str, confirm: bool = False) -> dict:
 
     if not confirm:
         diff_result = git_diff(staged=True)
+        # git_diff reports failures as an "error" key. Collapsing those to ""
+        # made every timeout, missing-git and non-zero-exit case read as
+        # "No staged changes to commit", so the model told the user there was
+        # nothing to commit when the real problem was a failed diff.
+        if isinstance(diff_result, dict) and diff_result.get("error"):
+            return {"error": diff_result["error"]}
         diff_text = ""
         if isinstance(diff_result, dict):
             diff_text = diff_result.get("diff", "") or ""
@@ -3185,7 +3251,11 @@ def create_file(path: str, contents: str = "", confirm: bool = False) -> dict:
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
         "created": True,
-        "bytes_written": len(contents.encode("utf-8")),
+        # Report the size actually on disk. Path.write_text uses the default
+        # newline translation, so on Windows every "\n" is written as "\r\n";
+        # sizing the untranslated string undercounted each newline and
+        # disagreed with the bytes the pending-file fingerprint hashes.
+        "bytes_written": file_path.stat().st_size,
     }
 
 
@@ -3281,7 +3351,8 @@ def write_file(path: str, contents: str, confirm: bool = False) -> dict:
     return {
         "path": str(file_path.relative_to(PROJECT_ROOT)),
         "overwritten": existed,
-        "bytes_written": len(contents.encode("utf-8")),
+        # Size on disk, not of the untranslated source string (see create_file).
+        "bytes_written": file_path.stat().st_size,
     }
 
 
@@ -3377,11 +3448,37 @@ def _extract_patch_target_paths(patch_text: str) -> set:
     Reads '--- a/<path>' and '+++ b/<path>' style header lines (also
     tolerating headers without the 'a/'/'b/' prefix). '/dev/null'
     (used for pure adds/deletes) is ignored.
+
+    Hunk bodies are skipped. Every hunk body line carries a ' ', '-' or '+'
+    prefix, so removing a line whose content begins with '-- ' renders as
+    '--- ' and removing '-- a/x' renders as '--- a/x'. Treating those as
+    headers invented phantom target files: a patch deleting a SQL comment of
+    '-- a/../../etc/passwd' was validated against the path
+    '../../etc/passwd' and rejected as outside the project.
     """
 
     paths = set()
+    in_hunk = False
+    lines = patch_text.splitlines()
 
-    for line in patch_text.splitlines():
+    for index, line in enumerate(lines):
+        if line.startswith("diff --git "):
+            in_hunk = False
+            continue
+        if line.startswith("@@ "):
+            # Everything after a hunk header is body until the next real
+            # file header. Body lines can never introduce a new target file.
+            in_hunk = True
+            continue
+        if in_hunk and not (
+            # A "--- " line only ends a hunk when the matching "+++ " header
+            # follows; a minimal multi-file patch carries no "diff --git"
+            # separators, so that pair is what marks the next file.
+            line.startswith("--- ")
+            and (lines[index + 1] if index + 1 < len(lines) else "").startswith("+++ ")
+        ):
+            continue
+
         for prefix in ("+++ b/", "--- a/", "+++ ", "--- "):
             if line.startswith(prefix):
                 candidate = line[len(prefix):].split("\t")[0].strip()

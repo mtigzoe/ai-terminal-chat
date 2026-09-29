@@ -139,9 +139,26 @@ export function isPathWithinRoot(
   const normalize = (value: string) => (caseInsensitive ? value.toLowerCase() : value);
   const normalizedRoot = normalize(root);
   const normalizedCandidate = normalize(candidate);
+  if (normalizedCandidate === normalizedRoot) return true;
+  // A filesystem root is a legitimate project root (a container image that
+  // mounts the project at "/", or `git init C:\`). Appending a separator to
+  // "C:\" or "/" produced "C:\\" / "//" -- prefixes nothing can start with --
+  // so every path under such a root was rejected. The Python backend accepted
+  // it because pathlib.relative_to() has no such special case, so this was a
+  // cross-backend divergence.
+  //
+  // Both separators are stripped and both are accepted as the boundary, not
+  // just the host `sep`: the codebase treats "/" and "\" as interchangeable in
+  // project paths (see isAbsoluteOnAnyPlatform), and the caseInsensitive
+  // parameter exists precisely so POSIX behaviour is testable on Windows.
+  const trimmedRoot = normalizedRoot.replace(/[\\/]+$/, "");
+  if (trimmedRoot === "") {
+    // Root is "/" (or "\\\\"): every absolute path is inside it.
+    return normalizedCandidate.startsWith("/") || normalizedCandidate.startsWith("\\");
+  }
   return (
-    normalizedCandidate === normalizedRoot ||
-    normalizedCandidate.startsWith(normalizedRoot + sep)
+    normalizedCandidate.startsWith(`${trimmedRoot}/`) ||
+    normalizedCandidate.startsWith(`${trimmedRoot}\\`)
   );
 }
 

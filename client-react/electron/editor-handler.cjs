@@ -26,6 +26,26 @@ function timingSafeEqual(a, b) {
 }
 
 /**
+ * Build the argv for launching an editor.
+ *
+ * On Windows the editor entry points are `.cmd` shims. Since Node
+ * 18.20.2 / 20.12.2 / 22.0.0 (CVE-2024-27980) `spawn()` of a `.bat`/`.cmd`
+ * without a shell throws `Error: spawn EINVAL`, so every "Open in VS Code"
+ * silently fell through to the system opener. Route through `cmd.exe` the
+ * same way `scripts/prepare-server.cjs` already does for `npm.cmd`; argv
+ * stays an array, so the path is never concatenated into a shell string.
+ */
+function buildEditorSpawn(editorBin, filePath) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(editorBin)) {
+    return {
+      command: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', editorBin, filePath],
+    };
+  }
+  return { command: editorBin, args: [filePath] };
+}
+
+/**
  * Handle editor open request.
  * @param {Object} deps - Dependencies (for testability)
  * @param {Function} deps.spawn - spawn function (child_process.spawn)
@@ -45,8 +65,10 @@ async function handleEditorOpen({ spawn, openPath }, filePath, editorId) {
     console.error(`Refusing to launch unknown editor: ${editorId}`);
     return false;
   }
+  let child;
   try {
-    const child = spawn(targetEditor.bin, [filePath], { detached: true, stdio: 'ignore' });
+    const { command, args } = buildEditorSpawn(targetEditor.bin, filePath);
+    child = spawn(command, args, { detached: true, stdio: 'ignore' });
     await new Promise((resolve, reject) => {
       child.once('spawn', resolve);
       child.once('error', reject);
@@ -55,8 +77,10 @@ async function handleEditorOpen({ spawn, openPath }, filePath, editorId) {
     return true;
   } catch (err) {
     console.error('Failed to spawn editor:', err);
+    // The fallback did open the file, so report success rather than making
+    // the caller treat a working open as a failure.
     await openPath(filePath);
-    return false;
+    return true;
   }
 }
 
@@ -71,5 +95,6 @@ function getAvailableEditors() {
 module.exports = {
   handleEditorOpen,
   getAvailableEditors,
+  buildEditorSpawn,
   KNOWN_EDITORS,
 };
