@@ -71,11 +71,10 @@ def test_openai_compatible_non_json_body_raises_clear_error():
             provider.generate([{"role": "user", "content": "hi"}])
 
 
-def test_openai_compatible_malformed_tool_call_arguments_degrade_gracefully():
-    """Malformed (non-JSON) tool_call arguments from the model must not
-    crash parsing — the call should come through with empty args
-    rather than raising, so the agent loop can still report a normal
-    tool-execution error instead of losing the whole turn.
+def test_openai_compatible_malformed_tool_call_arguments_are_dropped_safely():
+    """Malformed tool arguments must not crash parsing or execute a tool
+    with coerced default arguments. Drop the malformed call from both the
+    normalized call list and the native assistant turn.
     """
 
     provider = OpenAIProvider(api_key="test-key")
@@ -104,9 +103,8 @@ def test_openai_compatible_malformed_tool_call_arguments_degrade_gracefully():
     with patch("openai_compatible.safe_fetch.safe_post", return_value=mock_response):
         result = provider.generate([{"role": "user", "content": "hi"}])
 
-    assert len(result.tool_calls) == 1
-    assert result.tool_calls[0].name == "read_file"
-    assert result.tool_calls[0].args == {}
+    assert result.tool_calls == []
+    assert result.raw["tool_calls"] == []
 
 
 def test_openai_compatible_timeout_raises_actionable_runtime_error():
