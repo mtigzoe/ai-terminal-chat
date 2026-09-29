@@ -52,6 +52,7 @@ import threading
 from typing import Optional
 from urllib.parse import urljoin, urlsplit
 
+import idna
 import requests
 
 # SSRF validation pins the target hostname to a validated IP. Environment
@@ -140,6 +141,22 @@ class SSRFError(requests.exceptions.RequestException):
     callers that want the precise reason (rather than a generic
     "could not reach" message) should catch SSRFError first.
     """
+
+
+def normalize_hostname(hostname: str) -> str:
+    """Match the UTS #46 IDNA hostname that requests connects to.
+
+    ``requests`` converts internationalized hostnames to ASCII before handing
+    them to urllib3. Pinning the pre-conversion Unicode spelling would miss
+    that connection lookup and permit a second, unvalidated DNS answer.
+    """
+
+    if hostname.isascii():
+        return hostname
+    try:
+        return idna.encode(hostname, uts46=True).decode("ascii")
+    except idna.IDNAError as exc:
+        raise SSRFError(f"URL hostname is not valid IDNA: {hostname!r}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -309,9 +326,10 @@ def safe_request(
         parsed = urlsplit(current_url)
         if parsed.scheme not in ("http", "https"):
             raise SSRFError(f"Only http and https schemes are allowed (got {parsed.scheme!r})")
-        hostname = parsed.hostname
-        if not hostname:
+        raw_hostname = parsed.hostname
+        if not raw_hostname:
             raise SSRFError("URL is missing a hostname")
+        hostname = normalize_hostname(raw_hostname)
 
         allow_loopback = hostname_allows_loopback(hostname)
         addresses = resolve_and_validate(hostname, allow_loopback=allow_loopback)
@@ -332,10 +350,15 @@ def safe_request(
         if next_parsed.scheme not in ("http", "https"):
             response.close()
             raise SSRFError(f"Redirect blocked: unsupported scheme {next_parsed.scheme!r}")
-        next_hostname = next_parsed.hostname
-        if not next_hostname:
+        next_raw_hostname = next_parsed.hostname
+        if not next_raw_hostname:
             response.close()
             raise SSRFError("Redirect blocked: URL is missing a hostname")
+        try:
+            next_hostname = normalize_hostname(next_raw_hostname)
+        except SSRFError:
+            response.close()
+            raise
 
         # Always validate the redirect target -- even if we're not about
         # to follow it -- so an unsafe Location header never results in
