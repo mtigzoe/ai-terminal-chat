@@ -42,6 +42,7 @@ describe('Electron navigation boundary', () => {
     // unsafe schemes are still rejected.
     expect(isAllowedNavigationUrl('https://example.com/', entry)).toBe(false);
     expect(isAllowedNavigationUrl('javascript:alert(1)', entry)).toBe(false);
+    expect(isAllowedNavigationUrl(fileUrl('other.html'), entry)).toBe(false);
   });
 
   it('blocks navigation that leaves the renderer directory', () => {
