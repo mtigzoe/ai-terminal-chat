@@ -1,0 +1,740 @@
+{
+  "schema_version": 1,
+  "status": "proposal-only; extraction and destination repository creation were not performed",
+  "source_repository": "mtigzoe/ai-terminal-chat",
+  "source_commit": "8cf14a5d7066e6549c0160eb81c30ab1cbf2c546",
+  "destination_repository": "mtigzoe/ai-terminal-chat-python",
+  "generated_on": "2026-10-19",
+  "git_object_format": "sha1",
+  "source_python_file_count": 74,
+  "source_python_test_file_count": 42,
+  "total_file_count": 115,
+  "archived_monorepo_file_count": 37,
+  "history_paths": [
+    "server-python/",
+    "LICENSE",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    ".github/CONTRIBUTING.md",
+    "README.md",
+    "Makefile",
+    "docker-compose.yml",
+    "MANIFEST.md",
+    ".github/audit.md",
+    ".github/workflows/ci.yml",
+    "scripts/"
+  ],
+  "history_path_renames": {
+    ".github/CONTRIBUTING.md": "CONTRIBUTING.md",
+    "README.md": "docs/monorepo/README.md",
+    "Makefile": "docs/monorepo/Makefile",
+    "docker-compose.yml": "docs/monorepo/docker-compose.yml",
+    "MANIFEST.md": "docs/monorepo/MANIFEST.md",
+    ".github/audit.md": "docs/monorepo/audit.md",
+    ".github/workflows/ci.yml": "docs/monorepo/ci.yml",
+    "scripts/": "docs/monorepo/scripts/",
+    "server-python/": ""
+  },
+  "notes": [
+    "All tracked server-python files are included, including app_original.py used by app.py.",
+    "Mixed-purpose monorepo docs, scripts, Compose, Makefile and CI remain archived under docs/monorepo; active Python-only replacements follow in a separate standalone commit.",
+    "Blob IDs and modes verify byte-identical preservation at extraction before standalone adaptations.",
+    "No Python or requirements paths outside server-python were found in available local refs; repeat fully fetched history/rename audit before filtering.",
+    "Retain git-filter-repo commit-map/ref-map and unmodified source bundle separately; rewritten commit IDs and signatures differ.",
+    "Do not publish all mirrored refs; only individually reviewed filtered heads/tags after separate destination creation approval.",
+    "No secrets, local configuration, untracked files, dependencies or build outputs are included.",
+    "Apply root/archive rename rules before server-python/: to prevent sequential README rename collision."
+  ],
+  "files": [
+    {
+      "source": ".github/CONTRIBUTING.md",
+      "destination": "CONTRIBUTING.md",
+      "mode": "100644",
+      "git_blob": "d3e6c0f8b5c108f63b04d454b4cae61bc90632fd"
+    },
+    {
+      "source": ".github/audit.md",
+      "destination": "docs/monorepo/audit.md",
+      "mode": "100644",
+      "git_blob": "95ac53b86998f694c36772af06d722f003e730fc"
+    },
+    {
+      "source": ".github/workflows/ci.yml",
+      "destination": "docs/monorepo/ci.yml",
+      "mode": "100644",
+      "git_blob": "c004e5e241ffaca26ac1dab733c8865a704e9c2a"
+    },
+    {
+      "source": "CODE_OF_CONDUCT.md",
+      "destination": "CODE_OF_CONDUCT.md",
+      "mode": "100644",
+      "git_blob": "a0412d2092ce8491cd79a5277f1fbdf530dd145f"
+    },
+    {
+      "source": "LICENSE",
+      "destination": "LICENSE",
+      "mode": "100644",
+      "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64"
+    },
+    {
+      "source": "MANIFEST.md",
+      "destination": "docs/monorepo/MANIFEST.md",
+      "mode": "100644",
+      "git_blob": "816d6520cbe99312680249391c137a73344a3e1d"
+    },
+    {
+      "source": "Makefile",
+      "destination": "docs/monorepo/Makefile",
+      "mode": "100644",
+      "git_blob": "f5d76dbeaf58eef5b96fefa8ca7bedaf600a5895"
+    },
+    {
+      "source": "README.md",
+      "destination": "docs/monorepo/README.md",
+      "mode": "100644",
+      "git_blob": "552e5628313af68fba30b95badd07b8cbc2d13f0"
+    },
+    {
+      "source": "SECURITY.md",
+      "destination": "SECURITY.md",
+      "mode": "100644",
+      "git_blob": "c343493cf685f33ada2a5c7ef64ba077e7c90090"
+    },
+    {
+      "source": "docker-compose.yml",
+      "destination": "docs/monorepo/docker-compose.yml",
+      "mode": "100644",
+      "git_blob": "127521c99cf4cb5e341b32b6d552c955fee866b9"
+    },
+    {
+      "source": "scripts/electron/powershell/dev.ps1",
+      "destination": "docs/monorepo/scripts/electron/powershell/dev.ps1",
+      "mode": "100644",
+      "git_blob": "fd820d5569f3a8f165d123495947d3c16bb4a880"
+    },
+    {
+      "source": "scripts/electron/sh/dev.sh",
+      "destination": "docs/monorepo/scripts/electron/sh/dev.sh",
+      "mode": "100644",
+      "git_blob": "b7cec872a0a68c32b926f48527f994aac06b6dd0"
+    },
+    {
+      "source": "scripts/makefile/powershell/test.ps1",
+      "destination": "docs/monorepo/scripts/makefile/powershell/test.ps1",
+      "mode": "100644",
+      "git_blob": "c236714f261df727e947fbce54dda7535b3b3d5a"
+    },
+    {
+      "source": "scripts/makefile/sh/test.sh",
+      "destination": "docs/monorepo/scripts/makefile/sh/test.sh",
+      "mode": "100644",
+      "git_blob": "7104e1951674127347fb6958bc9816cb5135eb07"
+    },
+    {
+      "source": "scripts/powershell/run-electron-ts.ps1",
+      "destination": "docs/monorepo/scripts/powershell/run-electron-ts.ps1",
+      "mode": "100644",
+      "git_blob": "4e3c04fe3970bd995a71e33ceee7df1558d438e5"
+    },
+    {
+      "source": "scripts/powershell/run-electron.ps1",
+      "destination": "docs/monorepo/scripts/powershell/run-electron.ps1",
+      "mode": "100644",
+      "git_blob": "37829296fb7a1228ff42c2270f0cbf89e5916bf8"
+    },
+    {
+      "source": "scripts/powershell/start-electron-dev.ps1",
+      "destination": "docs/monorepo/scripts/powershell/start-electron-dev.ps1",
+      "mode": "100644",
+      "git_blob": "a8e0cd66e1fc67343f08a77fabf0edd4e019ce1a"
+    },
+    {
+      "source": "scripts/powershell/start-electron-ts.ps1",
+      "destination": "docs/monorepo/scripts/powershell/start-electron-ts.ps1",
+      "mode": "100644",
+      "git_blob": "186e36677484a14962a410135b71db1cb7978fbd"
+    },
+    {
+      "source": "scripts/powershell/start-electron.ps1",
+      "destination": "docs/monorepo/scripts/powershell/start-electron.ps1",
+      "mode": "100644",
+      "git_blob": "d49bda80270bb9f5f55621dfbf26383a7ec851bf"
+    },
+    {
+      "source": "scripts/powershell/start-offline-ai-ts.ps1",
+      "destination": "docs/monorepo/scripts/powershell/start-offline-ai-ts.ps1",
+      "mode": "100644",
+      "git_blob": "5968e04d0e62952937f62ca8949f6b017319c155"
+    },
+    {
+      "source": "scripts/powershell/start-offline-ai.ps1",
+      "destination": "docs/monorepo/scripts/powershell/start-offline-ai.ps1",
+      "mode": "100644",
+      "git_blob": "6d5fb22529bffa3d22779c12c37e339958891eb5"
+    },
+    {
+      "source": "scripts/powershell/stop-services.ps1",
+      "destination": "docs/monorepo/scripts/powershell/stop-services.ps1",
+      "mode": "100644",
+      "git_blob": "a4eaef65c6456a442e4b68e33fb85d536eb2167f"
+    },
+    {
+      "source": "scripts/readme.md",
+      "destination": "docs/monorepo/scripts/readme.md",
+      "mode": "100644",
+      "git_blob": "52cd749aeef7c9dc9c94aa6adbbd73d124424a4d"
+    },
+    {
+      "source": "scripts/sh/run-electron-ts.sh",
+      "destination": "docs/monorepo/scripts/sh/run-electron-ts.sh",
+      "mode": "100644",
+      "git_blob": "7e30d9bcc40d9953c35d0d63838d7432e54648db"
+    },
+    {
+      "source": "scripts/sh/run-electron.sh",
+      "destination": "docs/monorepo/scripts/sh/run-electron.sh",
+      "mode": "100644",
+      "git_blob": "34a9fd38d6ae3f3b9ea64af566a60a74f5b1f571"
+    },
+    {
+      "source": "scripts/sh/start-electron-ts.sh",
+      "destination": "docs/monorepo/scripts/sh/start-electron-ts.sh",
+      "mode": "100644",
+      "git_blob": "73909ca7059461f76f0637171b9900fb81466675"
+    },
+    {
+      "source": "scripts/sh/start-electron.sh",
+      "destination": "docs/monorepo/scripts/sh/start-electron.sh",
+      "mode": "100644",
+      "git_blob": "d33ec3266b1d7773ff4435e18e5183f3d13dc786"
+    },
+    {
+      "source": "scripts/sh/start-offline-ai-ts.sh",
+      "destination": "docs/monorepo/scripts/sh/start-offline-ai-ts.sh",
+      "mode": "100644",
+      "git_blob": "098780c0a090dac94aeb9a1c644c7bce1974ff4f"
+    },
+    {
+      "source": "scripts/sh/start-offline-ai.sh",
+      "destination": "docs/monorepo/scripts/sh/start-offline-ai.sh",
+      "mode": "100644",
+      "git_blob": "93ffc591441370c434429e54cfe6c96b1d2d7b68"
+    },
+    {
+      "source": "scripts/sh/stop-services.sh",
+      "destination": "docs/monorepo/scripts/sh/stop-services.sh",
+      "mode": "100644",
+      "git_blob": "7d94144b890bb2eb34b947cbd7a3bab9bf160f4f"
+    },
+    {
+      "source": "scripts/static-checks/README.md",
+      "destination": "docs/monorepo/scripts/static-checks/README.md",
+      "mode": "100644",
+      "git_blob": "0cad4a9816dd7104b9327ca659be53f19ccea1c1"
+    },
+    {
+      "source": "scripts/static-checks/check-python.sh",
+      "destination": "docs/monorepo/scripts/static-checks/check-python.sh",
+      "mode": "100644",
+      "git_blob": "ba5e541d92b423c8f5234e886f174402e9b89fa8"
+    },
+    {
+      "source": "scripts/static-checks/check-react.sh",
+      "destination": "docs/monorepo/scripts/static-checks/check-react.sh",
+      "mode": "100644",
+      "git_blob": "773db2808be625c65d641a3c4663ab2e9c9ac8c2"
+    },
+    {
+      "source": "scripts/static-checks/check-typescript.sh",
+      "destination": "docs/monorepo/scripts/static-checks/check-typescript.sh",
+      "mode": "100644",
+      "git_blob": "f1da64bb8f4912adc48f94d1c73d726ab5c698a4"
+    },
+    {
+      "source": "scripts/static-checks/run-all-tests.sh",
+      "destination": "docs/monorepo/scripts/static-checks/run-all-tests.sh",
+      "mode": "100644",
+      "git_blob": "4bbea98f82968ce33faec8fc476e467415fbde0a"
+    },
+    {
+      "source": "scripts/web/powershell/build.ps1",
+      "destination": "docs/monorepo/scripts/web/powershell/build.ps1",
+      "mode": "100644",
+      "git_blob": "26be90e39745783bcde2278d2b777726599ab8e4"
+    },
+    {
+      "source": "scripts/web/powershell/dev.ps1",
+      "destination": "docs/monorepo/scripts/web/powershell/dev.ps1",
+      "mode": "100644",
+      "git_blob": "a247c437be2f3c5f2ccf4d4100fa7fc623799c27"
+    },
+    {
+      "source": "scripts/web/powershell/install.ps1",
+      "destination": "docs/monorepo/scripts/web/powershell/install.ps1",
+      "mode": "100644",
+      "git_blob": "2eda3a508c0c7b3529a35552c286bbf64400cedc"
+    },
+    {
+      "source": "scripts/web/sh/build.sh",
+      "destination": "docs/monorepo/scripts/web/sh/build.sh",
+      "mode": "100644",
+      "git_blob": "7c6c9a3c3688e6eb60291c423fae749dd9fa4531"
+    },
+    {
+      "source": "scripts/web/sh/dev.sh",
+      "destination": "docs/monorepo/scripts/web/sh/dev.sh",
+      "mode": "100644",
+      "git_blob": "dba8fe11369b7ab3a463c9d2fcb6b3cd123435f3"
+    },
+    {
+      "source": "scripts/web/sh/install.sh",
+      "destination": "docs/monorepo/scripts/web/sh/install.sh",
+      "mode": "100644",
+      "git_blob": "d3b44f3b3b9f85dcbcced2fa9971263c985f460e"
+    },
+    {
+      "source": "server-python/.dockerignore",
+      "destination": ".dockerignore",
+      "mode": "100644",
+      "git_blob": "f10d8b51db3d00ad19fdaff2bf1cfd3a3805a7d1"
+    },
+    {
+      "source": "server-python/.env.example",
+      "destination": ".env.example",
+      "mode": "100644",
+      "git_blob": "9849343e4386610986086d94cac92e1671b088cc"
+    },
+    {
+      "source": "server-python/.gitignore",
+      "destination": ".gitignore",
+      "mode": "100644",
+      "git_blob": "38dd33886243f2b11aec4f3fc93563e19d96717b"
+    },
+    {
+      "source": "server-python/Dockerfile",
+      "destination": "Dockerfile",
+      "mode": "100644",
+      "git_blob": "aabf7c352077e19fd699ebb82a61451a5e94723a"
+    },
+    {
+      "source": "server-python/ENVIRONMENT.md",
+      "destination": "ENVIRONMENT.md",
+      "mode": "100644",
+      "git_blob": "81f9cedfd894b45e520971a0825f29c91cc80ae3"
+    },
+    {
+      "source": "server-python/README.md",
+      "destination": "README.md",
+      "mode": "100644",
+      "git_blob": "7d1d9938c89790adada56bfaf84d535ba4d2f2a5"
+    },
+    {
+      "source": "server-python/__init__.py",
+      "destination": "__init__.py",
+      "mode": "100644",
+      "git_blob": "1210209d94a8271e85f66fd1e88431305f8fd8eb"
+    },
+    {
+      "source": "server-python/agent.py",
+      "destination": "agent.py",
+      "mode": "100644",
+      "git_blob": "2ff48c72e9c93ca52e9e49376781d65a64204854"
+    },
+    {
+      "source": "server-python/anthropic_provider.py",
+      "destination": "anthropic_provider.py",
+      "mode": "100644",
+      "git_blob": "9c9d5eff7fa287f52e5c188aa5ac9752699c95b5"
+    },
+    {
+      "source": "server-python/app.py",
+      "destination": "app.py",
+      "mode": "100644",
+      "git_blob": "9c99f6952cc063b0126a5c3a18224d23a2bd6bec"
+    },
+    {
+      "source": "server-python/app_original.py",
+      "destination": "app_original.py",
+      "mode": "100644",
+      "git_blob": "b0b451eaca43626b521448bbf7a20ef576237570"
+    },
+    {
+      "source": "server-python/base.py",
+      "destination": "base.py",
+      "mode": "100644",
+      "git_blob": "c0a2f1804fe07ecaa87d1d92d68de3e5b55f2fdf"
+    },
+    {
+      "source": "server-python/cancellation.py",
+      "destination": "cancellation.py",
+      "mode": "100644",
+      "git_blob": "f1548a73d77cf0e52b6fde64f41ecd685ff13979"
+    },
+    {
+      "source": "server-python/child_process.py",
+      "destination": "child_process.py",
+      "mode": "100644",
+      "git_blob": "d09c86ebe17b072114e22d1a305e40e495d9f068"
+    },
+    {
+      "source": "server-python/gemini.py",
+      "destination": "gemini.py",
+      "mode": "100644",
+      "git_blob": "9d070990cbc8a9422600dcafb6fdee87f127d0e2"
+    },
+    {
+      "source": "server-python/kilo.py",
+      "destination": "kilo.py",
+      "mode": "100644",
+      "git_blob": "e70939f833b453a7fa5122694b60d4d174f4f6f4"
+    },
+    {
+      "source": "server-python/nvidia.py",
+      "destination": "nvidia.py",
+      "mode": "100644",
+      "git_blob": "76868f74fa133ca26be9207674daf00f450c7e02"
+    },
+    {
+      "source": "server-python/ollama.py",
+      "destination": "ollama.py",
+      "mode": "100644",
+      "git_blob": "498325abe5d4e1d7ca9c14da68cd3eacef549cde"
+    },
+    {
+      "source": "server-python/openai_compatible.py",
+      "destination": "openai_compatible.py",
+      "mode": "100644",
+      "git_blob": "c209029e8693dda862333ed669242a7c4c1ecffc"
+    },
+    {
+      "source": "server-python/openai_provider.py",
+      "destination": "openai_provider.py",
+      "mode": "100644",
+      "git_blob": "8aa3c8a40ff47041ff4c6596195d7389aec0a5f9"
+    },
+    {
+      "source": "server-python/openrouter.py",
+      "destination": "openrouter.py",
+      "mode": "100644",
+      "git_blob": "cf93b558330acdcf106883f538f81908070f2534"
+    },
+    {
+      "source": "server-python/pending.py",
+      "destination": "pending.py",
+      "mode": "100644",
+      "git_blob": "baa6be416ccb3471fb4c01eb32d48ae577aa7ae5"
+    },
+    {
+      "source": "server-python/prompts.py",
+      "destination": "prompts.py",
+      "mode": "100644",
+      "git_blob": "25bc8ccdd6482e8a8559ecd3b39526b3603f7905"
+    },
+    {
+      "source": "server-python/providers.py",
+      "destination": "providers.py",
+      "mode": "100644",
+      "git_blob": "47f032aa8120692d641c5c4db9e5a71fab89b3a8"
+    },
+    {
+      "source": "server-python/requirements-dev.txt",
+      "destination": "requirements-dev.txt",
+      "mode": "100644",
+      "git_blob": "26b77f68be53ca5605724cc5dead0e5cd6d4132b"
+    },
+    {
+      "source": "server-python/requirements.txt",
+      "destination": "requirements.txt",
+      "mode": "100644",
+      "git_blob": "071e950777198ebbb1bb9b5bd942ccc3ea939887"
+    },
+    {
+      "source": "server-python/safe_fetch.py",
+      "destination": "safe_fetch.py",
+      "mode": "100644",
+      "git_blob": "c05503195dc2123005558fc86521813aa8ab6290"
+    },
+    {
+      "source": "server-python/secure_server.py",
+      "destination": "secure_server.py",
+      "mode": "100644",
+      "git_blob": "d54db5b201de2fc51ad1b72d524eb2e367846462"
+    },
+    {
+      "source": "server-python/security.py",
+      "destination": "security.py",
+      "mode": "100644",
+      "git_blob": "4f976d44da02ad3dab4934603c52c8f796dfd782"
+    },
+    {
+      "source": "server-python/server_config.py",
+      "destination": "server_config.py",
+      "mode": "100644",
+      "git_blob": "aae1b83d1f87780321ac9f8939e0b7820c684b53"
+    },
+    {
+      "source": "server-python/tests/test_agent.py",
+      "destination": "tests/test_agent.py",
+      "mode": "100644",
+      "git_blob": "921f9f39ba2e458827f87990856340505c8851b2"
+    },
+    {
+      "source": "server-python/tests/test_agent_permission_flow.py",
+      "destination": "tests/test_agent_permission_flow.py",
+      "mode": "100644",
+      "git_blob": "5d01efec0c04beca918886c916d90e52b3e73281"
+    },
+    {
+      "source": "server-python/tests/test_agent_timeout_daemon.py",
+      "destination": "tests/test_agent_timeout_daemon.py",
+      "mode": "100644",
+      "git_blob": "28221c3969dac3f29d73d6ae96095dcc37e130f5"
+    },
+    {
+      "source": "server-python/tests/test_app.py",
+      "destination": "tests/test_app.py",
+      "mode": "100644",
+      "git_blob": "a88549807f503715ceecab2ea7d0f93ebec9d2fc"
+    },
+    {
+      "source": "server-python/tests/test_app_chat_endpoints.py",
+      "destination": "tests/test_app_chat_endpoints.py",
+      "mode": "100644",
+      "git_blob": "76d2aedbd96e5407d53dcd49c97ffef72a89a64e"
+    },
+    {
+      "source": "server-python/tests/test_app_provider_select.py",
+      "destination": "tests/test_app_provider_select.py",
+      "mode": "100644",
+      "git_blob": "69672c84adc7da9c7b18b026524dd2130b9f9746"
+    },
+    {
+      "source": "server-python/tests/test_bug_hunt_gitconfig.py",
+      "destination": "tests/test_bug_hunt_gitconfig.py",
+      "mode": "100644",
+      "git_blob": "b3a5bb1a2e20ed3a43de016b42c1d38250cc265d"
+    },
+    {
+      "source": "server-python/tests/test_bug_hunt_pending_refs.py",
+      "destination": "tests/test_bug_hunt_pending_refs.py",
+      "mode": "100644",
+      "git_blob": "7a5cfa2a4ffe5d47ae444cceadccaa0583537056"
+    },
+    {
+      "source": "server-python/tests/test_bug_hunt_regressions.py",
+      "destination": "tests/test_bug_hunt_regressions.py",
+      "mode": "100644",
+      "git_blob": "2e5f999f60fe77b21bb5d38626888154ba27b1ce"
+    },
+    {
+      "source": "server-python/tests/test_bug_hunt_regressions2.py",
+      "destination": "tests/test_bug_hunt_regressions2.py",
+      "mode": "100644",
+      "git_blob": "043cae08ad57649bb5c2b2d322794185862f098f"
+    },
+    {
+      "source": "server-python/tests/test_bug_hunt_regressions3.py",
+      "destination": "tests/test_bug_hunt_regressions3.py",
+      "mode": "100644",
+      "git_blob": "37374354af8e311c517ecf90178e1b79a9577785"
+    },
+    {
+      "source": "server-python/tests/test_cancellation.py",
+      "destination": "tests/test_cancellation.py",
+      "mode": "100644",
+      "git_blob": "ad0b304c9d3224280dce40ab9e6f63cecd8b88a3"
+    },
+    {
+      "source": "server-python/tests/test_child_process.py",
+      "destination": "tests/test_child_process.py",
+      "mode": "100644",
+      "git_blob": "ed43905108cb0f9a00650413fcc21a8828846c1b"
+    },
+    {
+      "source": "server-python/tests/test_command_path_boundary.py",
+      "destination": "tests/test_command_path_boundary.py",
+      "mode": "100644",
+      "git_blob": "8f73f3d7ba1c9b1be25f571b76d393d06064225c"
+    },
+    {
+      "source": "server-python/tests/test_direct_git_commands.py",
+      "destination": "tests/test_direct_git_commands.py",
+      "mode": "100644",
+      "git_blob": "1215a55ea70e872f1e4558d4db6801c65aa82726"
+    },
+    {
+      "source": "server-python/tests/test_file_permission_bypass.py",
+      "destination": "tests/test_file_permission_bypass.py",
+      "mode": "100644",
+      "git_blob": "b378b5247115162453fa791308f50b1773a8fb93"
+    },
+    {
+      "source": "server-python/tests/test_file_permissions.py",
+      "destination": "tests/test_file_permissions.py",
+      "mode": "100644",
+      "git_blob": "69d801c75fd241b8ba78836e174d6d6b30e4e754"
+    },
+    {
+      "source": "server-python/tests/test_git_config_security.py",
+      "destination": "tests/test_git_config_security.py",
+      "mode": "100644",
+      "git_blob": "9bd18314fdfa18ea9150ed2dd0eef470f6b8839a"
+    },
+    {
+      "source": "server-python/tests/test_git_remote_credential.py",
+      "destination": "tests/test_git_remote_credential.py",
+      "mode": "100644",
+      "git_blob": "3b4f2c3f0cdcf222d0a24c8a60970a421955b4c5"
+    },
+    {
+      "source": "server-python/tests/test_git_status.py",
+      "destination": "tests/test_git_status.py",
+      "mode": "100644",
+      "git_blob": "72b3d80e9844bdfa3118b5c5fb1ca4831f78ac30"
+    },
+    {
+      "source": "server-python/tests/test_nvidia_security.py",
+      "destination": "tests/test_nvidia_security.py",
+      "mode": "100644",
+      "git_blob": "cc4fc31b65d217c24a9ae7781abe82473a1df4e0"
+    },
+    {
+      "source": "server-python/tests/test_ollama_install.py",
+      "destination": "tests/test_ollama_install.py",
+      "mode": "100644",
+      "git_blob": "d7b8effd163f9667859027d2d8c72eceabf8b54d"
+    },
+    {
+      "source": "server-python/tests/test_ollama_integration.py",
+      "destination": "tests/test_ollama_integration.py",
+      "mode": "100644",
+      "git_blob": "017cfe3a3930185feafb07de98e9a958e1d8dd56"
+    },
+    {
+      "source": "server-python/tests/test_ollama_offline.py",
+      "destination": "tests/test_ollama_offline.py",
+      "mode": "100644",
+      "git_blob": "87c359cfadf8c9c6aca4e00c984235d9406a36d6"
+    },
+    {
+      "source": "server-python/tests/test_ollama_security.py",
+      "destination": "tests/test_ollama_security.py",
+      "mode": "100644",
+      "git_blob": "d9ff3d9320081041d1f9ee8635d52a86ec85d34b"
+    },
+    {
+      "source": "server-python/tests/test_openai_compatible_errors.py",
+      "destination": "tests/test_openai_compatible_errors.py",
+      "mode": "100644",
+      "git_blob": "d4df979b16466283530a541499c3f4e714de5b08"
+    },
+    {
+      "source": "server-python/tests/test_pending.py",
+      "destination": "tests/test_pending.py",
+      "mode": "100644",
+      "git_blob": "d9ca1dd8ea2bbbae11e42ab0618eaf3466e26008"
+    },
+    {
+      "source": "server-python/tests/test_project_root.py",
+      "destination": "tests/test_project_root.py",
+      "mode": "100644",
+      "git_blob": "dedb8d9664c12660c4abfee596746b4499b61094"
+    },
+    {
+      "source": "server-python/tests/test_provider_contract.py",
+      "destination": "tests/test_provider_contract.py",
+      "mode": "100644",
+      "git_blob": "2a55cb8f02db880bc629673cd5da5ec25ed0ca7e"
+    },
+    {
+      "source": "server-python/tests/test_provider_error_handling.py",
+      "destination": "tests/test_provider_error_handling.py",
+      "mode": "100644",
+      "git_blob": "8f4ba31ca2039c382c07b2358f2a371681b1eb87"
+    },
+    {
+      "source": "server-python/tests/test_provider_select_rollback.py",
+      "destination": "tests/test_provider_select_rollback.py",
+      "mode": "100644",
+      "git_blob": "e9e51d2c8d944564f62204c74c114e8b03401755"
+    },
+    {
+      "source": "server-python/tests/test_provider_timeout_config.py",
+      "destination": "tests/test_provider_timeout_config.py",
+      "mode": "100644",
+      "git_blob": "31b9fca9baf7346de16cb86e46eb97080cad3dac"
+    },
+    {
+      "source": "server-python/tests/test_providers.py",
+      "destination": "tests/test_providers.py",
+      "mode": "100644",
+      "git_blob": "15ca6ac86f7f282de34ff13a0a72b1f56442a3e8"
+    },
+    {
+      "source": "server-python/tests/test_resume_agent_loop.py",
+      "destination": "tests/test_resume_agent_loop.py",
+      "mode": "100644",
+      "git_blob": "a2d0537f2e1cdb1e20450ffbf9593853197b29e9"
+    },
+    {
+      "source": "server-python/tests/test_safe_fetch.py",
+      "destination": "tests/test_safe_fetch.py",
+      "mode": "100644",
+      "git_blob": "b1f32d936d40b301fe4ed2ab0a755c58c05f7679"
+    },
+    {
+      "source": "server-python/tests/test_secure_server.py",
+      "destination": "tests/test_secure_server.py",
+      "mode": "100644",
+      "git_blob": "d56f88a7534105f8410ee5352ee48e2ff2037cfb"
+    },
+    {
+      "source": "server-python/tests/test_security_config.py",
+      "destination": "tests/test_security_config.py",
+      "mode": "100644",
+      "git_blob": "12df4f2d2271754f36c60fbb4dc15b1966c0ffa2"
+    },
+    {
+      "source": "server-python/tests/test_server_config.py",
+      "destination": "tests/test_server_config.py",
+      "mode": "100644",
+      "git_blob": "c498dea758c3533c3c9d1fee65f1865aacd31e25"
+    },
+    {
+      "source": "server-python/tests/test_smoke.py",
+      "destination": "tests/test_smoke.py",
+      "mode": "100644",
+      "git_blob": "724cec5c5590094d085306786a3e500a3a42be58"
+    },
+    {
+      "source": "server-python/tests/test_terminal_env_isolation.py",
+      "destination": "tests/test_terminal_env_isolation.py",
+      "mode": "100644",
+      "git_blob": "f0b62617f5d01747440fc980dcbce1a6b29869ba"
+    },
+    {
+      "source": "server-python/tests/test_tools.py",
+      "destination": "tests/test_tools.py",
+      "mode": "100644",
+      "git_blob": "6b3436ae0a5a372088a8708be286220db9492d28"
+    },
+    {
+      "source": "server-python/tests/test_write_tools.py",
+      "destination": "tests/test_write_tools.py",
+      "mode": "100644",
+      "git_blob": "97de30e2b4696f32ec0a6d0982b9d980d7c5da30"
+    },
+    {
+      "source": "server-python/tools.py",
+      "destination": "tools.py",
+      "mode": "100644",
+      "git_blob": "19d63be1d57282fa58f0edc2b0454e0e2cbaf0f0"
+    },
+    {
+      "source": "server-python/xai.py",
+      "destination": "xai.py",
+      "mode": "100644",
+      "git_blob": "a1363dda13af587252ed912492f12cbdea85626e"
+    }
+  ]
+}
