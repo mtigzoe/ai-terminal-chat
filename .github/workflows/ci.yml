@@ -136,6 +136,7 @@ jobs:
         run: |
           node tests/external-url.test.cjs
           node tests/project-path.test.cjs
+          node tests/editor-open.test.cjs
       - name: Run tests
         run: npm test -- --run
       - name: Build
@@ -151,8 +152,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Install client test dependencies
+        working-directory: client-react
+        # These tests use Node/jsdom and temporary shims, not the Electron binary.
+        run: npm ci --ignore-scripts
       - name: Run Electron security regression tests
         working-directory: client-react
         run: |
           node tests/external-url.test.cjs
           node tests/project-path.test.cjs
+          node tests/editor-open.test.cjs
+      - name: Run React and Electron helper tests
+        working-directory: client-react
+        run: npm test -- --run
