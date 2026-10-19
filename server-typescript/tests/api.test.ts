@@ -1079,10 +1079,11 @@ describe("POST /confirm", () => {
       expect(confirmRes.status).toBe(200);
       const confirmData = await confirmRes.json();
 
-      // The already-in-flight confirmed read still completes...
-      expect(confirmData.result).toMatchObject({ path: "notes.txt", contents: "shh" });
-      // ...but the loop stops right there instead of giving the model
-      // another turn, exactly as an explicit /cancel would.
+      // A request aborted before confirmation execution must not start the
+      // confirmed tool. This also prevents a subprocess from starting if
+      // an already-disconnected client approves an execution-risk command.
+      expect(confirmData.result).toMatchObject({ error: "Tool read_file cancelled." });
+      // The loop must not give the model another turn.
       expect(confirmData.cancelled).toBe(true);
       expect(confirmData.text).toBe("");
       expect(confirmData.pending_confirmation).toBeUndefined();
