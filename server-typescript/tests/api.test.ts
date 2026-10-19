@@ -1092,4 +1092,23 @@ describe("POST /confirm", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+  it("does not grant a legacy confirmation after the HTTP request was already cancelled", async () => {
+    const action = createPending("read_file_permission", { path: "blocked.txt" }, { permission_request: true });
+    const controller = new AbortController();
+    controller.abort();
+    const response = await createTestApp().request("http://localhost/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action_id: action.action_id, confirmed: true }),
+      signal: controller.signal,
+    });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result).toMatchObject({
+      action_id: action.action_id,
+      cancelled: true,
+    });
+    expect(result.permission_granted).toBeUndefined();
+  });
+
 });
