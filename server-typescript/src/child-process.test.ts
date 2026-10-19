@@ -132,3 +132,30 @@ test("Windows cancellation terminates descendants, not just the direct child", {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test("runChildProcess never starts a subprocess for a pre-aborted request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "terminal-preabort-"));
+  const marker = join(dir, "was-started");
+  try {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      runChildProcess(process.execPath, [
+        "-e",
+        "require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", 'started')",
+      ], {
+        cwd: dir,
+        timeout: 5000,
+        signal: controller.signal,
+        maxBuffer: 10000,
+        env: process.env,
+      }),
+      (error: Error & { code?: string }) => {
+        assert.equal(error.code, "ABORT_ERR");
+        return true;
+      },
+    );
+    assert.equal(existsSync(marker), false, "a cancelled request unexpectedly started its child");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
