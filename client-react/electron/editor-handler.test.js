@@ -13,18 +13,19 @@ function createChild() {
 }
 
 describe('editor handler', () => {
-  it('reports success after the editor process emits spawn', async () => {
+  it('reports native editor success after the process emits spawn', async () => {
     const child = createChild();
     const spawn = vi.fn(() => child);
     const openPath = vi.fn();
 
-    const resultPromise = handleEditorOpen({ spawn, openPath }, '/project/file.txt', 'code');
+    const resultPromise = handleEditorOpen({ spawn, openPath }, '/project/file.txt', 'sublime');
     child.emit('spawn');
 
     await expect(resultPromise).resolves.toBe(true);
     expect(spawn).toHaveBeenCalledOnce();
     expect(child.unref).toHaveBeenCalledOnce();
     expect(openPath).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledWith('subl', ['/project/file.txt'], { detached: true, stdio: 'ignore' });
   });
 
   it('falls back to the system opener when the editor emits an error', async () => {
@@ -75,7 +76,7 @@ describe('editor handler: Windows .cmd shims', () => {
   it('routes a safe .cmd editor invocation through cmd.exe on Windows', () => {
     if (!isWin) return;
     const { command, args } = buildEditorSpawn('code.cmd', 'C:\\proj\\a b.txt');
-    expect(command.toLowerCase()).toMatch(/cmd(\\.exe)?$/);
+    expect(command).toBe(process.env.ComSpec || 'cmd.exe');
     expect(args).toEqual(['/d', '/s', '/v:off', '/c', 'code.cmd "C:\\proj\\a b.txt"']);
   });
 
@@ -87,9 +88,12 @@ describe('editor handler: Windows .cmd shims', () => {
     'C:\\proj\\a!PATH!.txt',
     'C:\\proj\\a>out.txt',
     'C:\\proj\\a<in.txt',
+    'C:\\proj\\a"quoted.txt',
+    'C:\\proj\\a\rfile.txt',
+    'C:\\proj\\a\nfile.txt',
   ])('refuses cmd metacharacters before they reach cmd.exe: %s', (filePath) => {
     if (!isWin) return;
-    expect(() => buildEditorSpawn('code.cmd', filePath)).toThrow(/unsafe for cmd\\.exe/i);
+    expect(() => buildEditorSpawn('code.cmd', filePath)).toThrow(/unsafe for cmd\.exe/i);
   });
 
   it('falls back to the system opener for a metacharacter path instead of spawning cmd.exe', async () => {
@@ -109,10 +113,13 @@ describe('editor handler: Windows .cmd shims', () => {
     const spawn = vi.fn(() => child);
     const promise = handleEditorOpen({ spawn, openPath: vi.fn() }, 'C:\\proj\\a.txt', 'code');
     child.emit('spawn');
+    child.emit('exit', 0, null);
     return promise.then(() => {
       const opts = spawn.mock.calls[0][2];
       expect(opts).toBeDefined();
       expect(opts.shell).toBeFalsy();
+      expect(opts.windowsVerbatimArguments).toBe(true);
+      expect(opts.windowsHide).toBe(true);
     });
   });
 
@@ -120,8 +127,46 @@ describe('editor handler: Windows .cmd shims', () => {
     if (!isWin) return;
     for (const editor of KNOWN_EDITORS.filter((e) => e.bin.endsWith('.cmd'))) {
       const { command } = buildEditorSpawn(editor.bin, 'C:\\proj\\a.txt');
-      expect(command.toLowerCase()).toMatch(/cmd(\\.exe)?$/);
+      expect(command).toBe(process.env.ComSpec || 'cmd.exe');
     }
+  });
+
+  it.each(['code.cmd', 'code.CMD', 'editor.bat', 'editor.BAT'])('recognizes the %s shim suffix', (editorBin) => {
+    if (!isWin) return;
+    const result = buildEditorSpawn(editorBin, 'C:\\normal\\readme notes.txt');
+    expect(result.isCmdShim).toBe(true);
+    expect(result.command).toBe(process.env.ComSpec || 'cmd.exe');
+    expect(result.args).toEqual(['/d', '/s', '/v:off', '/c', editorBin + ' "C:\\normal\\readme notes.txt"']);
+  });
+
+  it('waits for the editor shim to succeed rather than just CMD spawning', async () => {
+    if (!isWin) return;
+    const child = createChild();
+    const openPath = vi.fn();
+    let settled = false;
+    const promise = handleEditorOpen({ spawn: () => child, openPath }, 'C:\\normal\\readme.txt', 'code');
+    promise.then(() => { settled = true; });
+    child.emit('spawn');
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(child.unref).not.toHaveBeenCalled();
+    child.emit('exit', 0, null);
+    await expect(promise).resolves.toBe(true);
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
+  it.each([[1, null], [null, 'SIGTERM']])('falls back when the shim exits with code %s and signal %s', async (code, signal) => {
+    if (!isWin) return;
+    const child = createChild();
+    const openPath = vi.fn().mockResolvedValue('');
+    const promise = handleEditorOpen({ spawn: () => child, openPath }, 'C:\\normal\\readme.txt', 'code');
+    child.emit('spawn');
+    expect(openPath).not.toHaveBeenCalled();
+    child.emit('exit', code, signal);
+    await expect(promise).resolves.toBe(true);
+    expect(openPath).toHaveBeenCalledExactlyOnceWith('C:\\normal\\readme.txt');
+    expect(child.unref).not.toHaveBeenCalled();
   });
 
   it('reports success when the fallback actually opened the file', async () => {

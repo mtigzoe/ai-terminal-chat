@@ -35,13 +35,17 @@ function timingSafeEqual(a, b) {
  * and handleEditorOpen() falls back to the OS opener instead.
  */
 function buildEditorSpawn(editorBin, filePath) {
-  if (process.platform === 'win32' && /\\.(cmd|bat)$/i.test(editorBin)) {
-    if (/[&|<>^%!\\r\\n"]/u.test(filePath)) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(editorBin)) {
+    if (/[&|<>^%!\r\n"]/u.test(filePath)) {
       throw new Error('File path contains characters that are unsafe for cmd.exe editor launch');
     }
+    // Shims forward %* to the native CLI. Double trailing backslashes so
+    // its argv parser does not consume the closing quote (for example C:\).
+    const quotedPath = filePath.replace(/\\+$/u, '$&$&');
     return {
+      isCmdShim: true,
       command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/v:off', '/c', `${editorBin} "${filePath}"`],
+      args: ['/d', '/s', '/v:off', '/c', `${editorBin} "${quotedPath}"`],
     };
   }
   return { command: editorBin, args: [filePath] };
@@ -69,11 +73,26 @@ async function handleEditorOpen({ spawn, openPath }, filePath, editorId) {
   }
   let child;
   try {
-    const { command, args } = buildEditorSpawn(targetEditor.bin, filePath);
-    child = spawn(command, args, { detached: true, stdio: 'ignore' });
+    const { command, args, isCmdShim = false } = buildEditorSpawn(targetEditor.bin, filePath);
+    child = spawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      // The /c argument is already quoted for CMD, which does not use CRT
+      // backslash escaping. Native editors keep Node's normal argv quoting.
+      ...(isCmdShim ? { windowsVerbatimArguments: true, windowsHide: true } : {}),
+    });
     await new Promise((resolve, reject) => {
-      child.once('spawn', resolve);
       child.once('error', reject);
+      if (isCmdShim) {
+        // Starting CMD does not establish that the editor shim exists or
+        // succeeded. Keep the OS fallback for missing or failing shims.
+        child.once('exit', (code, signal) => {
+          if (code === 0) resolve();
+          else reject(new Error('Editor command failed (exit ' + code + ', signal ' + signal + ')'));
+        });
+      } else {
+        child.once('spawn', resolve);
+      }
     });
     child.unref();
     return true;
