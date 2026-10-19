@@ -178,7 +178,7 @@ export class AnthropicProvider extends Provider {
   }
 
   private normalizeHistoryItem(item: unknown): AnthropicMessage | null {
-    if (!item || typeof item !== "object") return null;
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const record = item as Record<string, unknown>;
     if (record.role === "user" || record.role === "assistant") {
       if (typeof record.content === "string" && record.content) {
@@ -188,9 +188,17 @@ export class AnthropicProvider extends Provider {
         return { role: record.role, content: record.content as AnthropicContentBlock[] };
       }
     }
-    if ((record.role === "model" || record.role === "assistant") && Array.isArray(record.parts)) {
-      const text = (record.parts as { text?: string }[]).map((part) => part.text || "").join("");
-      if (text) return { role: "assistant", content: text };
+    const role = record.role === "model" ? "assistant" : record.role;
+    if ((role === "user" || role === "assistant") && Array.isArray(record.parts)) {
+      // React stores both sides of the conversation as text parts. Preserve
+      // their order/whitespace without forwarding UI metadata or coercing
+      // malformed parts into model input.
+      const text = record.parts.map((part: unknown) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return "";
+        const value = (part as Record<string, unknown>).text;
+        return typeof value === "string" ? value : "";
+      }).join("");
+      if (text) return { role, content: text };
     }
     return null;
   }
