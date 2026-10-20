@@ -1111,4 +1111,37 @@ describe("POST /confirm", () => {
     expect(result.permission_granted).toBeUndefined();
   });
 
+  it("cancels a running legacy confirmed command through its request id", async () => {
+    const previousRoot = getProjectRoot();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-confirm-active-"));
+    try {
+      fs.mkdirSync(path.join(root, "pytest"));
+      fs.writeFileSync(path.join(root, "pytest", "__main__.py"), "import time\nfrom pathlib import Path\nPath('started.marker').write_text('running')\ntime.sleep(10)\n");
+      setProjectRoot(root);
+      const action = createPending("run_command", { command: "python -m pytest" }, { command: "python -m pytest" });
+      const requestId = "legacy-confirm-active-" + Date.now();
+      const startedAt = Date.now();
+      const inFlight = createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: true, request_id: requestId }),
+      });
+      let started = false;
+      for (let i = 0; i < 80; i++) {
+        if (fs.existsSync(path.join(root, "started.marker"))) { started = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(started).toBe(true);
+      const cancelled = await createTestApp().request("http://localhost/cancel/" + requestId, { method: "POST" });
+      expect(cancelled.status).toBe(200);
+      const response = await inFlight;
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ action_id: action.action_id, cancelled: true });
+      expect(Date.now() - startedAt).toBeLessThan(9000);
+    } finally {
+      setProjectRoot(previousRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 });
