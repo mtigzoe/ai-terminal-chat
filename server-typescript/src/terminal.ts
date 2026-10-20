@@ -1357,11 +1357,13 @@ function capOutput(value: string): {
 
 /** Environment variable names that must not be inherited by terminal
  * subprocesses. Project-controlled scripts (npm lifecycle, pytest plugins,
- * etc.) must not observe provider API keys from the server process. */
+ * etc.) must not observe provider API keys or inherit the application
+ * profile's configuration directory from the server process. */
 const SENSITIVE_ENV_VAR_NAMES = new Set([
   "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
   "XAI_API_KEY", "OPENROUTER_API_KEY", "KILO_API_KEY", "API_AUTH_TOKEN",
   "AI_TERMINAL_CHAT_HEALTH_TOKEN", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID",
+  "AI_TERMINAL_CHAT_CONFIG_DIR",
   "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN",
 ]);
 const EXECUTION_ALTERING_ENV_VAR_NAMES = new Set([
@@ -1393,7 +1395,8 @@ export function buildSanitizedTerminalEnv(): SanitizedTerminalEnv {
   for (const name of SENSITIVE_ENV_VAR_NAMES) delete env[name];
   for (const key of Object.keys(env)) {
     const upper = key.toUpperCase();
-    if (upper.endsWith("_API_KEY") || upper.endsWith("_SECRET") ||
+    if (upper === "AI_TERMINAL_CHAT_CONFIG_DIR" ||
+        upper.endsWith("_API_KEY") || upper.endsWith("_SECRET") ||
         upper.endsWith("_TOKEN") || upper.includes("PASSWORD") ||
         STRIPPED_ENV_VAR_PREFIXES.some((prefix) => upper.startsWith(prefix))) {
       delete env[key];

@@ -289,11 +289,14 @@ Backend configuration is supplied through the TypeScript server environment. Imp
 | `PROVIDER` | Active provider id (`gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`, `nvidia`) |
 | `PORT` | TypeScript API listen port (default `9000`) |
 | `HOST` | Backend bind address (default `127.0.0.1`; Docker uses `0.0.0.0`) |
+| `AI_TERMINAL_CHAT_CONFIG_DIR` | Absolute backend configuration directory for a standalone server; defaults to `~/.ai-terminal-chat` when unset. Packaged Electron sets this to `<userData>/backend` for its selected profile. |
 | Provider-specific keys and models | See `.env.example` (for example `GOOGLE_API_KEY` / `GEMINI_MODEL`, `OLLAMA_*`, `OPENAI_*`, `XAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `NVIDIA_*`) |
 
 API keys remain on the backend only. They are never returned by the provider status or selection endpoints.
 
-Project root and allowed terminal command prefixes can also be managed through the application UI / API and are stored under `~/.ai-terminal-chat/config.json` (outside the project tree).
+Project root and allowed terminal command prefixes can also be managed through the application UI / API and are stored in `config.json` in the backend configuration directory. Standalone servers keep using `~/.ai-terminal-chat/config.json` unless an absolute `AI_TERMINAL_CHAT_CONFIG_DIR` is supplied. An empty or relative override is rejected.
+
+Packaged Electron stores backend settings in `<userData>/backend/config.json`. A launch with `--user-data-dir=<absolute disposable directory>` therefore isolates backend settings together with Electron storage. It does not import or fall back to the home-directory configuration when the selected profile is new. Desktop users upgrading from the shared home-directory configuration must select their provider, project folder and command permissions for the new profile. The previous file remains untouched; the standalone server continues to use it by default.
 
 ## AI providers and models
 

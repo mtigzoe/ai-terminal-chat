@@ -51,6 +51,7 @@ import {
   WindowsHandlePathError,
 } from "./windows-handle-path.ts";
 import { acquireConfigLock, releaseConfigLock } from "./config-lock.ts";
+import { getConfigDirectory } from "./config-directory.ts";
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -190,7 +191,7 @@ let configDirOverride: string | null = null;
 let configFileOverride: string | null = null;
 
 function configDir(): string {
-  return configDirOverride ?? join(homedir(), ".ai-terminal-chat");
+  return configDirOverride ?? getConfigDirectory();
 }
 
 function configFilePath(): string {
@@ -408,9 +409,9 @@ export function __setProjectRootInMemory(root: string): void {
 /**
  * Validate, persist, and activate a new project root.
  *
- * The configuration file lives under the user's home directory, outside
- * any project, so the filesystem tools (which are confined to
- * PROJECT_ROOT) can never expose or modify it.
+ * The configuration file lives in the selected application profile (or
+ * the standalone server's home configuration directory), independently
+ * of the selected project.
  *
  * Throws `SecurityValidationError` for invalid input (empty path, path
  * does not exist, path is not a directory, or the unsupported

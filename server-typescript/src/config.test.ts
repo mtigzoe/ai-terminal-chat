@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
 
@@ -16,10 +16,25 @@ import {
   SERVER_HOST,
 } from "./config.js";
 import { acquireConfigLock, releaseConfigLock } from "./config-lock.ts";
+import { getConfigDirectory } from "./config-directory.ts";
+import {
+  __resetProjectRootForTests,
+  __setConfigDirForTests,
+  getConfigFile,
+  getProjectRoot,
+  loadProviderSelection,
+  persistProviderSelection,
+  resolveFollowingSymlinks,
+  setConfigFileForTests,
+  setProjectRoot,
+} from "./security.ts";
 
 // Snapshot and restore any env vars a test touches, so tests never leak
 // state into each other or into the surrounding shell environment.
-const TRACKED_VARS = ["HOST", "PORT", "PROVIDER", "AI_TERMINAL_CHAT_TEST_VAR"];
+const TRACKED_VARS = [
+  "HOST", "PORT", "PROVIDER", "AI_TERMINAL_CHAT_TEST_VAR",
+  "AI_TERMINAL_CHAT_CONFIG_DIR", "AI_TERMINAL_PROJECT_ROOT", "HOME", "USERPROFILE",
+];
 let snapshot: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -38,6 +53,122 @@ afterEach(() => {
       process.env[name] = value;
     }
   }
+});
+
+describe("application profile configuration directory", () => {
+  let dir: string;
+  let fakeHome: string;
+  let profileDir: string;
+  let ordinaryConfigPath: string;
+  let ordinaryConfig: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "ai-terminal-chat-profile-config-"));
+    fakeHome = join(dir, "ordinary-home");
+    profileDir = join(dir, "disposable-profile", "backend-config");
+    ordinaryConfigPath = join(fakeHome, ".ai-terminal-chat", "config.json");
+    mkdirSync(dirname(ordinaryConfigPath), { recursive: true });
+    ordinaryConfig = `${JSON.stringify({
+      provider: "openai",
+      model: "ordinary-model",
+      project_root: fakeHome,
+      allowed_commands: ["ordinary-command"],
+    }, null, 2)}\n`;
+    writeFileSync(ordinaryConfigPath, ordinaryConfig);
+    // Both supported OS home variables point to a disposable fixture. No
+    // test reads or writes the actual user's backend configuration.
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    process.env.AI_TERMINAL_CHAT_CONFIG_DIR = profileDir;
+    delete process.env.AI_TERMINAL_PROJECT_ROOT;
+    __setConfigDirForTests(null);
+    setConfigFileForTests(null);
+    __resetProjectRootForTests();
+  });
+
+  afterEach(() => {
+    __setConfigDirForTests(null);
+    setConfigFileForTests(null);
+    __resetProjectRootForTests();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("an explicit profile cannot load or overwrite ordinary home settings", () => {
+    assert.equal(getConfigDirectory(), profileDir);
+    assert.equal(getConfigFile(), join(profileDir, "config.json"));
+    assert.deepEqual(loadAppConfig(), {});
+    assert.deepEqual(loadProviderSelection(), {});
+    assert.equal(getProjectRoot(), resolveFollowingSymlinks(process.cwd()));
+
+    const selectedRoot = join(dir, "selected-project");
+    mkdirSync(selectedRoot);
+    persistAppConfig({ allowed_commands: ["profile-command"] });
+    persistProviderSelection("ollama", "profile-model", "http://127.0.0.1:11434/v1");
+    const savedRoot = setProjectRoot(selectedRoot);
+
+    assert.deepEqual(loadAppConfig(), {
+      allowed_commands: ["profile-command"],
+      provider: "ollama",
+      model: "profile-model",
+      ollama_base_url: "http://127.0.0.1:11434/v1",
+      project_root: savedRoot,
+    });
+    assert.deepEqual(loadProviderSelection(), {
+      provider: "ollama",
+      model: "profile-model",
+      ollama_base_url: "http://127.0.0.1:11434/v1",
+    });
+    __resetProjectRootForTests();
+    assert.equal(getProjectRoot(), savedRoot);
+    assert.equal(readFileSync(ordinaryConfigPath, "utf8"), ordinaryConfig);
+  });
+
+  test("standalone servers retain the home directory when the override is unset", () => {
+    delete process.env.AI_TERMINAL_CHAT_CONFIG_DIR;
+    assert.equal(getConfigDirectory(), join(fakeHome, ".ai-terminal-chat"));
+    assert.equal(getConfigFile(), ordinaryConfigPath);
+    assert.equal(loadAppConfig().model, "ordinary-model");
+    assert.deepEqual(loadProviderSelection(), { provider: "openai", model: "ordinary-model" });
+    assert.equal(getProjectRoot(), resolveFollowingSymlinks(fakeHome));
+    persistAppConfig({ standalone: true });
+    assert.equal(JSON.parse(readFileSync(ordinaryConfigPath, "utf8")).standalone, true);
+  });
+
+  test("relative or empty explicit directories fail without using the home profile", () => {
+    for (const configured of ["relative-profile", ".", "", "   "]) {
+      process.env.AI_TERMINAL_CHAT_CONFIG_DIR = configured;
+      assert.throws(() => getConfigDirectory(), /must be an absolute directory path/);
+      assert.throws(() => loadAppConfig(), /must be an absolute directory path/);
+      assert.throws(() => persistAppConfig({ isolated: true }), /must be an absolute directory path/);
+      assert.throws(() => getConfigFile(), /must be an absolute directory path/);
+      assert.throws(() => persistProviderSelection("ollama"), /must be an absolute directory path/);
+    }
+    assert.equal(readFileSync(ordinaryConfigPath, "utf8"), ordinaryConfig);
+  });
+
+  test("existing explicit file arguments and security test overrides keep precedence", () => {
+    process.env.AI_TERMINAL_CHAT_CONFIG_DIR = "invalid-relative-profile";
+    const explicitFile = join(dir, "explicit-config.json");
+    persistAppConfig({ explicit: true }, explicitFile);
+    assert.deepEqual(loadAppConfig(explicitFile), { explicit: true });
+
+    const testDir = join(dir, "test-directory");
+    __setConfigDirForTests(testDir);
+    persistProviderSelection("ollama", "test-model");
+    assert.equal(getConfigFile(), join(testDir, "config.json"));
+    assert.equal(loadProviderSelection().model, "test-model");
+
+    setConfigFileForTests(explicitFile);
+    persistProviderSelection("gemini", "explicit-model");
+    assert.equal(getConfigFile(), explicitFile);
+    assert.equal(loadAppConfig(explicitFile).model, "explicit-model");
+    assert.equal(readFileSync(ordinaryConfigPath, "utf8"), ordinaryConfig);
+  });
+
+  test("normalizes an absolute profile without depending on the working directory", () => {
+    process.env.AI_TERMINAL_CHAT_CONFIG_DIR = join(profileDir, "..", "backend-config");
+    assert.equal(getConfigDirectory(), resolve(profileDir));
+  });
 });
 
 describe("getEnvString", () => {
