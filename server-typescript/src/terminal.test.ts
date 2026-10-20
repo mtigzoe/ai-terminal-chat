@@ -323,12 +323,14 @@ test("isCommandAllowed: broad prefix that would enable forbidden commands is den
 test("a failed allowlist write does not change live command permissions", () => {
   const originalHome = process.env.HOME;
   const originalUserProfile = process.env.USERPROFILE;
+  const originalConfigDirectory = process.env.AI_TERMINAL_CHAT_CONFIG_DIR;
   const originalAllowedCommands = getAllowedCommands();
   const isolatedHome = mkdtempSync(join(tmpdir(), "terminal-allowlist-failure-"));
   const configTarget = join(isolatedHome, ".ai-terminal-chat", "config.json");
   mkdirSync(configTarget, { recursive: true });
   process.env.HOME = isolatedHome;
   process.env.USERPROFILE = isolatedHome;
+  process.env.AI_TERMINAL_CHAT_CONFIG_DIR = join(isolatedHome, ".ai-terminal-chat");
   __setAllowedCommandsForTests([...DEFAULT_ALLOWED_COMMAND_PREFIXES]);
 
   try {
@@ -344,6 +346,8 @@ test("a failed allowlist write does not change live command permissions", () => 
     else process.env.HOME = originalHome;
     if (originalUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = originalUserProfile;
+    if (originalConfigDirectory === undefined) delete process.env.AI_TERMINAL_CHAT_CONFIG_DIR;
+    else process.env.AI_TERMINAL_CHAT_CONFIG_DIR = originalConfigDirectory;
     rmSync(isolatedHome, { recursive: true, force: true });
   }
 });

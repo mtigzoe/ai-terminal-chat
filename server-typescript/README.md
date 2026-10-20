@@ -31,7 +31,17 @@ The server starts on `http://127.0.0.1:9000` by default. Override the port with 
 | `npm run build` | Compile TypeScript to `dist/` |
 | `npm run start` | Run the compiled server from `dist/` |
 | `npm run typecheck` | Run `tsc --noEmit` to check for type errors |
-| `npm test` | Run the API test suite with Vitest |
+| `npm test` | Run backend unit and Vitest suites in disposable test profiles |
+
+`npm test` and `npm run test:unit` establish a temporary home and backend configuration directory before application modules load. The Vitest configuration does the same for direct Vitest runs. Test profiles are removed on normal runner exit.
+
+To run an individual Node test suite, include the profile preloader:
+
+```bash
+node --import ./scripts/test-profile.mjs --import tsx --test src/trusted-exec.test.ts
+```
+
+Use this entry point instead of invoking `tsx --test` directly: several persistence fixtures intentionally save provider, project or command settings during setup and teardown.
 
 ## API Endpoints
 

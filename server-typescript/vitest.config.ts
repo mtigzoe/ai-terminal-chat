@@ -1,3 +1,4 @@
+import "./scripts/test-profile.mjs";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
