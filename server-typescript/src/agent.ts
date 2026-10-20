@@ -1164,7 +1164,8 @@ export async function* resumeAgentLoop(
           toolFn,
           functionArgs,
           "read_file",
-          toolTimeoutSeconds("read_file")
+          toolTimeoutSeconds("read_file"),
+          cancelSignal
         );
       }
     } else {
@@ -1180,7 +1181,8 @@ export async function* resumeAgentLoop(
         toolFn,
         confirmArgs,
         functionName,
-        toolTimeoutSeconds(functionName)
+        toolTimeoutSeconds(functionName),
+        cancelSignal
       );
     }
   } else {
@@ -1215,24 +1217,28 @@ async function executeTool(
 ): Promise<unknown> {
   const controller = new AbortController();
   const onParentAbort = () => controller.abort();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   if (cancelSignal?.aborted) controller.abort();
   else cancelSignal?.addEventListener("abort", onParentAbort, { once: true });
   try {
+    // An already-cancelled request must never start its tool or subprocess.
+    if (controller.signal.aborted) {
+      return { error: `Tool ${name} cancelled.` };
+    }
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => {
+        controller.abort();
+        reject(new Error(
+          `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
+        ));
+      }, timeoutSeconds * 1000);
+    });
     return await Promise.race([
-      Promise.resolve(fn(args, controller.signal)),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => {
-            controller.abort();
-            reject(
-              new Error(
-                `Tool ${name} exceeded its ${timeoutSeconds}s execution limit and was abandoned.`
-              )
-            );
-          },
-          timeoutSeconds * 1000
-        )
-      ),
+      Promise.resolve().then(() => {
+        if (controller.signal.aborted) return { error: `Tool ${name} cancelled.` };
+        return fn(args, controller.signal);
+      }),
+      timeout,
     ]);
   } catch (exc) {
     if (cancelSignal?.aborted) {
@@ -1250,6 +1256,7 @@ async function executeTool(
     }
     return { error: `Tool ${name} failed: ${exc}` };
   } finally {
+    if (deadline !== undefined) clearTimeout(deadline);
     cancelSignal?.removeEventListener("abort", onParentAbort);
   }
 }
