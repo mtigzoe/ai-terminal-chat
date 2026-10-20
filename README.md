@@ -2,7 +2,7 @@
 
 An accessible AI chat interface for working with a local project through controlled tools.
 
-The project combines a React/Vite frontend with a Flask/Python backend and a provider layer for AI models. The backend does not give an AI model unrestricted access to the computer: models can request explicitly exposed tools, and the Python backend validates and executes those requests under security constraints.
+The project combines a React/Vite frontend with a TypeScript/Hono backend and a legacy Flask/Python backend. Models can request only explicitly exposed tools, which the active backend validates and executes under security constraints. Packaged Electron builds bundle the TypeScript backend; manual and Docker workflows may still select Python during the migration.
 
 ## Web Demo
 
@@ -299,11 +299,11 @@ Application configuration that would normally live under `~/.ai-terminal-chat` i
 
 ## Running the Electron application
 
-A minimal Electron shell is provided so the same React frontend can run as a desktop window while continuing to talk to the Flask backend.
+The Electron shell runs the React frontend. Packaged Electron builds bundle the TypeScript backend, while unpackaged development can use a separately started TypeScript or compatibility Python backend.
 
 ### Development mode
 
-1. Start the Flask backend (`python app.py` from `server-python`, or use a helper script).
+1. Start the TypeScript backend (`npm run dev` from `server-typescript`). Alternatively, start the compatibility Flask backend (`python app.py` from `server-python`). Run only one backend on the configured port.
 2. Start the Vite development server:
 
    ```bash
