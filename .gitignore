@@ -2,7 +2,6 @@
 *.patch
 
 # Environment files and secrets
-/server-python/.env
 
 # Build output
 /dist/*

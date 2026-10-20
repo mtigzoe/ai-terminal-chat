@@ -1,4 +1,4 @@
-# Backend image for the TypeScript / Hono API (API-compatible with server-python).
+# Backend image for the primary TypeScript / Hono API.
 # Ollama is expected to run outside the container (see README).
 
 FROM node:22-bookworm-slim AS build
