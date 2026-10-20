@@ -815,8 +815,12 @@ const CONFIRMABLE_TOOL_NAMES = new Set([
 async function confirmLegacy(
   action: PendingAction,
   actionId: string,
-  confirmed: boolean
+  confirmed: boolean,
+  cancelSignal?: AbortSignal
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  if (cancelSignal?.aborted) {
+    return { status: 200, body: { confirmed, action_id: actionId, tool: action.tool_name, cancelled: true } };
+  }
   if (action.tool_name === "read_file_permission") {
     const readPath = action.args.path;
     if (confirmed) {
@@ -865,14 +869,32 @@ async function confirmLegacy(
 
   const confirmedArgs = { ...action.args, confirm: true };
   const timeoutSeconds = 60;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  if (cancelSignal?.aborted) controller.abort();
+  else cancelSignal?.addEventListener("abort", onAbort, { once: true });
 
   try {
+    if (controller.signal.aborted) {
+      return { status: 200, body: { confirmed, action_id: actionId, tool: action.tool_name, cancelled: true } };
+    }
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => {
+        controller.abort();
+        reject(new Error("timeout"));
+      }, timeoutSeconds * 1000);
+    });
     const result = await Promise.race([
-      Promise.resolve(fn(confirmedArgs)),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), timeoutSeconds * 1000)
-      ),
+      Promise.resolve().then(() => {
+        if (controller.signal.aborted) return { cancelled: true };
+        return fn(confirmedArgs, controller.signal);
+      }),
+      timeout,
     ]);
+    if (cancelSignal?.aborted) {
+      return { status: 200, body: { confirmed, action_id: actionId, tool: action.tool_name, cancelled: true } };
+    }
 
     if (result && typeof result === "object" && "error" in result && result.error) {
       return {
@@ -886,10 +908,16 @@ async function confirmLegacy(
       body: { confirmed: true, action_id: actionId, tool: action.tool_name, result },
     };
   } catch (exc) {
+    if (cancelSignal?.aborted) {
+      return { status: 200, body: { confirmed, action_id: actionId, tool: action.tool_name, cancelled: true } };
+    }
     return {
       status: 500,
       body: { error: `Tool ${action.tool_name} failed: ${exc}` },
     };
+  } finally {
+    if (deadline !== undefined) clearTimeout(deadline);
+    cancelSignal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -945,8 +973,15 @@ app.post("/confirm", async (c) => {
     action.resume.provider_fingerprint === providerFingerprint(provider);
 
   if (!canResume) {
-    const { status, body } = await confirmLegacy(action, actionId, confirmed);
-    return c.json(body, status as any);
+    const cancelSignal = register(requestId);
+    const cancelCleanup = bindRequestCancellation(c.req.raw.signal, requestId, cancelSignal);
+    try {
+      const { status, body } = await confirmLegacy(action, actionId, confirmed, cancelSignal);
+      return c.json(body, status as any);
+    } finally {
+      cancelCleanup();
+      release(requestId, cancelSignal);
+    }
   }
 
   const baseResponse: Record<string, unknown> = {
@@ -1041,13 +1076,13 @@ app.post("/confirm", async (c) => {
   return c.json(baseResponse);
 });
 
-function getToolFunctions(): Record<string, (args: Record<string, unknown>) => unknown> {
+function getToolFunctions(): Record<string, (args: Record<string, unknown>, signal?: AbortSignal) => unknown> {
   return {
     list_files: (args) => listFiles(String(args.path || ".")),
     read_file: (args) => readFile(String(args.path || "")),
     search_files: (args) =>
       searchFiles(String(args.query || ""), String(args.path || ".")),
-    run_command: (args) => runCommand(String(args.command || ""), Boolean(args.confirm)),
+    run_command: (args, signal) => runCommand(String(args.command || ""), Boolean(args.confirm), signal),
     git_status: () => gitStatusSummary(),
     git_committed_file_count: () => gitCommittedFileCount(),
     git_diff: (args) =>

@@ -437,4 +437,39 @@ describe("resumeAgentLoop", () => {
     }
   });
 
+  it("does not execute a confirmed tool when the request was already cancelled", async () => {
+    const provider = new FakeProvider([]);
+    const controller = new AbortController();
+    controller.abort();
+    let executions = 0;
+    const action: PendingAction = {
+      action_id: "cancelled-confirmation",
+      tool_name: "run_command",
+      args: { command: "echo should-not-run" },
+      preview: { requires_confirmation: true },
+      resume: {
+        provider_fingerprint: "fake:fake-model",
+        contents: [{ role: "user", content: "Run a command" }],
+        round_index: 0,
+        tool_results: [],
+        remaining_calls: [{ name: "run_command", args: { command: "echo should-not-run" } }],
+        last_call_signature: null,
+        consecutive_repeat_count: 0,
+        consecutive_error_count: 0,
+      },
+    };
+    const events = await collectEvents(resumeAgentLoop({
+      provider,
+      action,
+      confirmed: true,
+      cancelSignal: controller.signal,
+      toolFunctions: { run_command: () => { executions++; return { ok: true }; } },
+      createPending: realCreatePending,
+    }));
+    expect(executions).toBe(0);
+    expect(events.find((event) => event.type === "tool_result")).toMatchObject({
+      result: { error: "Tool run_command cancelled." },
+    });
+  });
+
 });

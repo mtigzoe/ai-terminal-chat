@@ -1079,10 +1079,11 @@ describe("POST /confirm", () => {
       expect(confirmRes.status).toBe(200);
       const confirmData = await confirmRes.json();
 
-      // The already-in-flight confirmed read still completes...
-      expect(confirmData.result).toMatchObject({ path: "notes.txt", contents: "shh" });
-      // ...but the loop stops right there instead of giving the model
-      // another turn, exactly as an explicit /cancel would.
+      // A request aborted before confirmation execution must not start the
+      // confirmed tool. This also prevents a subprocess from starting if
+      // an already-disconnected client approves an execution-risk command.
+      expect(confirmData.result).toMatchObject({ error: "Tool read_file cancelled." });
+      // The loop must not give the model another turn.
       expect(confirmData.cancelled).toBe(true);
       expect(confirmData.text).toBe("");
       expect(confirmData.pending_confirmation).toBeUndefined();
@@ -1091,4 +1092,56 @@ describe("POST /confirm", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+  it("does not grant a legacy confirmation after the HTTP request was already cancelled", async () => {
+    const action = createPending("read_file_permission", { path: "blocked.txt" }, { permission_request: true });
+    const controller = new AbortController();
+    controller.abort();
+    const response = await createTestApp().request("http://localhost/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action_id: action.action_id, confirmed: true }),
+      signal: controller.signal,
+    });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result).toMatchObject({
+      action_id: action.action_id,
+      cancelled: true,
+    });
+    expect(result.permission_granted).toBeUndefined();
+  });
+
+  it("cancels a running legacy confirmed command through its request id", async () => {
+    const previousRoot = getProjectRoot();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-confirm-active-"));
+    try {
+      fs.mkdirSync(path.join(root, "pytest"));
+      fs.writeFileSync(path.join(root, "pytest", "__main__.py"), "import time\nfrom pathlib import Path\nPath('started.marker').write_text('running')\ntime.sleep(10)\n");
+      setProjectRoot(root);
+      const action = createPending("run_command", { command: "python -m pytest" }, { command: "python -m pytest" });
+      const requestId = "legacy-confirm-active-" + Date.now();
+      const startedAt = Date.now();
+      const inFlight = createTestApp().request("http://localhost/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_id: action.action_id, confirmed: true, request_id: requestId }),
+      });
+      let started = false;
+      for (let i = 0; i < 80; i++) {
+        if (fs.existsSync(path.join(root, "started.marker"))) { started = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(started).toBe(true);
+      const cancelled = await createTestApp().request("http://localhost/cancel/" + requestId, { method: "POST" });
+      expect(cancelled.status).toBe(200);
+      const response = await inFlight;
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ action_id: action.action_id, cancelled: true });
+      expect(Date.now() - startedAt).toBeLessThan(9000);
+    } finally {
+      setProjectRoot(previousRoot);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 });

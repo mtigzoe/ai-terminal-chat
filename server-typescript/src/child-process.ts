@@ -55,6 +55,7 @@ export function runChildProcess(
     if (options.signal?.aborted) {
       const error = new Error("The operation was aborted.") as ChildProcessFailure;
       error.name = "AbortError";
+      error.code = "ABORT_ERR";
       reject(error);
       return;
     }
