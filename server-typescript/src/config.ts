@@ -13,9 +13,9 @@
 // migrated in providers.ts (Phase 4), which will reuse the helpers here.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { holdConfigLock } from "./config-lock.ts";
+import { getConfigDirectory } from "./config-directory.ts";
 
 // ---------------------------------------------------------------------------
 // .env loading (mirrors server-python/app.py: `load_dotenv()`)
@@ -47,7 +47,7 @@ export function loadEnvFile(path = ".env"): void {
 export type AppConfig = Record<string, unknown>;
 
 function defaultConfigFilePath(): string {
-  return join(homedir(), ".ai-terminal-chat", "config.json");
+  return join(getConfigDirectory(), "config.json");
 }
 
 export function loadAppConfig(configFilePath = defaultConfigFilePath()): AppConfig {

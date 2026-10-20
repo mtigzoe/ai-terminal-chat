@@ -142,13 +142,21 @@ async function startBundledBackend() {
   backendExit = null;
   backendStderr = '';
 
+  const inheritedEnv = { ...process.env };
+  // Windows environment keys are case-insensitive; remove all inherited aliases.
+  for (const key of Object.keys(inheritedEnv)) {
+    if (key.toUpperCase() === 'AI_TERMINAL_CHAT_CONFIG_DIR') delete inheritedEnv[key];
+  }
+
   console.log('Starting bundled TypeScript backend...');
   backendProcess = utilityProcess.fork(serverEntry, [], {
     cwd: backendDir,
     env: {
-      ...process.env,
+      ...inheritedEnv,
       HOST: BACKEND_HOST,
       PORT: String(BACKEND_PORT),
+      // Override inherited settings so each Electron profile owns its backend config.
+      AI_TERMINAL_CHAT_CONFIG_DIR: path.join(app.getPath('userData'), 'backend'),
       AI_TERMINAL_CHAT_HEALTH_TOKEN: HEALTH_TOKEN,
     },
     stdio: ['ignore', 'pipe', 'pipe'],

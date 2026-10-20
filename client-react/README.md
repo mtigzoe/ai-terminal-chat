@@ -138,6 +138,14 @@ AI-Terminal-Chat-Portable-0.1.0.exe
 
 Both Electron build commands automatically prepare the bundled TypeScript backend and install its production dependencies with `npm ci --omit=dev`. You do not need to run that backend installation manually.
 
+The packaged backend stores configuration at `<Electron userData>/backend/config.json`. To test a portable build with a disposable profile, pass an absolute `--user-data-dir` path:
+
+```powershell
+.\release\AI-Terminal-Chat-Portable-0.2.0.exe --user-data-dir=C:\Temp\ai-terminal-chat-acceptance
+```
+
+Provider selection, project root and terminal command permissions then stay in that profile. Electron overrides any inherited `AI_TERMINAL_CHAT_CONFIG_DIR` with its selected profile's backend directory. New desktop profiles do not automatically import `~/.ai-terminal-chat/config.json`; select the desired settings in the app. The old home-directory file remains available to standalone servers. Do not copy ordinary configuration into a disposable acceptance profile.
+
 ### GitHub Releases
 
 After building a Windows release, upload the generated `.exe` files from `release/` to the corresponding GitHub Release.

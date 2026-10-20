@@ -6,6 +6,7 @@ import { buildSanitizedTerminalEnv } from "./terminal.ts";
 test("sanitized terminal env strips execution, config, credential, and proxy overrides", () => {
   const previous = {
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    AI_TERMINAL_CHAT_CONFIG_DIR: process.env.AI_TERMINAL_CHAT_CONFIG_DIR,
     PYTHONPATH: process.env.PYTHONPATH,
     NODE_OPTIONS: process.env.NODE_OPTIONS,
     npm_config_registry: process.env.npm_config_registry,
@@ -18,6 +19,7 @@ test("sanitized terminal env strips execution, config, credential, and proxy ove
   };
   Object.assign(process.env, {
     OPENAI_API_KEY: "sentinel",
+    AI_TERMINAL_CHAT_CONFIG_DIR: "/private/application-profile/backend-config",
     PYTHONPATH: "/tmp/evil",
     NODE_OPTIONS: "--require=/tmp/evil.js",
     npm_config_registry: "http://evil.invalid/",
@@ -32,7 +34,7 @@ test("sanitized terminal env strips execution, config, credential, and proxy ove
     const { env, cleanup } = buildSanitizedTerminalEnv();
     try {
       for (const key of [
-        "OPENAI_API_KEY", "PYTHONPATH", "NODE_OPTIONS", "npm_config_registry",
+        "OPENAI_API_KEY", "AI_TERMINAL_CHAT_CONFIG_DIR", "PYTHONPATH", "NODE_OPTIONS", "npm_config_registry",
         "PIP_INDEX_URL", "PYTEST_ADDOPTS", "RUFF_CACHE_DIR", "HTTP_PROXY",
         "SSL_CERT_FILE",
       ]) assert.equal(env[key], undefined, key);
@@ -45,6 +47,30 @@ test("sanitized terminal env strips execution, config, credential, and proxy ove
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("application config directory overrides are stripped regardless of casing", () => {
+  const name = "AI_TERMINAL_CHAT_CONFIG_DIR";
+  const previous = Object.entries(process.env).filter(([key]) => key.toUpperCase() === name);
+  try {
+    for (const variant of ["ai_terminal_chat_config_dir", "Ai_Terminal_Chat_Config_Dir"]) {
+      for (const key of Object.keys(process.env)) {
+        if (key.toUpperCase() === name) delete process.env[key];
+      }
+      process.env[variant] = "/private/application-profile/backend-config";
+      const { env, cleanup } = buildSanitizedTerminalEnv();
+      try {
+        assert.deepEqual(Object.keys(env).filter((key) => key.toUpperCase() === name), []);
+      } finally {
+        cleanup();
+      }
+    }
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (key.toUpperCase() === name) delete process.env[key];
+    }
+    for (const [key, value] of previous) process.env[key] = value;
   }
 });
 
