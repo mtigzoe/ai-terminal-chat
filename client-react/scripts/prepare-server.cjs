@@ -34,6 +34,13 @@ function copyRequiredFile(name) {
   fs.copyFileSync(source, destination);
 }
 
+// Fresh checkouts may have client dependencies but no backend build tools yet.
+// Install from the lockfile before invoking the TypeScript compiler.
+if (!fs.existsSync(path.join(serverDir, 'node_modules', 'typescript', 'bin', 'tsc'))) {
+  console.log('Installing TypeScript backend build dependencies...');
+  runNpm(['ci'], serverDir);
+}
+
 console.log('Building TypeScript backend...');
 runNpm(['run', 'build'], serverDir);
 

@@ -105,3 +105,26 @@ jobs:
       - name: Run React and Electron helper tests
         working-directory: client-react
         run: npm test -- --run
+
+  electron-package-windows:
+    name: Windows Electron portable packaging
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install client dependencies
+        working-directory: client-react
+        run: npm ci
+      - name: Build portable application from clean checkout
+        working-directory: client-react
+        run: npm run electron:build:win:portable
+      - name: Verify TypeScript backend and executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'client-react/release/win-unpacked/resources/server-typescript/dist/server.js')) {
+            throw 'Packaged Electron is missing the TypeScript backend'
+          }
+          $portable = Get-ChildItem 'client-react/release' -Filter '*Portable*.exe' -File
+          if (-not $portable) { throw 'Portable Windows executable not found' }
