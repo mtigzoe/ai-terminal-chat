@@ -77,6 +77,7 @@ jobs:
           node tests/external-url.test.cjs
           node tests/project-path.test.cjs
           node tests/editor-open.test.cjs
+          node tests/backend-lifecycle.test.cjs
       - name: Run tests
         run: npm test -- --run
       - name: Build
@@ -102,6 +103,7 @@ jobs:
           node tests/external-url.test.cjs
           node tests/project-path.test.cjs
           node tests/editor-open.test.cjs
+          node tests/backend-lifecycle.test.cjs
       - name: Run React and Electron helper tests
         working-directory: client-react
         run: npm test -- --run
