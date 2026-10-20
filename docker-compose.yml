@@ -1,12 +1,11 @@
 # Docker Compose for AI Terminal Chat.
 #
-# Default service: Python backend (`backend`).
+# Default service: TypeScript backend (`backend`).
 # Optional profiles:
-#   typescript — TypeScript/Hono backend instead of (or in addition to) Python
 #   frontend   — production React static site via nginx
 #
 # Electron is not containerized. Ollama stays on the host.
-# Only one backend should publish host port 9000 at a time.
+# TypeScript is the only backend in this Compose project.
 
 x-backend-env: &backend-env
   HOST: "0.0.0.0"
@@ -44,19 +43,6 @@ x-backend-common: &backend-common
 
 services:
   backend:
-    build:
-      context: ./server-python
-      dockerfile: Dockerfile
-    image: ai-terminal-chat-backend:local
-    container_name: ai-terminal-chat-backend
-    ports:
-      - "${PORT:-9000}:9000"
-    environment:
-      <<: *backend-env
-    <<: *backend-common
-
-  backend-ts:
-    profiles: ["typescript"]
     build:
       context: ./server-typescript
       dockerfile: Dockerfile

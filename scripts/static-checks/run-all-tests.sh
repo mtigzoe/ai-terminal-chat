@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run tests for Python, TypeScript, and React
+# Run tests for TypeScript and React
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -8,17 +8,6 @@ FAILED=0
 echo "========================================"
 echo "  Running all tests"
 echo "========================================"
-
-# Python
-echo ""
-echo "==> Python tests (server-python)"
-cd "$ROOT/server-python"
-if command -v pytest >/dev/null 2>&1 || python -m pytest --version >/dev/null 2>&1; then
-  python -m pytest -q || FAILED=1
-else
-  echo "pytest not found. Install with: pip install pytest"
-  FAILED=1
-fi
 
 # TypeScript
 echo ""

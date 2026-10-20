@@ -1,5 +1,5 @@
 # Stop AI Terminal Chat development services that are listening on the
-# default ports (Flask backend on 9000, Vite on 3000).
+# default ports (TypeScript backend on 9000, Vite on 3000).
 #
 # This script only targets listeners on those ports. It does not kill
 # arbitrary Node or Python processes.
@@ -34,7 +34,7 @@ function Stop-ListenersOnPort([int]$Port, [string]$Name) {
 Write-Host "Stopping AI Terminal Chat development services..."
 Write-Host ""
 
-Stop-ListenersOnPort -Port 9000 -Name "Flask backend"
+Stop-ListenersOnPort -Port 9000 -Name "TypeScript backend"
 Stop-ListenersOnPort -Port 3000 -Name "Vite"
 
 Write-Host ""

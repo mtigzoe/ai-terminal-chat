@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Stop AI Terminal Chat development services that are listening on the
-# default ports (Flask backend on 9000, Vite on 3000).
+# default ports (TypeScript backend on 9000, Vite on 3000).
 #
 # This script only targets listeners on those ports. It does not kill
 # arbitrary Node or Python processes.
@@ -43,7 +43,7 @@ kill_port() {
 
 printf 'Stopping AI Terminal Chat development services...\n\n'
 
-kill_port 9000 "Flask backend"
+kill_port 9000 "TypeScript backend"
 kill_port 3000 "Vite"
 
 printf '\nDone. Ports 9000 and 3000 should now be free (if they were in use).\n'
