@@ -1,3 +1,5 @@
+> **Historical record (October 2026):** This document describes the earlier combined Python/TypeScript repository. The Python backend now lives in [ai-terminal-chat-python](https://github.com/mtigzoe/ai-terminal-chat-python), and commands referring to the removed `server-python` directory are archival, not current setup instructions.
+
 \# Security Audit – ai-terminal-chat
 
 

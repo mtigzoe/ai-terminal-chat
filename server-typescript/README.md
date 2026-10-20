@@ -1,12 +1,12 @@
 # TypeScript API Server
 
-This directory contains the TypeScript implementation of the HTTP API layer, equivalent to the Python Flask backend in `server-python/`.
+This directory contains the primary TypeScript/Hono HTTP API backend. The previous Flask backend is maintained separately in [ai-terminal-chat-python](https://github.com/mtigzoe/ai-terminal-chat-python).
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 24
 - npm
 
 ### Installation
@@ -207,7 +207,7 @@ The implementation works on Windows and Linux:
 
 ## Correspondence to Python Backend
 
-| Python (`server-python/`) | TypeScript (`server-typescript/src/`) |
+| Python (standalone `ai-terminal-chat-python`) | TypeScript (`server-typescript/src/`) |
 |---------------------------|---------------------------------------|
 | `app.py` (Flask routes) | `routes.ts` (Hono routes) |
 | `security.py` | `security.ts` |

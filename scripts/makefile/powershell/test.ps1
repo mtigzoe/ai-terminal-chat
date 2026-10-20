@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("all", "python", "typescript", "react")]
+    [ValidateSet("all", "typescript", "react")]
     [string]$Target = "all"
 )
 
@@ -15,9 +15,6 @@ function Invoke-Test {
 }
 
 switch ($Target) {
-    "python" {
-        Invoke-Test "server-python tests" { python -m pytest server-python/tests -q }
-    }
     "typescript" {
         Push-Location server-typescript
         try {
@@ -35,7 +32,6 @@ switch ($Target) {
         finally { Pop-Location }
     }
     "all" {
-        & $PSCommandPath python
         & $PSCommandPath typescript
         & $PSCommandPath react
     }

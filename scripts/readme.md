@@ -1,6 +1,6 @@
 # Startup and development scripts
 
-Scripts are organized by purpose and shell environment. The original backend startup scripts remain under `scripts/powershell/` and `scripts/sh/` for compatibility. New application-focused entry points are grouped under `electron/`, `web/`, and `makefile/`.
+Scripts are organized by purpose and shell environment. The TypeScript-backed compatibility startup scripts remain under `scripts/powershell/` and `scripts/sh/` for compatibility. New application-focused entry points are grouped under `electron/`, `web/`, and `makefile/`.
 
 ## Layout
 
@@ -34,10 +34,9 @@ The root `Makefile` remains at the repository root.
 
 ## Prerequisites
 
-The existing startup scripts support both the Python and TypeScript backends.
+The startup scripts use the TypeScript backend. The separate Python implementation is maintained at https://github.com/mtigzoe/ai-terminal-chat-python.
 
-* Python backend scripts require `uv` and `npm`.
-* TypeScript backend scripts (`-ts`) require `npm`; they do not require `uv`.
+* TypeScript backend scripts require `npm`; they do not require `uv`.
 * The backend services use port `9000`.
 * The Vite development server uses port `3000`.
 * Only one backend should run at a time.
@@ -48,7 +47,6 @@ The original backend startup scripts remain under `scripts/powershell/` and `scr
 
 They include:
 
-* Python/Flask backend startup
 * TypeScript backend startup
 * Full Electron development startup
 * Offline-AI startup
@@ -56,7 +54,7 @@ They include:
 
 Existing startup scripts detect whether ports `9000` and `3000` are already in use and only start missing services.
 
-Both backends expose the same API contract on port `9000`, so the Vite frontend and Electron shell can work with either backend.
+The TypeScript backend exposes the HTTP API on port `9000` for both Vite and Electron.
 
 ## Application-focused Electron scripts
 
@@ -104,7 +102,6 @@ Windows users do not need GNU Make to run the tests.
 
 ```powershell
 .\scripts\makefile\powershell\test.ps1
-.\scripts\makefile\powershell\test.ps1 python
 .\scripts\makefile\powershell\test.ps1 typescript
 .\scripts\makefile\powershell\test.ps1 react
 ```
@@ -113,7 +110,6 @@ Windows users do not need GNU Make to run the tests.
 
 ```bash
 bash ./scripts/makefile/sh/test.sh
-bash ./scripts/makefile/sh/test.sh python
 bash ./scripts/makefile/sh/test.sh typescript
 bash ./scripts/makefile/sh/test.sh react
 ```
@@ -122,7 +118,6 @@ On systems with `make`, the root Makefile provides the same common operations:
 
 ```bash
 make test
-make test-python
 make test-typescript
 make test-react
 make typecheck-typescript
@@ -133,13 +128,13 @@ make build-react
 
 ### Windows PowerShell
 
-Existing full-stack Electron workflow using the Python backend:
+Existing full-stack Electron workflow using the TypeScript backend:
 
 ```powershell
 .\scripts\powershell\run-electron.ps1
 ```
 
-Existing full-stack Electron workflow using the TypeScript backend:
+Explicit TypeScript launcher (equivalent to the compatibility command above):
 
 ```powershell
 .\scripts\powershell\run-electron-ts.ps1
@@ -173,13 +168,13 @@ Make existing scripts executable once, if needed:
 chmod +x scripts/sh/*.sh scripts/electron/sh/*.sh scripts/web/sh/*.sh scripts/makefile/sh/*.sh
 ```
 
-Existing full-stack Electron workflow using the Python backend:
+Existing full-stack Electron workflow using the TypeScript backend:
 
 ```bash
 ./scripts/sh/run-electron.sh
 ```
 
-Existing full-stack Electron workflow using the TypeScript backend:
+Explicit TypeScript launcher (equivalent to the compatibility command above):
 
 ```bash
 ./scripts/sh/run-electron-ts.sh

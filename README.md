@@ -2,7 +2,7 @@
 
 An accessible AI chat interface for working with a local project through controlled tools.
 
-The project combines a React/Vite frontend with a TypeScript/Hono backend and a legacy Flask/Python backend. Models can request only explicitly exposed tools, which the active backend validates and executes under security constraints. Packaged Electron builds bundle the TypeScript backend; manual and Docker workflows may still select Python during the migration.
+The project combines a React/Vite frontend with a TypeScript/Hono backend. Models can request only explicitly exposed tools, which the backend validates and executes under security constraints. The original Flask/Python backend is maintained separately at https://github.com/mtigzoe/ai-terminal-chat-python.
 
 ## Web Demo
 
@@ -19,7 +19,6 @@ The project combines a React/Vite frontend with a TypeScript/Hono backend and a 
   - [Frontend setup (web)](#frontend-setup-web)
 - [Docker](#docker)
   - [Services and profiles](#services-and-profiles)
-  - [Python backend (default)](#python-backend-default)
   - [TypeScript backend](#typescript-backend)
   - [React frontend (production static)](#react-frontend-production-static)
   - [Connecting to Ollama on the host](#connecting-to-ollama-on-the-host)
@@ -77,7 +76,6 @@ ai-terminal-chat/
 ├── client-react/          # React/Vite chat frontend (+ Electron shell)
 │   ├── Dockerfile         # Production static image (nginx)
 │   └── nginx.conf
-├── server-python/         # Flask backend, providers, tools, security
 │   └── Dockerfile
 ├── server-typescript/     # Hono/TypeScript API (same contract as Flask)
 │   └── Dockerfile
@@ -106,8 +104,6 @@ GitHub’s language bar (the percentage chart on the repository page) is generat
 
 - Git
 - Node.js and npm
-- Python 3.11 or newer
-- `uv` (recommended for Python environment and dependency management; used by the startup scripts)
 - Credentials for any cloud provider you intend to use
 - Ollama installed and running if you use the local/offline workflow
 
@@ -122,42 +118,15 @@ cd ai-terminal-chat
 
 ### Backend setup
 
-From `server-python`:
+From the `server-typescript` directory:
 
 ```bash
-cd server-python
+cd server-typescript
+npm ci
+npm run dev
 ```
 
-Copy the environment template and edit it for your chosen provider:
-
-```bash
-cp .env.example .env
-```
-
-Create a virtual environment and install dependencies. Using `uv` (preferred by the repository scripts):
-
-```bash
-uv venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-uv pip install -r requirements.txt
-```
-
-Alternatively, with a standard virtual environment:
-
-```bash
-python -m venv .venv
-# activate the venv, then:
-pip install -r requirements.txt
-```
-
-Start the backend:
-
-```bash
-python app.py
-```
-
-The server listens on `http://127.0.0.1:9000` by default (`PORT` environment variable).
+The TypeScript backend listens on port 9000 by default. Configure the provider and credentials using server environment variables. For the standalone Python backend, see [ai-terminal-chat-python](https://github.com/mtigzoe/ai-terminal-chat-python).
 
 ### Frontend setup (web)
 
@@ -176,26 +145,7 @@ To point the client at a different backend URL, set `VITE_API_URL` in a `.env` f
 
 ## Docker
 
-Docker support covers the Python backend, the TypeScript backend, and a production build of the React web client. Electron remains a host-only desktop shell. Ollama is not packaged in any image; containers reach a host (or remote) Ollama instance via configuration.
-
-The non-Docker workflow (`uv`, `python app.py`, `npm run dev` in either server, Vite, and the scripts under `scripts/`) is unchanged.
-
-### Services and profiles
-
-| Compose service | Profile | Host port (default) | Role |
-| --- | --- | --- | --- |
-| `backend` | (always on) | `9000` | Python Flask API |
-| `backend-ts` | `typescript` | `9000` (`TS_PORT`) | TypeScript Hono API (same HTTP contract) |
-| `frontend` | `frontend` | `3000` (`FRONTEND_PORT`) | nginx serving the Vite production build |
-
-Run only one backend on host port 9000 at a time. To use the TypeScript API instead of Python:
-
-```bash
-docker compose stop backend
-docker compose --profile typescript up -d backend-ts
-```
-
-### Python backend (default)
+Docker Compose runs the TypeScript/Hono API as the default `backend` service. The optional `frontend` profile serves a production build of the React web client. Electron and Ollama run outside Docker.
 
 ```bash
 docker compose build backend
@@ -204,40 +154,18 @@ docker compose logs -f backend
 docker compose down
 ```
 
-Equivalent without Compose:
+Set `API_AUTH_TOKEN` to a strong secret before using Docker. Set `HOST_PROJECT_PATH` to the host project directory and `AI_TERMINAL_PROJECT_ROOT` to the container path.
 
-```bash
-docker build -t ai-terminal-chat-backend:local ./server-python
-docker run --rm -p 9000:9000 \
-  --add-host=host.docker.internal:host-gateway \
-  -e PROVIDER=ollama \
-  -e OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
-  -e HOST=0.0.0.0 \
-  ai-terminal-chat-backend:local
-```
+### Services and profiles
 
-Local (non-Docker) runs still bind to `127.0.0.1` unless you set `HOST`. Inside containers, `HOST=0.0.0.0`.
+| Compose service | Profile | Host port (default) | Role |
+| --- | --- | --- | --- |
+| `backend` | Always on | `9000` | TypeScript/Hono API |
+| `frontend` | `frontend` | `3000` | React static site |
 
 ### TypeScript backend
 
-```bash
-docker compose --profile typescript build backend-ts
-docker compose --profile typescript up -d backend-ts
-```
-
-Or:
-
-```bash
-docker build -t ai-terminal-chat-backend-ts:local ./server-typescript
-docker run --rm -p 9000:9000 \
-  --add-host=host.docker.internal:host-gateway \
-  -e PROVIDER=ollama \
-  -e OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 \
-  -e HOST=0.0.0.0 \
-  ai-terminal-chat-backend-ts:local
-```
-
-The TypeScript image builds with `tsc` and runs `node dist/server.js`. Bind address uses the same `HOST` / `PORT` environment variables as the Python server.
+Build without Compose using `docker build -t ai-terminal-chat-backend-ts:local ./server-typescript`. The Python backend is maintained in [its independent repository](https://github.com/mtigzoe/ai-terminal-chat-python).
 
 ### React frontend (production static)
 
@@ -299,11 +227,11 @@ Application configuration that would normally live under `~/.ai-terminal-chat` i
 
 ## Running the Electron application
 
-The Electron shell runs the React frontend. Packaged Electron builds bundle the TypeScript backend, while unpackaged development can use a separately started TypeScript or compatibility Python backend.
+The Electron shell runs the React frontend. Packaged Electron builds bundle the TypeScript backend; unpackaged development uses a separately started TypeScript backend.
 
 ### Development mode
 
-1. Start the TypeScript backend (`npm run dev` from `server-typescript`). Alternatively, start the compatibility Flask backend (`python app.py` from `server-python`). Run only one backend on the configured port.
+1. Start the TypeScript backend (`npm run dev` from `server-typescript`).
 2. Start the Vite development server:
 
    ```bash
@@ -348,18 +276,18 @@ This runs `npm run build && electron . --production`. In production (or when the
 
 Notes:
 
-- Stage-1 Electron does not manage the Flask process automatically when you run `npm run electron:dev` directly; the helper scripts do start the backend when needed.
+- Unpackaged Electron does not manage the backend process automatically when you run `npm run electron:dev` directly; the helper scripts do start the backend when needed.
 - Context isolation and sandboxing are enabled; Node integration is disabled in the renderer.
 - The preload script exposes a limited API (for example, a folder-picker dialog).
 
 ## Environment and configuration
 
-Backend configuration is driven by `server-python/.env` (see `.env.example`). Important variables include:
+Backend configuration is supplied through the TypeScript server environment. Important variables include:
 
 | Variable | Purpose |
 |---|---|
 | `PROVIDER` | Active provider id (`gemini`, `ollama`, `kilo`, `openai`, `xai`, `openrouter`, `anthropic`, `nvidia`) |
-| `PORT` | Flask listen port (default `9000`) |
+| `PORT` | TypeScript API listen port (default `9000`) |
 | `HOST` | Backend bind address (default `127.0.0.1`; Docker uses `0.0.0.0`) |
 | Provider-specific keys and models | See `.env.example` (for example `GOOGLE_API_KEY` / `GEMINI_MODEL`, `OLLAMA_*`, `OPENAI_*`, `XAI_*`, `OPENROUTER_*`, `ANTHROPIC_*`, `NVIDIA_*`) |
 
@@ -369,7 +297,7 @@ Project root and allowed terminal command prefixes can also be managed through t
 
 ## AI providers and models
 
-Supported provider identifiers (from `server-python/providers.py`):
+Supported provider identifiers:
 
 | Provider | `PROVIDER` value |
 |---|---|
@@ -392,7 +320,7 @@ Ollama is supported as a fully local provider (`PROVIDER=ollama`). No cloud API 
 
 ### Configuration
 
-Typical environment settings in `server-python/.env`:
+Typical environment settings for the TypeScript backend:
 
 ```text
 PROVIDER=ollama
@@ -405,7 +333,7 @@ Notes:
 
 - `OLLAMA_BASE_URL` may be given with or without the trailing `/v1`. The provider normalizes both forms.
 - `OLLAMA_HOST` is accepted as an alternative to `OLLAMA_BASE_URL` (useful for scripts and remote hosts).
-- The constructor never contacts the network, so the Flask app can start even when Ollama is not running. Reachability is checked on demand (provider status, model listing, and the first chat turn).
+- The constructor never contacts the network, so the API server can start even when Ollama is not running. Reachability is checked on demand (provider status, model listing, and the first chat turn).
 
 ### Selecting a local model
 
@@ -423,7 +351,7 @@ Helper scripts automate environment setup and startup for an offline-oriented wo
 - Windows: `scripts/powershell/start-offline-ai.ps1`
 - Linux/macOS: `scripts/sh/start-offline-ai.sh`
 
-These scripts require `uv` and `npm`, create or update the Python virtual environment, install dependencies when needed, verify that Ollama is reachable, and start the Flask backend plus the React development server. You can pass a model name as an argument (or set `OLLAMA_MODEL`).
+These scripts require Node.js and npm, install dependencies when needed, verify that Ollama is reachable, and start the TypeScript backend plus the React development server. You can pass a model name as an argument (or set `OLLAMA_MODEL`).
 
 See `scripts/readme.md` for the full layout, additional convenience wrappers, and stop helpers.
 
@@ -490,7 +418,7 @@ Automated tests cover many structural and keyboard behaviours; they do not repla
 
 ## API endpoints
 
-Main endpoints implemented by the Flask backend:
+Main endpoints implemented by the TypeScript backend:
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -536,7 +464,7 @@ Main endpoints implemented by the Flask backend:
 
 ### Future work
 
-* **Cross-platform startup and developer tooling:** Continue improving the development and startup scripts for Windows PowerShell and Linux/macOS shell environments. Keep the commands and script organization consistent across platforms while preserving compatibility with the existing Python and TypeScript backends, React web application, and Electron development workflow.
+* **Cross-platform startup and developer tooling:** Continue improving the development and startup scripts for Windows PowerShell and Linux/macOS shell environments. Keep the commands and script organization consistent across platforms while preserving the TypeScript backend, React web application, and Electron development workflow.
 
 ## Testing
 
@@ -550,10 +478,10 @@ npm test
 
 ### Backend tests
 
-From `server-python`:
+From `server-typescript`:
 
 ```bash
-pytest
+npm test
 ```
 
 ### Accessibility regression tests
@@ -576,7 +504,7 @@ Test the application with keyboard-only workflows and screen readers including J
 
 #### Prerequisites
 
-- Start the backend (`python app.py` from `server-python` or `server-typescript`) and frontend (`npm run dev` from `client-react`).
+- Start the backend (`npm run dev` from `server-typescript`) and frontend (`npm run dev` from `client-react`).
 - Open the app in a browser or the Electron shell.
 - Ensure the screen reader is running before interacting with the page.
 

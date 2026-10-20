@@ -13,66 +13,6 @@ on:
       - nvidia
 
 jobs:
-  python-static:
-    name: Python static checks
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: server-python
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install Ruff
-        run: python -m pip install "ruff==0.16.9"
-      - name: Ruff critical lint
-        run: ruff check . --select E9,F63,F7,F82
-      - name: Ruff full lint (advisory)
-        continue-on-error: true
-        run: ruff check .
-      - name: Ruff format check (advisory)
-        continue-on-error: true
-        run: ruff format --check .
-
-  server-python:
-    name: server-python tests
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: server-python
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -r requirements.txt pytest
-      - name: Run tests
-        run: pytest -q
-
-  server-python-windows:
-    name: server-python Windows tests
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: server-python
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt pytest
-      - name: Run tests
-        run: python -m pytest -q
-
   server-typescript:
     name: server-typescript tests
     runs-on: ubuntu-latest
@@ -165,3 +105,26 @@ jobs:
       - name: Run React and Electron helper tests
         working-directory: client-react
         run: npm test -- --run
+
+  electron-package-windows:
+    name: Windows Electron portable packaging
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install client dependencies
+        working-directory: client-react
+        run: npm ci
+      - name: Build portable application from clean checkout
+        working-directory: client-react
+        run: npm run electron:build:win:portable
+      - name: Verify TypeScript backend and executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'client-react/release/win-unpacked/resources/server-typescript/dist/server.js')) {
+            throw 'Packaged Electron is missing the TypeScript backend'
+          }
+          $portable = Get-ChildItem 'client-react/release' -Filter '*Portable*.exe' -File
+          if (-not $portable) { throw 'Portable Windows executable not found' }

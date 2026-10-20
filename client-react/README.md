@@ -5,7 +5,7 @@ This directory contains the React frontend for the AI Terminal Chat application.
 ## Prerequisites
 
 - Node.js 22 LTS and npm
-- A running backend: `server-typescript` (recommended for TypeScript development) or the compatibility `server-python`
+- A running `server-typescript` backend
 
 For Windows Electron packaging, use Node.js 22 LTS.
 
@@ -46,7 +46,7 @@ http://localhost:3000
 
 ## Backend API
 
-The React client communicates with either the TypeScript or compatibility Python backend over HTTP. By default, it expects the backend at:
+The React client communicates with the TypeScript backend over HTTP. By default, it expects the backend at:
 
 ```text
 http://localhost:9000
@@ -77,7 +77,7 @@ The Electron development shell loads the React frontend and can communicate with
 
 ### Development workflow
 
-1. Start the TypeScript backend (`npm run dev` from `server-typescript`), or start the legacy Flask backend from `server-python` for compatibility.
+1. Start the TypeScript backend (`npm run dev` from `server-typescript`).
 2. In one terminal, start the Vite development server:
 
    ```bash
