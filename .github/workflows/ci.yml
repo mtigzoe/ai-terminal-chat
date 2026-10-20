@@ -55,7 +55,7 @@ jobs:
       - name: Build test runtime
         run: npm run build
       - name: Run security regression tests
-        run: npx tsx --test src/config.test.ts src/security.test.ts src/filesystem.test.ts src/git.test.ts src/terminal.git-isolation.test.ts src/terminal.env-isolation.test.ts src/trusted-exec.test.ts src/windows-handle-path.test.ts src/safe-fetch.test.ts
+        run: node --import ./scripts/test-profile.mjs --import tsx --test src/config.test.ts src/security.test.ts src/filesystem.test.ts src/git.test.ts src/terminal.git-isolation.test.ts src/terminal.env-isolation.test.ts src/trusted-exec.test.ts src/windows-handle-path.test.ts src/safe-fetch.test.ts
       - name: Verify configuration isolation across backend processes
         run: npx vitest run tests/config-profile-isolation.test.ts
 
